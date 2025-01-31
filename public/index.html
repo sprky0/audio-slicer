@@ -89,331 +89,348 @@
     </div>
 
     <script>
-        class AudioSlicer {
-            constructor() {
-                this.audioContext = null;
-                this.audioBuffer = null;
-                this.sourceNode = null;
-                this.isPlaying = false;
-                this.loopStart = 0;
-                this.loopEnd = 0;
-                this.draggedMarker = null;
-                this.startTimeRef = 0;
-                this.animationFrame = null;
-                this.subdivisions = 2;
-                this.isSliced = false;
-                this.segments = [];
-                this.currentSegment = null;
+		class AudioSlicer {
+			constructor() {
+				this.initializeProperties();
+				this.setupAudioContext();
+				this.setupCanvas();
+				this.setupEventListeners();
+			}
 
-                // DOM elements
-                this.dropzone = document.getElementById('dropzone');
-                this.canvas = document.getElementById('waveformCanvas');
-                this.ctx = this.canvas.getContext('2d');
-                this.dropzoneText = document.getElementById('dropzoneText');
-                this.playButton = document.getElementById('playButton');
-                this.subdivisionsSelect = document.getElementById('subdivisions');
-                this.setButton = document.getElementById('setButton');
+			initializeProperties() {
+				this.audioBuffer = null;
+				this.audioSource = null;
+				this.startPosition = 0;
+				this.endPosition = 1;
+				this.subdivisions = 2;
+				this.segments = [];
+				this.isPlaying = false;
+				this.activeSegment = -1;
+				this.draggingMarker = null;
+				this.lastFrameTime = 0;
+				this.playheadPosition = 0;
+				this.animationFrameId = null;
+			}
 
-                // Bind methods
-                this.handleDrop = this.handleDrop.bind(this);
-                this.handleDragOver = this.handleDragOver.bind(this);
-                this.updateLoop = this.updateLoop.bind(this);
-                this.togglePlayback = this.togglePlayback.bind(this);
-                this.animate = this.animate.bind(this);
-                this.handleResize = this.handleResize.bind(this);
-                this.handleSubdivisionChange = this.handleSubdivisionChange.bind(this);
-                this.handleSetButton = this.handleSetButton.bind(this);
+			setupAudioContext() {
+				this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+			}
 
-                // Initialize
-                this.initializeAudioContext();
-                this.setupEventListeners();
-                this.handleResize();
-            }
+			setupCanvas() {
+				this.canvas = document.getElementById('waveformCanvas');
+				this.ctx = this.canvas.getContext('2d');
+				this.resizeCanvas();
 
-            initializeAudioContext() {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            }
+				window.addEventListener('resize', () => this.resizeCanvas());
+			}
 
-            setupEventListeners() {
-                this.dropzone.addEventListener('drop', this.handleDrop);
-                this.dropzone.addEventListener('dragover', this.handleDragOver);
-                this.dropzone.addEventListener('mousemove', this.updateLoop);
-                this.dropzone.addEventListener('mouseup', () => this.draggedMarker = null);
-                this.playButton.addEventListener('click', this.togglePlayback);
-                this.subdivisionsSelect.addEventListener('change', this.handleSubdivisionChange);
-                this.setButton.addEventListener('click', this.handleSetButton);
-                window.addEventListener('resize', this.handleResize);
+			resizeCanvas() {
+				const dpr = window.devicePixelRatio || 1;
+				const rect = this.canvas.getBoundingClientRect();
+				
+				this.canvas.width = rect.width * dpr;
+				this.canvas.height = rect.height * dpr;
+				this.ctx.scale(dpr, dpr);
+				
+				this.drawWaveform();
+			}
 
-                // Handle marker dragging
-                this.dropzone.addEventListener('mousedown', (e) => {
-                    if (!this.audioBuffer || this.isSliced) return;
-                    
-                    const rect = this.canvas.getBoundingClientRect();
-                    const x = e.clientX - rect.left;
-                    const duration = this.audioBuffer.duration;
-                    const clickTime = (x / this.canvas.width) * duration;
-                    
-                    const startX = (this.loopStart / duration) * this.canvas.width;
-                    const endX = (this.loopEnd / duration) * this.canvas.width;
-                    const threshold = 10;
+			setupEventListeners() {
+				const dropzone = document.getElementById('dropzone');
+				const subdivSelect = document.getElementById('subdivisions');
+				const setButton = document.getElementById('setButton');
+				const startMarker = document.getElementById('startMarker');
+				const endMarker = document.getElementById('endMarker');
 
-                    if (Math.abs(x - startX) < threshold) {
-                        this.draggedMarker = 'start';
-                    } else if (Math.abs(x - endX) < threshold) {
-                        this.draggedMarker = 'end';
-                    }
-                });
-            }
+				dropzone.addEventListener('dragover', (e) => {
+					e.preventDefault();
+					dropzone.classList.add('drag-over');
+				});
 
-            handleSubdivisionChange(e) {
-                this.subdivisions = parseInt(e.target.value);
-                if (!this.isSliced) {
-                    this.drawWaveform();
-                }
-            }
+				dropzone.addEventListener('dragleave', () => {
+					dropzone.classList.remove('drag-over');
+				});
 
-            handleSetButton() {
-                this.isSliced = true;
-                this.calculateSegments();
-                this.drawWaveform();
-            }
+				dropzone.addEventListener('drop', async (e) => {
+					e.preventDefault();
+					dropzone.classList.remove('drag-over');
+					
+					const file = e.dataTransfer.files[0];
+					if (file && (file.type === 'audio/wav' || file.type === 'audio/mp3')) {
+						await this.loadAudioFile(file);
+					}
+				});
 
-            calculateSegments() {
-                const segmentDuration = (this.loopEnd - this.loopStart) / this.subdivisions;
-                this.segments = [];
-                
-                for (let i = 0; i < this.subdivisions; i++) {
-                    const start = this.loopStart + (i * segmentDuration);
-                    const end = start + segmentDuration;
-                    this.segments.push({ start, end });
-                }
-            }
+				dropzone.addEventListener('click', () => {
+					const input = document.createElement('input');
+					input.type = 'file';
+					input.accept = 'audio/wav,audio/mp3';
+					input.onchange = async (e) => {
+						const file = e.target.files[0];
+						if (file) {
+							await this.loadAudioFile(file);
+						}
+					};
+					input.click();
+				});
 
-            // API Methods
-            playSegment(index) {
-                if (index < 0 || index >= this.segments.length) return;
-                
-                if (this.currentSegment) {
-                    this.currentSegment.stop();
-                }
+				subdivSelect.addEventListener('change', (e) => {
+					this.subdivisions = parseInt(e.target.value);
+					this.drawWaveform();
+				});
 
-                const segment = this.segments[index];
-                const source = this.audioContext.createBufferSource();
-                source.buffer = this.audioBuffer;
-                source.connect(this.audioContext.destination);
-                source.start(0, segment.start, segment.end - segment.start);
-                this.currentSegment = source;
-            }
+				setButton.addEventListener('click', () => this.finalizeSlicing());
 
-            getSegmentCount() {
-                return this.segments.length;
-            }
+				this.setupMarkerDragging(startMarker, endMarker);
+			}
 
-            handleResize() {
-                const rect = this.canvas.getBoundingClientRect();
-                this.canvas.width = rect.width * window.devicePixelRatio;
-                this.canvas.height = rect.height * window.devicePixelRatio;
-                this.ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-                if (this.audioBuffer) {
-                    this.drawWaveform();
-                }
-            }
+			setupMarkerDragging(startMarker, endMarker) {
+				const markers = [startMarker, endMarker];
+				
+				markers.forEach(marker => {
+					marker.addEventListener('mousedown', (e) => {
+						this.draggingMarker = marker;
+						document.addEventListener('mousemove', this.handleMarkerDrag);
+						document.addEventListener('mouseup', () => {
+							this.draggingMarker = null;
+							document.removeEventListener('mousemove', this.handleMarkerDrag);
+						});
+					});
+				});
 
-            async handleDrop(e) {
-                e.preventDefault();
-                const file = e.dataTransfer.files[0];
-                
-                if (file && (file.type === 'audio/wav' || file.type === 'audio/mpeg')) {
-                    const arrayBuffer = await file.arrayBuffer();
-                    this.audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
-                    this.loopEnd = this.audioBuffer.duration;
-                    this.dropzoneText.style.display = 'none';
-                    this.playButton.disabled = false;
-                    this.subdivisionsSelect.disabled = false;
-                    this.setButton.disabled = false;
-                    this.isSliced = false;
-                    this.segments = [];
-                    this.drawWaveform();
-                }
-            }
+				this.handleMarkerDrag = (e) => {
+					if (!this.draggingMarker) return;
 
-            handleDragOver(e) {
-                e.preventDefault();
-            }
+					const rect = this.canvas.getBoundingClientRect();
+					const x = (e.clientX - rect.left) / rect.width;
+					
+					if (this.draggingMarker.classList.contains('start')) {
+						this.startPosition = Math.max(0, Math.min(x, this.endPosition - 0.01));
+					} else {
+						this.endPosition = Math.max(this.startPosition + 0.01, Math.min(x, 1));
+					}
 
-            updateLoop(e) {
-                if (!this.draggedMarker || !this.audioBuffer || this.isSliced) return;
-                
-                const rect = this.canvas.getBoundingClientRect();
-                const x = e.clientX - rect.left;
-                const duration = this.audioBuffer.duration;
-                const time = (x / rect.width) * duration;
-                
-                if (this.draggedMarker === 'start') {
-                    this.loopStart = Math.max(0, Math.min(time, this.loopEnd));
-                } else if (this.draggedMarker === 'end') {
-                    this.loopEnd = Math.min(duration, Math.max(time, this.loopStart));
-                }
+					this.updateMarkerPositions();
+					this.drawWaveform();
+				};
+			}
 
-                if (this.sourceNode) {
-                    this.sourceNode.loopStart = this.loopStart;
-                    this.sourceNode.loopEnd = this.loopEnd;
-                }
+			updateMarkerPositions() {
+				const startMarker = document.getElementById('startMarker');
+				const endMarker = document.getElementById('endMarker');
 
-                this.drawWaveform();
-            }
+				startMarker.style.left = `${this.startPosition * 100}%`;
+				endMarker.style.left = `${this.endPosition * 100}%`;
+			}
 
-            drawWaveform() {
-                const width = this.canvas.width / window.devicePixelRatio;
-                const height = this.canvas.height / window.devicePixelRatio;
-                this.ctx.clearRect(0, 0, width, height);
+			async loadAudioFile(file) {
+				try {
+					const arrayBuffer = await file.arrayBuffer();
+					this.audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+					
+					document.getElementById('subdivisions').disabled = false;
+					document.getElementById('setButton').disabled = false;
+					
+					this.startPosition = 0;
+					this.endPosition = 1;
+					this.updateMarkerPositions();
+					this.drawWaveform();
+				} catch (error) {
+					console.error('Error loading audio file:', error);
+				}
+			}
 
-                if (!this.audioBuffer) return;
+			drawWaveform() {
+				if (!this.canvas || !this.ctx) return;
 
-                const data = this.audioBuffer.getChannelData(0);
-                const duration = this.audioBuffer.duration;
+				const width = this.canvas.width;
+				const height = this.canvas.height;
+				const dpr = window.devicePixelRatio || 1;
 
-                if (this.isSliced) {
-                    // Draw only the selected segment
-                    const startSample = Math.floor((this.loopStart / duration) * data.length);
-                    const endSample = Math.floor((this.loopEnd / duration) * data.length);
-                    const segmentData = data.slice(startSample, endSample);
-                    
-                    const step = Math.ceil(segmentData.length / width);
-                    const amp = height / 2;
+				// Clear canvas
+				this.ctx.clearRect(0, 0, width, height);
 
-                    this.ctx.beginPath();
-                    this.ctx.moveTo(0, amp);
+				if (!this.audioBuffer) return;
 
-                    for (let i = 0; i < width; i++) {
-                        let min = 1.0;
-                        let max = -1.0;
-                        for (let j = 0; j < step; j++) {
-                            const datum = segmentData[(i * step) + j];
-                            if (datum < min) min = datum;
-                            if (datum > max) max = datum;
-                        }
-                        this.ctx.lineTo(i, (1 + min) * amp);
-                        this.ctx.lineTo(i, (1 + max) * amp);
-                    }
+				const data = this.audioBuffer.getChannelData(0);
+				const step = Math.ceil(data.length / width);
+				const amp = height / 2;
 
-                    this.ctx.strokeStyle = '#2196F3';
-                    this.ctx.stroke();
+				// Draw selection background
+				const startX = this.startPosition * width / dpr;
+				const endX = this.endPosition * width / dpr;
+				this.ctx.fillStyle = 'rgba(52, 152, 219, 0.1)';
+				this.ctx.fillRect(startX, 0, endX - startX, height / dpr);
 
-                    // Draw subdivision lines
-                    for (let i = 1; i < this.subdivisions; i++) {
-                        const x = (i / this.subdivisions) * width;
-                        this.ctx.beginPath();
-                        this.ctx.moveTo(x, 0);
-                        this.ctx.lineTo(x, height);
-                        this.ctx.strokeStyle = '#87CEEB';
-                        this.ctx.stroke();
-                    }
-                } else {
-                    // Draw full waveform
-                    const step = Math.ceil(data.length / width);
-                    const amp = height / 2;
+				// Draw waveform
+				this.ctx.beginPath();
+				this.ctx.strokeStyle = '#ffffff';
+				this.ctx.lineWidth = 1;
 
-                    this.ctx.beginPath();
-                    this.ctx.moveTo(0, amp);
+				for (let i = 0; i < width; i++) {
+					const x = i / dpr;
+					let min = 1.0;
+					let max = -1.0;
 
-                    for (let i = 0; i < width; i++) {
-                        let min = 1.0;
-                        let max = -1.0;
-                        for (let j = 0; j < step; j++) {
-                            const datum = data[(i * step) + j];
-                            if (datum < min) min = datum;
-                            if (datum > max) max = datum;
-                        }
-                        this.ctx.lineTo(i, (1 + min) * amp);
-                        this.ctx.lineTo(i, (1 + max) * amp);
-                    }
+					for (let j = 0; j < step; j++) {
+						const datum = data[(i * step) + j] || 0;
+						if (datum < min) min = datum;
+						if (datum > max) max = datum;
+					}
 
-                    this.ctx.strokeStyle = '#2196F3';
-                    this.ctx.stroke();
+					this.ctx.moveTo(x, (1 + min) * amp / dpr);
+					this.ctx.lineTo(x, (1 + max) * amp / dpr);
+				}
 
-                    // Draw markers
-                    const startX = (this.loopStart / duration) * width;
-                    const endX = (this.loopEnd / duration) * width;
+				this.ctx.stroke();
 
-                    // Draw subdivision lines
-                    if (this.loopStart !== this.loopEnd) {
-                        const segmentWidth = (endX - startX) / this.subdivisions;
-                        for (let i = 1; i < this.subdivisions; i++) {
-                            const x = startX + (i * segmentWidth);
-                            this.ctx.beginPath();
-                            this.ctx.moveTo(x, 0);
-                            this.ctx.lineTo(x, height);
-                            this.ctx.strokeStyle = '#87CEEB';
-                            this.ctx.stroke();
-                        }
-                    }
+				// Draw subdivisions
+				if (this.subdivisions > 1) {
+					const segmentWidth = (endX - startX) / this.subdivisions;
+					this.ctx.strokeStyle = 'rgba(52, 152, 219, 0.5)';
+					this.ctx.lineWidth = 1;
 
-                    // Draw start/end markers
-                    this.ctx.fillStyle = '#FF0000';
-                    this.ctx.fillRect(startX - 2, 0, 4, height);
-                    
-                    this.ctx.fillStyle = '#00FF00';
-                    this.ctx.fillRect(endX - 2, 0, 4, height);
-                }
-            }
+					for (let i = 1; i < this.subdivisions; i++) {
+						const x = startX + (segmentWidth * i);
+						this.ctx.beginPath();
+						this.ctx.moveTo(x, 0);
+						this.ctx.lineTo(x, height / dpr);
+						this.ctx.stroke();
+					}
+				}
 
-            togglePlayback() {
-                if (!this.audioBuffer) return;
+				// Draw playhead if playing
+				if (this.isPlaying && this.activeSegment !== -1) {
+					const segmentWidth = (endX - startX) / this.subdivisions;
+					const segmentStart = startX + (segmentWidth * this.activeSegment);
+					const playheadX = segmentStart + (segmentWidth * this.playheadPosition);
 
-                if (this.isPlaying) {
-                    if (this.sourceNode) {
-                        this.sourceNode.stop();
-                        this.sourceNode = null;
-                    }
-                    if (this.animationFrame) {
-                        cancelAnimationFrame(this.animationFrame);
-                    }
-                    this.isPlaying = false;
-                    this.playButton.textContent = 'Play';
-                } else {
-                    const source = this.audioContext.createBufferSource();
-                    source.buffer = this.audioBuffer;
-                    source.connect(this.audioContext.destination);
-                    
-                    if (this.isSliced) {
-                        source.loop = false;
-                        source.start(0, this.loopStart, this.loopEnd - this.loopStart);
-                    } else {
-                        source.loop = true;
-                        source.loopStart = this.loopStart;
-                        source.loopEnd = this.loopEnd;
-                        source.start(0, this.loopStart);
-                    }
-                    
-                    this.sourceNode = source;
-                    this.startTimeRef = this.audioContext.currentTime - this.loopStart;
-                    this.isPlaying = true;
-                    this.playButton.textContent = 'Stop';
-                    this.animate();
+					this.ctx.strokeStyle = '#ffffff';
+					this.ctx.lineWidth = 2;
+					this.ctx.beginPath();
+					this.ctx.moveTo(playheadX, 0);
+					this.ctx.lineTo(playheadX, height / dpr);
+					this.ctx.stroke();
+				}
 
-                    // Set up ended event handler
-                    source.onended = () => {
-                        this.isPlaying = false;
-                        this.playButton.textContent = 'Play';
-                        this.sourceNode = null;
-                        if (this.animationFrame) {
-                            cancelAnimationFrame(this.animationFrame);
-                        }
-                    };
-                }
-            }
+				// Request next frame if playing
+				if (this.isPlaying) {
+					this.animationFrameId = requestAnimationFrame(() => this.updatePlayhead());
+				}
+			}
 
-            animate() {
-                this.drawWaveform();
-                if (this.isPlaying) {
-                    this.animationFrame = requestAnimationFrame(this.animate);
-                }
-            }
-        }
+			updatePlayhead() {
+				if (!this.isPlaying || this.activeSegment === -1) return;
+
+				const currentTime = this.audioContext.currentTime;
+				const segmentDuration = this.segments[this.activeSegment].duration;
+				
+				if (currentTime >= this.playStartTime + segmentDuration) {
+					this.stopPlayback();
+					return;
+				}
+
+				this.playheadPosition = (currentTime - this.playStartTime) / segmentDuration;
+				this.drawWaveform();
+			}
+
+			finalizeSlicing() {
+				if (!this.audioBuffer) return;
+
+				const startSample = Math.floor(this.startPosition * this.audioBuffer.length);
+				const endSample = Math.floor(this.endPosition * this.audioBuffer.length);
+				const segmentLength = Math.floor((endSample - startSample) / this.subdivisions);
+
+				this.segments = [];
+
+				for (let i = 0; i < this.subdivisions; i++) {
+					const segmentStart = startSample + (i * segmentLength);
+					const segmentEnd = segmentStart + segmentLength;
+					
+					const segmentBuffer = this.audioContext.createBuffer(
+						this.audioBuffer.numberOfChannels,
+						segmentLength,
+						this.audioBuffer.sampleRate
+					);
+
+					for (let channel = 0; channel < this.audioBuffer.numberOfChannels; channel++) {
+						const channelData = this.audioBuffer.getChannelData(channel);
+						const segmentData = segmentBuffer.getChannelData(channel);
+						
+						for (let j = 0; j < segmentLength; j++) {
+							segmentData[j] = channelData[segmentStart + j];
+						}
+					}
+
+					this.segments.push(segmentBuffer);
+				}
+
+				document.getElementById('setButton').disabled = true;
+				document.getElementById('subdivisions').disabled = true;
+			}
+
+			async playSegment(index) {
+				if (index < 0 || index >= this.segments.length || this.isPlaying) return;
+
+				// Stop any current playback
+				this.stopPlayback();
+
+				this.isPlaying = true;
+				this.activeSegment = index;
+				this.playheadPosition = 0;
+
+				const source = this.audioContext.createBufferSource();
+				source.buffer = this.segments[index];
+				source.connect(this.audioContext.destination);
+				
+				this.audioSource = source;
+				this.playStartTime = this.audioContext.currentTime;
+				
+				source.start();
+				source.onended = () => this.stopPlayback();
+
+				// Start animation
+				this.updatePlayhead();
+			}
+
+			stopPlayback() {
+				if (this.audioSource) {
+					this.audioSource.stop();
+					this.audioSource.disconnect();
+					this.audioSource = null;
+				}
+
+				this.isPlaying = false;
+				this.activeSegment = -1;
+				this.playheadPosition = 0;
+
+				if (this.animationFrameId) {
+					cancelAnimationFrame(this.animationFrameId);
+					this.animationFrameId = null;
+				}
+
+				this.drawWaveform();
+			}
+
+			getSegmentCount() {
+				return this.segments.length;
+			}
+
+			// Cleanup method
+			dispose() {
+				this.stopPlayback();
+				if (this.audioContext) {
+					this.audioContext.close();
+				}
+				window.removeEventListener('resize', this.resizeCanvas);
+			}
+		}
+
+		// Create global instance
 
         // Initialize the application
         window.addEventListener('load', () => {
+			// window.audioSlicer = new AudioSlicer();
             window.audioSlicer = new AudioSlicer();  // Make it globally accessible for external sequencing
         });
 
