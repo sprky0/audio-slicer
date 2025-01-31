@@ -54,6 +54,7 @@ class AudioSlicer {
         
         this.setButton = setButton; // Store reference for updating text
 
+        // Drag and drop handling
         dropzone.addEventListener('dragover', (e) => {
             e.preventDefault();
             dropzone.classList.add('drag-over');
@@ -73,6 +74,7 @@ class AudioSlicer {
             }
         });
 
+        // Click to select file
         dropzone.addEventListener('click', () => {
             const input = document.createElement('input');
             input.type = 'file';
@@ -86,11 +88,13 @@ class AudioSlicer {
             input.click();
         });
 
+        // Subdivision select
         subdivSelect.addEventListener('change', (e) => {
             this.subdivisions = parseInt(e.target.value);
             this.drawWaveform();
         });
 
+        // Set / Reset button
         setButton.addEventListener('click', () => {
             if (setButton.textContent === 'SET') {
                 this.finalizeSlicing();
@@ -99,6 +103,7 @@ class AudioSlicer {
             }
         });
 
+        // Marker dragging
         this.setupMarkerDragging(startMarker, endMarker);
     }
 
@@ -182,7 +187,7 @@ class AudioSlicer {
         this.ctx.fillStyle = 'rgba(52, 152, 219, 0.1)';
         this.ctx.fillRect(startX, 0, endX - startX, height / dpr);
 
-        // Draw waveform
+        // Draw waveform (channel 0)
         this.ctx.beginPath();
         this.ctx.strokeStyle = '#ffffff';
         this.ctx.lineWidth = 1;
@@ -208,7 +213,7 @@ class AudioSlicer {
         if (this.subdivisions > 1) {
             const segmentWidth = (endX - startX) / this.subdivisions;
             
-            // Draw active segment highlight
+            // Highlight active segment if playing
             if (this.isPlaying && this.activeSegment !== -1) {
                 const segmentStart = startX + (segmentWidth * this.activeSegment);
                 this.ctx.fillStyle = 'rgba(52, 152, 219, 0.2)';
@@ -242,7 +247,7 @@ class AudioSlicer {
             this.ctx.stroke();
         }
 
-        // Request next frame if playing
+        // Request next animation frame if playing
         if (this.isPlaying) {
             this.animationFrameId = requestAnimationFrame(() => this.updatePlayhead());
         }
@@ -261,13 +266,76 @@ class AudioSlicer {
 
         this.playheadPosition = (currentTime - this.playStartTime) / segmentDuration;
         
-        // Add smooth animation
+        // Smooth animation
         requestAnimationFrame(() => {
             this.drawWaveform();
             if (this.isPlaying) {
                 this.updatePlayhead();
             }
         });
+    }
+
+    finalizeSlicing() {
+        if (!this.audioBuffer) return;
+
+        const startSample = Math.floor(this.startPosition * this.audioBuffer.length);
+        const endSample = Math.floor(this.endPosition * this.audioBuffer.length);
+        const segmentLength = Math.floor((endSample - startSample) / this.subdivisions);
+
+        this.segments = [];
+
+        for (let i = 0; i < this.subdivisions; i++) {
+            const segmentStart = startSample + (i * segmentLength);
+            // Guard against rounding issues on the last segment
+            const segmentEnd = i === this.subdivisions - 1 
+                ? endSample 
+                : segmentStart + segmentLength;
+            const length = segmentEnd - segmentStart;
+            
+            const segmentBuffer = this.audioContext.createBuffer(
+                this.audioBuffer.numberOfChannels,
+                length,
+                this.audioBuffer.sampleRate
+            );
+
+            for (let channel = 0; channel < this.audioBuffer.numberOfChannels; channel++) {
+                const channelData = this.audioBuffer.getChannelData(channel);
+                const segmentData = segmentBuffer.getChannelData(channel);
+                
+                for (let j = 0; j < length; j++) {
+                    segmentData[j] = channelData[segmentStart + j];
+                }
+            }
+
+            this.segments.push(segmentBuffer);
+        }
+
+        // Disable UI for slicing again, switch button to "RESET"
+        document.getElementById('setButton').disabled = true;
+        document.getElementById('subdivisions').disabled = true;
+        this.setButton.textContent = 'RESET';
+
+        // Create segment play/stop controls
+        const segmentControls = document.getElementById('segmentControls');
+        segmentControls.innerHTML = ''; // Clear any existing controls
+
+        // Create a Play button for each segment
+        for (let i = 0; i < this.segments.length; i++) {
+            const playButton = document.createElement('button');
+            playButton.textContent = `Play Segment ${i + 1}`;
+            playButton.addEventListener('click', () => {
+                this.playSegment(i);
+            });
+            segmentControls.appendChild(playButton);
+        }
+
+        // Add a general "Stop" button
+        const stopButton = document.createElement('button');
+        stopButton.textContent = 'Stop';
+        stopButton.addEventListener('click', () => {
+            this.stopPlayback();
+        });
+        segmentControls.appendChild(stopButton);
     }
 
     resetSlicing() {
@@ -285,48 +353,19 @@ class AudioSlicer {
         // Stop any current playback
         this.stopPlayback();
         
+        // Clear segment controls
+        const segmentControls = document.getElementById('segmentControls');
+        segmentControls.innerHTML = '';
+
         // Redraw waveform
         this.drawWaveform();
     }
 
-    finalizeSlicing() {
-        if (!this.audioBuffer) return;
-
-        const startSample = Math.floor(this.startPosition * this.audioBuffer.length);
-        const endSample = Math.floor(this.endPosition * this.audioBuffer.length);
-        const segmentLength = Math.floor((endSample - startSample) / this.subdivisions);
-
-        this.segments = [];
-
-        for (let i = 0; i < this.subdivisions; i++) {
-            const segmentStart = startSample + (i * segmentLength);
-            const segmentEnd = segmentStart + segmentLength;
-            
-            const segmentBuffer = this.audioContext.createBuffer(
-                this.audioBuffer.numberOfChannels,
-                segmentLength,
-                this.audioBuffer.sampleRate
-            );
-
-            for (let channel = 0; channel < this.audioBuffer.numberOfChannels; channel++) {
-                const channelData = this.audioBuffer.getChannelData(channel);
-                const segmentData = segmentBuffer.getChannelData(channel);
-                
-                for (let j = 0; j < segmentLength; j++) {
-                    segmentData[j] = channelData[segmentStart + j];
-                }
-            }
-
-            this.segments.push(segmentBuffer);
-        }
-
-        document.getElementById('setButton').disabled = true;
-        document.getElementById('subdivisions').disabled = true;
-        this.setButton.textContent = 'RESET';
-    }
-
     async playSegment(index) {
-        if (index < 0 || index >= this.segments.length || this.isPlaying) return;
+        if (index < 0 || index >= this.segments.length) return;
+
+        // if (this.isPlaying)
+            // this.stop()
 
         // Stop any current playback
         this.stopPlayback();
@@ -372,7 +411,7 @@ class AudioSlicer {
         return this.segments.length;
     }
 
-    // Cleanup method
+    // Cleanup method if needed
     dispose() {
         this.stopPlayback();
         if (this.audioContext) {

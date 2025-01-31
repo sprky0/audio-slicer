@@ -1,163 +1,35 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Audio Slicer</title>
-    <style>
-        :root {
-            --bg-color: #1a1a1a;
-            --text-color: #ffffff;
-            --accent-color: #3498db;
-            --marker-start: #ff4444;
-            --marker-end: #44ff44;
-            --subdivision-color: rgba(52, 152, 219, 0.5);
-        }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 2rem;
-        }
-
-        .container {
-            width: 100%;
-            max-width: 1200px;
-            display: flex;
-            flex-direction: column;
-            gap: 1rem;
-        }
-
-        .dropzone {
-            border: 2px dashed var(--accent-color);
-            padding: 2rem;
-            text-align: center;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-
-        .dropzone.drag-over {
-            background-color: rgba(52, 152, 219, 0.1);
-            border-color: var(--text-color);
-        }
-
-        .controls {
-            display: flex;
-            gap: 1rem;
-            align-items: center;
-        }
-
-        select, button {
-            background-color: var(--accent-color);
-            color: var(--text-color);
-            border: none;
-            padding: 0.5rem 1rem;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 1rem;
-            transition: all 0.2s ease;
-        }
-
-        select:hover:not(:disabled), 
-        button:hover:not(:disabled) {
-            background-color: #2980b9;
-        }
-
-        select:disabled, button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .canvas-container {
-            position: relative;
-            width: 100%;
-            height: 200px;
-            background-color: rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
-            overflow: hidden;
-        }
-
-        canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-        }
-
-        .marker {
-            position: absolute;
-            top: 0;
-            width: 2px;
-            height: 100%;
-            cursor: ew-resize;
-            z-index: 2;
-        }
-
-        .marker::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -4px;
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-        }
-
-        .marker.start {
-            background-color: var(--marker-start);
-        }
-
-        .marker.start::after {
-            background-color: var(--marker-start);
-        }
-
-        .marker.end {
-            background-color: var(--marker-end);
-        }
-
-        .marker.end::after {
-            background-color: var(--marker-end);
-        }
-    </style>
+  <meta charset="utf-8" />
+  <title>Audio Slicer</title>
+  <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
-    <div class="container">
-        <div class="dropzone" id="dropzone">
-            Drop audio file here (WAV/MP3)<br>
-            or click to select
-        </div>
-        <div class="controls">
-            <select id="subdivisions" disabled>
-                <option value="2">2 slices</option>
-                <option value="4">4 slices</option>
-                <option value="8">8 slices</option>
-                <option value="16">16 slices</option>
-                <option value="32">32 slices</option>
-                <option value="64">64 slices</option>
-            </select>
-            <button id="setButton" disabled>SET</button>
-        </div>
-        <div class="canvas-container">
-            <canvas id="waveformCanvas"></canvas>
-            <div class="marker start" id="startMarker"></div>
-            <div class="marker end" id="endMarker"></div>
-        </div>
-    </div>
 
-    <!-- The AudioSlicer class should be included here -->
-    <script src="audio-slicer.js"></script>
+  <div id="dropzone">
+    <p>Drop or click to upload an audio file</p>
+  </div>
+
+  <label for="subdivisions">Subdivisions:</label>
+  <select id="subdivisions" disabled>
+    <option value="2">2</option>
+    <option value="4">4</option>
+    <option value="8">8</option>
+    <option value="16">16</option>
+  </select>
+
+  <button id="setButton" disabled>SET</button>
+
+  <div id="canvasContainer">
+    <canvas id="waveformCanvas"></canvas>
+    <div id="startMarker" class="marker start"></div>
+    <div id="endMarker" class="marker end"></div>
+  </div>
+
+  <!-- Container for dynamically generated Play/Stop buttons for each segment -->
+  <div id="segmentControls"></div>
+
+  <script src="js/audio-slicer.js"></script>
 </body>
 </html>
