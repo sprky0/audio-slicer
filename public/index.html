@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Looper</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+
+        .dropzone {
+            width: 100%;
+            height: 300px;
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            position: relative;
+            cursor: pointer;
+        }
+
+        .dropzone-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #666;
+            pointer-events: none;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        .controls {
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        button {
+            padding: 8px 16px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        button:hover:not(:disabled) {
+            background: #1976D2;
+        }
+    </style>
+</head>
+<body>
+    <div class="dropzone" id="dropzone">
+        <canvas id="waveformCanvas"></canvas>
+        <div class="dropzone-text" id="dropzoneText">Drop an audio file (WAV or MP3) here</div>
+    </div>
+    <div class="controls">
+        <button id="playButton" disabled>Play</button>
+    </div>
+
+    <script>
+        class AudioLooper {
+            constructor() {
+                this.audioContext = null;
+                this.audioBuffer = null;
+                this.sourceNode = null;
+                this.isPlaying = false;
+                this.loopStart = 0;
+                this.loopEnd = 0;
+                this.draggedMarker = null;
+                this.startTimeRef = 0;
+                this.animationFrame = null;
+
+                // DOM elements
+                this.dropzone = document.getElementById('dropzone');
+                this.canvas = document.getElementById('waveformCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.dropzoneText = document.getElementById('dropzoneText');
+                this.playButton = document.getElementById('playButton');
+
+                // Bind methods
+                this.handleDrop = this.handleDrop.bind(this);
+                this.handleDragOver = this.handleDragOver.bind(this);
+                this.updateLoop = this.updateLoop.bind(this);
+                this.togglePlayback = this.togglePlayback.bind(this);
+                this.animate = this.animate.bind(this);
+                this.handleResize = this.handleResize.bind(this);
+
+                // Initialize
+                this.initializeAudioContext();
+                this.setupEventListeners();
+                this.handleResize();
+            }
+
+            initializeAudioContext() {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            setupEventListeners() {
+                this.dropzone.addEventListener('drop', this.handleDrop);
+                this.dropzone.addEventListener('dragover', this.handleDragOver);
+                this.dropzone.addEventListener('mousemove', this.updateLoop);
+                this.dropzone.addEventListener('mouseup', () => this.draggedMarker = null);
+                this.playButton.addEventListener('click', this.togglePlayback);
+                window.addEventListener('resize', this.handleResize);
+
+                // Handle marker dragging
+                this.dropzone.addEventListener('mousedown', (e) => {
+                    if (!this.audioBuffer) return;
+                    
+                    const rect = this.canvas.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const duration = this.audioBuffer.duration;
+                    const clickTime = (x / this.canvas.width) * duration;
+                    
+                    // Check if click is near start or end marker
+                    const startX = (this.loopStart / duration) * this.canvas.width;
+                    const endX = (this.loopEnd / duration) * this.canvas.width;
+                    const threshold = 10;
+
+                    if (Math.abs(x - startX) < threshold) {
+                        this.draggedMarker = 'start';
+                    } else if (Math.abs(x - endX) < threshold) {
+                        this.draggedMarker = 'end';
+                    }
+                });
+            }
+
+            handleResize() {
+                const rect = this.canvas.getBoundingClientRect();
+                this.canvas.width = rect.width * window.devicePixelRatio;
+                this.canvas.height = rect.height * window.devicePixelRatio;
+                this.ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+                if (this.audioBuffer) {
+                    this.drawWaveform();
+                }
+            }
+
+            async handleDrop(e) {
+                e.preventDefault();
+                const file = e.dataTransfer.files[0];
+                
+                if (file && (file.type === 'audio/wav' || file.type === 'audio/mpeg')) {
+                    const arrayBuffer = await file.arrayBuffer();
+                    this.audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+                    this.loopEnd = this.audioBuffer.duration;
+                    this.dropzoneText.style.display = 'none';
+                    this.playButton.disabled = false;
+                    this.drawWaveform();
+                }
+            }
+
+            handleDragOver(e) {
+                e.preventDefault();
+            }
+
+            updateLoop(e) {
+                if (!this.draggedMarker || !this.audioBuffer) return;
+                
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const duration = this.audioBuffer.duration;
+                const time = (x / rect.width) * duration;
+                
+                if (this.draggedMarker === 'start') {
+                    this.loopStart = Math.max(0, Math.min(time, this.loopEnd));
+                } else if (this.draggedMarker === 'end') {
+                    this.loopEnd = Math.min(duration, Math.max(time, this.loopStart));
+                }
+
+                if (this.sourceNode) {
+                    this.sourceNode.loopStart = this.loopStart;
+                    this.sourceNode.loopEnd = this.loopEnd;
+                }
+
+                this.drawWaveform();
+            }
+
+            drawWaveform() {
+                const width = this.canvas.width / window.devicePixelRatio;
+                const height = this.canvas.height / window.devicePixelRatio;
+                this.ctx.clearRect(0, 0, width, height);
+
+                if (!this.audioBuffer) return;
+
+                const data = this.audioBuffer.getChannelData(0);
+                const step = Math.ceil(data.length / width);
+                const amp = height / 2;
+
+                // Draw waveform
+                this.ctx.beginPath();
+                this.ctx.moveTo(0, amp);
+
+                for (let i = 0; i < width; i++) {
+                    let min = 1.0;
+                    let max = -1.0;
+                    for (let j = 0; j < step; j++) {
+                        const datum = data[(i * step) + j];
+                        if (datum < min) min = datum;
+                        if (datum > max) max = datum;
+                    }
+                    this.ctx.lineTo(i, (1 + min) * amp);
+                    this.ctx.lineTo(i, (1 + max) * amp);
+                }
+
+                this.ctx.strokeStyle = '#2196F3';
+                this.ctx.stroke();
+
+                // Draw markers
+                const duration = this.audioBuffer.duration;
+                
+                // Start marker (red)
+                const startX = (this.loopStart / duration) * width;
+                this.ctx.fillStyle = '#FF0000';
+                this.ctx.fillRect(startX - 2, 0, 4, height);
+                
+                // End marker (green)
+                const endX = (this.loopEnd / duration) * width;
+                this.ctx.fillStyle = '#00FF00';
+                this.ctx.fillRect(endX - 2, 0, 4, height);
+            }
+
+            togglePlayback() {
+                if (!this.audioBuffer) return;
+
+                if (this.isPlaying) {
+                    if (this.sourceNode) {
+                        this.sourceNode.stop();
+                        this.sourceNode = null;
+                    }
+                    if (this.animationFrame) {
+                        cancelAnimationFrame(this.animationFrame);
+                    }
+                    this.isPlaying = false;
+                    this.playButton.textContent = 'Play';
+                } else {
+                    const source = this.audioContext.createBufferSource();
+                    source.buffer = this.audioBuffer;
+                    source.connect(this.audioContext.destination);
+                    source.loop = true;
+                    source.loopStart = this.loopStart;
+                    source.loopEnd = this.loopEnd;
+                    source.start(0, this.loopStart);
+                    this.sourceNode = source;
+                    this.startTimeRef = this.audioContext.currentTime - this.loopStart;
+                    this.isPlaying = true;
+                    this.playButton.textContent = 'Stop';
+                    this.animate();
+                }
+            }
+
+            animate() {
+                this.drawWaveform();
+                if (this.isPlaying) {
+                    this.animationFrame = requestAnimationFrame(this.animate);
+                }
+            }
+        }
+
+        // Initialize the application
+        window.addEventListener('load', () => {
+            new AudioLooper();
+        });
+    </script>
+</body>
+</html>
