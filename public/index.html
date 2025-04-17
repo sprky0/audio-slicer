@@ -1,35 +1,35 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Audio Slicer</title>
-  <link rel="stylesheet" href="css/styles.css" />
+	<meta charset="utf-8" />
+	<title>Audio Slicer</title>
+	<link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
 
-  <div id="dropzone">
-    <p>Drop or click to upload an audio file</p>
-  </div>
+	<div id="dropzone">
+		<p>Drop or click to upload an audio file</p>
+	</div>
 
-  <label for="subdivisions">Subdivisions:</label>
-  <select id="subdivisions" disabled>
-    <option value="2">2</option>
-    <option value="4">4</option>
-    <option value="8">8</option>
-    <option value="16">16</option>
-  </select>
+	<label for="subdivisions">Subdivisions:</label>
+	<select id="subdivisions" disabled>
+		<option value="2">2</option>
+		<option value="4">4</option>
+		<option value="8">8</option>
+		<option value="16">16</option>
+	</select>
 
-  <button id="setButton" disabled>SET</button>
+	<button id="setButton" disabled>SET</button>
 
-  <div id="canvasContainer">
-    <canvas id="waveformCanvas"></canvas>
-    <div id="startMarker" class="marker start"></div>
-    <div id="endMarker" class="marker end"></div>
-  </div>
+	<div id="canvasContainer">
+		<canvas id="waveformCanvas"></canvas>
+		<div id="startMarker" class="marker start"></div>
+		<div id="endMarker" class="marker end"></div>
+	</div>
 
-  <!-- Container for dynamically generated Play/Stop buttons for each segment -->
-  <div id="segmentControls"></div>
+	<!-- Container for dynamically generated Play/Stop buttons for each segment -->
+	<div id="segmentControls"></div>
 
-  <script src="js/audio-slicer.js"></script>
+	<script src="js/audio-slicer.js"></script>
 </body>
 </html>
