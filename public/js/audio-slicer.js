@@ -313,11 +313,6 @@ class AudioSlicer {
 			this.ctx.lineTo(playheadX, height / dpr);
 			this.ctx.stroke();
 		}
-
-		// Keep animating if playing
-		if (this.isPlaying) {
-			this.animationFrameId = requestAnimationFrame(() => this.updatePlayhead());
-		}
 	}
 
 	updatePlayhead() {
@@ -334,13 +329,11 @@ class AudioSlicer {
 		// Fraction of the current segment that’s done
 		this.playheadPosition = (currentTime - this.playStartTime) / segmentDuration;
 
+		// Draw waveform with updated playhead
+		this.drawWaveform();
+
 		// Request next frame for smooth animation
-		requestAnimationFrame(() => {
-			this.drawWaveform();
-			if (this.isPlaying) {
-				this.updatePlayhead();
-			}
-		});
+		this.animationFrameId = requestAnimationFrame(() => this.updatePlayhead());
 	}
 
 	handleSegmentEnd() {
@@ -472,7 +465,8 @@ class AudioSlicer {
 		};
 
 		source.start();
-		this.updatePlayhead();
+		// Start animation frame loop
+		this.animationFrameId = requestAnimationFrame(() => this.updatePlayhead());
 	}
 
 	stopPlayback() {
