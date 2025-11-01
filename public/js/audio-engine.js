@@ -5,29 +5,29 @@
 class AudioEngine extends EventTarget {
 	constructor() {
 		super();
-		this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-		this.audioBuffer = null;
-		this.originalBuffer = null;
-		this.segments = [];
+		this.audioContext    = new (window.AudioContext || window.webkitAudioContext)();
+		this.audioBuffer     = null;
+		this.originalBuffer  = null;
+		this.segments        = [];
 		this.enabledSegments = [];
-		this.activeSegment = -1;
-		this.isPlaying = false;
-		this.audioSource = null;
-		this.playStartTime = 0;
-		this.segmentStartTime = 0;
-		this.performance = {
-			decode: 0,
-			slice: 0,
-			playbackLatency: 0,
+		this.activeSegment   = -1;
+		this.isPlaying       = false;
+		this.audioSource     = null;
+		this.playStartTime   = 0;
+		this.segmentStartTime= 0;
+		this.performance     = {
+			decode:         0,
+			slice:          0,
+			playbackLatency:0,
 		};
 	}
 
 	async loadFile(file) {
-		const t0 = performance.now();
-		const arrayBuffer = await file.arrayBuffer();
+		const t0         = performance.now();
+		const arrayBuffer= await file.arrayBuffer();
 		this.audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
 		this.originalBuffer = this.audioBuffer;
-		const t1 = performance.now();
+		const t1         = performance.now();
 		this.performance.decode = t1 - t0;
 		this.dispatchEvent(new CustomEvent('fileloaded', { detail: { buffer: this.audioBuffer, decodeTime: this.performance.decode } }));
 	}
@@ -36,18 +36,18 @@ class AudioEngine extends EventTarget {
 		const t0 = performance.now();
 		if (!this.audioBuffer) return;
 		const startSample = Math.floor(startPosition * this.audioBuffer.length);
-		const endSample = Math.floor(endPosition * this.audioBuffer.length);
-		const totalSamples = endSample - startSample;
+		const endSample   = Math.floor(endPosition * this.audioBuffer.length);
+		const totalSamples= endSample - startSample;
 		if (totalSamples <= 0) return;
 
-		this.segments = [];
+		this.segments        = [];
 		this.enabledSegments = [];
 		for (let i = 0; i < subdivisions; i++) {
 			const segStart = startSample + Math.floor((totalSamples / subdivisions) * i);
-			const segEnd = (i === subdivisions - 1)
+			const segEnd   = (i === subdivisions - 1)
 				? endSample
 				: startSample + Math.floor((totalSamples / subdivisions) * (i + 1));
-			const length = segEnd - segStart;
+			const length   = segEnd - segStart;
 
 			const segmentBuffer = this.audioContext.createBuffer(
 				this.audioBuffer.numberOfChannels,
@@ -76,7 +76,7 @@ class AudioEngine extends EventTarget {
 	playSegment(index, offsetSec = 0) {
 		if (!this.segments[index] || !this.enabledSegments[index]) return;
 		this.stop();
-		this.isPlaying = true;
+		this.isPlaying     = true;
 		this.activeSegment = index;
 
 		const source = this.audioContext.createBufferSource();
@@ -84,13 +84,13 @@ class AudioEngine extends EventTarget {
 		source.connect(this.audioContext.destination);
 
 		source.onended = () => {
-			this.isPlaying = false;
+			this.isPlaying     = false;
 			this.activeSegment = -1;
 			this.dispatchEvent(new CustomEvent('segmentend', { detail: { index } }));
 		};
 
-		this.audioSource = source;
-		this.playStartTime = this.audioContext.currentTime - (offsetSec || 0);
+		this.audioSource      = source;
+		this.playStartTime    = this.audioContext.currentTime - (offsetSec || 0);
 		this.segmentStartTime = performance.now();
 		try {
 			source.start(0, offsetSec || 0);
@@ -113,7 +113,7 @@ class AudioEngine extends EventTarget {
 			this.audioSource.disconnect();
 			this.audioSource = null;
 		}
-		this.isPlaying = false;
+		this.isPlaying     = false;
 		this.activeSegment = -1;
 	}
 

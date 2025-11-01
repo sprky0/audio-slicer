@@ -7,28 +7,28 @@ class AudioSlicer {
 	}
 
 	initializeProperties() {
-		this.originalBuffer = null; // For reset
-		this.audioBuffer = null;
-		this.audioSource = null;
-		this.startPosition = 0;
-		this.endPosition = 1;
-		this.subdivisions = 2;
-		this.segments = [];
-		this.isPlaying = false;
-		this.activeSegment = -1;
-		this.nextSegmentIndex = null; // If user clicks another "Play" while playing, queue it
-		this.draggingMarker = null;
+		this.originalBuffer    = null; // For reset
+		this.audioBuffer       = null;
+		this.audioSource       = null;
+		this.startPosition     = 0;
+		this.endPosition       = 1;
+		this.subdivisions      = 2;
+		this.segments          = [];
+		this.isPlaying         = false;
+		this.activeSegment     = -1;
+		this.nextSegmentIndex  = null; // If user clicks another "Play" while playing, queue it
+		this.draggingMarker    = null;
 
-		this.playheadPosition = 0;
-		this.animationFrameId = null;
+		this.playheadPosition  = 0;
+		this.animationFrameId  = null;
 
 		// Precompute peaks at a certain resolution
-		this.waveformPeaks = [];
-		this.precomputedWidth = 1500;
+		this.waveformPeaks     = [];
+		this.precomputedWidth  = 1500;
 
 		// Offscreen canvas for static waveform
-		this.offscreenCanvas = document.createElement('canvas');
-		this.offscreenCtx = this.offscreenCanvas.getContext('2d');
+		this.offscreenCanvas   = document.createElement('canvas');
+		this.offscreenCtx      = this.offscreenCanvas.getContext('2d');
 	}
 
 	setupAudioContext() {
@@ -37,7 +37,7 @@ class AudioSlicer {
 
 	setupCanvas() {
 		this.canvas = document.getElementById('waveformCanvas');
-		this.ctx = this.canvas.getContext('2d');
+		this.ctx    = this.canvas.getContext('2d');
 		this.resizeCanvas();
 
 		// Re-render if the user resizes the browser
@@ -45,15 +45,15 @@ class AudioSlicer {
 	}
 
 	resizeCanvas() {
-		const dpr = window.devicePixelRatio || 1;
+		const dpr  = window.devicePixelRatio || 1;
 		const rect = this.canvas.getBoundingClientRect();
-		
-		this.canvas.width = rect.width * dpr;
+
+		this.canvas.width  = rect.width * dpr;
 		this.canvas.height = rect.height * dpr;
 		this.ctx.scale(dpr, dpr);
 
 		// Make offscreen match the main canvas size
-		this.offscreenCanvas.width = this.canvas.width;
+		this.offscreenCanvas.width  = this.canvas.width;
 		this.offscreenCanvas.height = this.canvas.height;
 		this.offscreenCtx.scale(dpr, dpr);
 
@@ -66,12 +66,12 @@ class AudioSlicer {
 	}
 
 	setupEventListeners() {
-		const dropzone = document.getElementById('dropzone');
-		const subdivSelect = document.getElementById('subdivisions');
-		const setButton = document.getElementById('setButton');
-		const startMarker = document.getElementById('startMarker');
-		const endMarker = document.getElementById('endMarker');
-		
+		const dropzone      = document.getElementById('dropzone');
+		const subdivSelect  = document.getElementById('subdivisions');
+		const setButton     = document.getElementById('setButton');
+		const startMarker   = document.getElementById('startMarker');
+		const endMarker     = document.getElementById('endMarker');
+
 		this.setButton = setButton;
 
 		// Drag-and-drop
@@ -85,7 +85,7 @@ class AudioSlicer {
 		dropzone.addEventListener('drop', async (e) => {
 			e.preventDefault();
 			dropzone.classList.remove('drag-over');
-			
+
 			const file = e.dataTransfer.files[0];
 			if (file && (file.type === 'audio/wav' || file.type === 'audio/mp3')) {
 				await this.loadAudioFile(file);
@@ -139,8 +139,8 @@ class AudioSlicer {
 		if (!this.draggingMarker) return;
 
 		const rect = this.canvas.getBoundingClientRect();
-		const x = (e.clientX - rect.left) / rect.width;
-		
+		const x    = (e.clientX - rect.left) / rect.width;
+
 		if (this.draggingMarker.classList.contains('start')) {
 			this.startPosition = Math.max(0, Math.min(x, this.endPosition - 0.01));
 		} else {
@@ -159,17 +159,17 @@ class AudioSlicer {
 
 	updateMarkerPositions() {
 		const startMarker = document.getElementById('startMarker');
-		const endMarker = document.getElementById('endMarker');
+		const endMarker   = document.getElementById('endMarker');
 
 		startMarker.style.left = `${this.startPosition * 100}%`;
-		endMarker.style.left = `${this.endPosition * 100}%`;
+		endMarker.style.left   = `${this.endPosition * 100}%`;
 	}
 
 	async loadAudioFile(file) {
 		try {
-			const arrayBuffer = await file.arrayBuffer();
-			this.audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
-			this.originalBuffer = this.audioBuffer;
+			const arrayBuffer    = await file.arrayBuffer();
+			this.audioBuffer     = await this.audioContext.decodeAudioData(arrayBuffer);
+			this.originalBuffer  = this.audioBuffer;
 
 			// Precompute peaks
 			this.precomputeWaveformPeaks();
@@ -179,12 +179,12 @@ class AudioSlicer {
 
 			// Enable UI
 			document.getElementById('subdivisions').disabled = false;
-			document.getElementById('setButton').disabled = false;
+			document.getElementById('setButton').disabled    = false;
 			this.setButton.textContent = 'SET';
-			
+
 			// Reset selection
 			this.startPosition = 0;
-			this.endPosition = 1;
+			this.endPosition   = 1;
 			this.updateMarkerPositions();
 			this.drawWaveform();
 		} catch (error) {
@@ -195,7 +195,7 @@ class AudioSlicer {
 	precomputeWaveformPeaks() {
 		if (!this.audioBuffer) return;
 
-		const data = this.audioBuffer.getChannelData(0);
+		const data   = this.audioBuffer.getChannelData(0);
 		const length = data.length;
 
 		this.waveformPeaks = new Array(this.precomputedWidth);
@@ -203,7 +203,7 @@ class AudioSlicer {
 
 		for (let i = 0; i < this.precomputedWidth; i++) {
 			let start = Math.floor(i * samplesPerBucket);
-			let end = Math.floor((i + 1) * samplesPerBucket);
+			let end   = Math.floor((i + 1) * samplesPerBucket);
 			if (end > length) end = length;
 
 			let min = 1.0;
@@ -227,24 +227,24 @@ class AudioSlicer {
 		// Clear offscreen
 		this.offscreenCtx.clearRect(0, 0, this.offscreenCanvas.width, this.offscreenCanvas.height);
 
-		const width = this.offscreenCanvas.width;
+		const width  = this.offscreenCanvas.width;
 		const height = this.offscreenCanvas.height;
-		const dpr = window.devicePixelRatio || 1;
+		const dpr    = window.devicePixelRatio || 1;
 
 		// We'll scale from our precomputed array to the canvas's actual width
 		const targetWidth = this.waveformPeaks.length;
-		const scale = targetWidth / width;
-		const amp = height / 2 / dpr;
+		const scale       = targetWidth / width;
+		const amp         = height / 2 / dpr;
 
 		// Draw the waveform
 		this.offscreenCtx.beginPath();
 		this.offscreenCtx.strokeStyle = '#ffffff';
-		this.offscreenCtx.lineWidth = 1;
+		this.offscreenCtx.lineWidth   = 1;
 
 		for (let i = 0; i < width; i++) {
-			const index = Math.floor(i * scale);
+			const index      = Math.floor(i * scale);
 			const { min, max } = this.waveformPeaks[index] || { min: 0, max: 0 };
-			const x = i / dpr;
+			const x          = i / dpr;
 
 			this.offscreenCtx.moveTo(x, (1 + min) * amp);
 			this.offscreenCtx.lineTo(x, (1 + max) * amp);
@@ -258,9 +258,9 @@ class AudioSlicer {
 	drawWaveform() {
 		if (!this.canvas || !this.ctx) return;
 
-		const width = this.canvas.width;
+		const width  = this.canvas.width;
 		const height = this.canvas.height;
-		const dpr = window.devicePixelRatio || 1;
+		const dpr    = window.devicePixelRatio || 1;
 
 		// Clear main canvas
 		this.ctx.clearRect(0, 0, width, height);
@@ -273,24 +273,24 @@ class AudioSlicer {
 
 		// Draw the selection highlight
 		const startX = this.startPosition * width / dpr;
-		const endX = this.endPosition * width / dpr;
+		const endX   = this.endPosition * width / dpr;
 		this.ctx.fillStyle = 'rgba(52, 152, 219, 0.1)';
 		this.ctx.fillRect(startX, 0, endX - startX, height / dpr);
 
 		// Draw subdivisions / highlight
 		if (this.subdivisions > 1) {
 			const segmentWidth = (endX - startX) / this.subdivisions;
-			
+
 			// Active segment highlight
 			if (this.isPlaying && this.activeSegment !== -1) {
 				const segmentStart = startX + (segmentWidth * this.activeSegment);
 				this.ctx.fillStyle = 'rgba(52, 152, 219, 0.2)';
 				this.ctx.fillRect(segmentStart, 0, segmentWidth, height / dpr);
 			}
-			
+
 			// Subdivision lines
 			this.ctx.strokeStyle = 'rgba(52, 152, 219, 0.5)';
-			this.ctx.lineWidth = 1;
+			this.ctx.lineWidth   = 1;
 			for (let i = 1; i < this.subdivisions; i++) {
 				const x = startX + (segmentWidth * i);
 				this.ctx.beginPath();
@@ -304,10 +304,10 @@ class AudioSlicer {
 		if (this.isPlaying && this.activeSegment !== -1) {
 			const segmentWidth = (endX - startX) / this.subdivisions;
 			const segmentStart = startX + (segmentWidth * this.activeSegment);
-			const playheadX = segmentStart + (segmentWidth * this.playheadPosition);
+			const playheadX    = segmentStart + (segmentWidth * this.playheadPosition);
 
 			this.ctx.strokeStyle = '#ffffff';
-			this.ctx.lineWidth = 2;
+			this.ctx.lineWidth   = 2;
 			this.ctx.beginPath();
 			this.ctx.moveTo(playheadX, 0);
 			this.ctx.lineTo(playheadX, height / dpr);
@@ -318,9 +318,9 @@ class AudioSlicer {
 	updatePlayhead() {
 		if (!this.isPlaying || this.activeSegment === -1) return;
 
-		const currentTime = this.audioContext.currentTime;
+		const currentTime     = this.audioContext.currentTime;
 		const segmentDuration = this.segments[this.activeSegment].duration;
-		
+
 		if (currentTime >= this.playStartTime + segmentDuration) {
 			this.handleSegmentEnd();
 			return;
@@ -364,17 +364,17 @@ class AudioSlicer {
 		if (!this.audioBuffer) return;
 
 		const startSample = Math.floor(this.startPosition * this.audioBuffer.length);
-		const endSample = Math.floor(this.endPosition * this.audioBuffer.length);
-		const totalSamples = endSample - startSample;
+		const endSample   = Math.floor(this.endPosition * this.audioBuffer.length);
+		const totalSamples= endSample - startSample;
 		if (totalSamples <= 0) return;
 
 		this.segments = [];
 		for (let i = 0; i < this.subdivisions; i++) {
 			const segStart = startSample + Math.floor((totalSamples / this.subdivisions) * i);
-			const segEnd = (i === this.subdivisions - 1)
+			const segEnd   = (i === this.subdivisions - 1)
 				? endSample
 				: startSample + Math.floor((totalSamples / this.subdivisions) * (i + 1));
-			const length = segEnd - segStart;
+			const length   = segEnd - segStart;
 
 			const segmentBuffer = this.audioContext.createBuffer(
 				this.audioBuffer.numberOfChannels,
@@ -394,7 +394,7 @@ class AudioSlicer {
 
 		// Update UI
 		document.getElementById('subdivisions').disabled = true;
-		document.getElementById('setButton').disabled = true;
+		document.getElementById('setButton').disabled    = true;
 		this.setButton.textContent = 'RESET';
 
 		// Create dynamic segment buttons
@@ -424,11 +424,11 @@ class AudioSlicer {
 
 	resetSlicing() {
 		// Restore the original buffer
-		this.audioBuffer = this.originalBuffer;
-		this.segments = [];
-		this.startPosition = 0;
-		this.endPosition = 1;
-		
+		this.audioBuffer    = this.originalBuffer;
+		this.segments       = [];
+		this.startPosition  = 0;
+		this.endPosition    = 1;
+
 		// Update UI
 		this.setButton.textContent = 'SET';
 		document.getElementById('subdivisions').disabled = false;
@@ -449,16 +449,16 @@ class AudioSlicer {
 		// Stop existing
 		this.stopPlayback();
 
-		this.isPlaying = true;
-		this.activeSegment = index;
+		this.isPlaying        = true;
+		this.activeSegment    = index;
 		this.playheadPosition = 0;
 
 		const source = this.audioContext.createBufferSource();
 		source.buffer = this.segments[index];
 		source.connect(this.audioContext.destination);
-		
-		this.audioSource = source;
-		this.playStartTime = this.audioContext.currentTime;
+
+		this.audioSource    = source;
+		this.playStartTime  = this.audioContext.currentTime;
 
 		source.onended = () => {
 			this.handleSegmentEnd();
@@ -476,8 +476,8 @@ class AudioSlicer {
 			this.audioSource.disconnect();
 			this.audioSource = null;
 		}
-		this.isPlaying = false;
-		this.activeSegment = -1;
+		this.isPlaying        = false;
+		this.activeSegment    = -1;
 		this.playheadPosition = 0;
 		this.nextSegmentIndex = null;
 
