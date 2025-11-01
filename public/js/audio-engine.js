@@ -20,6 +20,19 @@ class AudioEngine extends EventTarget {
 			slice:          0,
 			playbackLatency:0,
 		};
+		// --- Volume and Pan ---
+		this.gainNode = this.audioContext.createGain();
+		this.gainNode.gain.value = 1;
+		this.pannerNode = this.audioContext.createStereoPanner
+			? this.audioContext.createStereoPanner()
+			: null;
+		if (this.pannerNode) {
+			this.pannerNode.pan.value = 0;
+			this.gainNode.connect(this.pannerNode);
+			this.pannerNode.connect(this.audioContext.destination);
+		} else {
+			this.gainNode.connect(this.audioContext.destination);
+		}
 	}
 
 	async loadFile(file) {
@@ -81,7 +94,10 @@ class AudioEngine extends EventTarget {
 
 		const source = this.audioContext.createBufferSource();
 		source.buffer = this.segments[index];
-		source.connect(this.audioContext.destination);
+		// Connect: source -> gain -> (panner) -> destination
+		source.connect(this.gainNode);
+
+		this.audioSource = source;
 
 		source.onended = () => {
 			this.isPlaying     = false;
@@ -89,7 +105,6 @@ class AudioEngine extends EventTarget {
 			this.dispatchEvent(new CustomEvent('segmentend', { detail: { index } }));
 		};
 
-		this.audioSource      = source;
 		this.playStartTime    = this.audioContext.currentTime - (offsetSec || 0);
 		this.segmentStartTime = performance.now();
 		try {
@@ -115,6 +130,15 @@ class AudioEngine extends EventTarget {
 		}
 		this.isPlaying     = false;
 		this.activeSegment = -1;
+	}
+	// --- Volume and Pan Controls ---
+	setVolume(val) {
+		this.gainNode.gain.value = val;
+	}
+	setPan(val) {
+		if (this.pannerNode) {
+			this.pannerNode.pan.value = val;
+		}
 	}
 
 	enableSegment(index, enabled) {

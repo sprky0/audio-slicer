@@ -126,8 +126,16 @@ class WaveformView extends EventTarget {
 		const indicatorHeight = this.options.segmentIndicatorHeight;
 		ctx.clearRect(0, 0, width, height + indicatorHeight);
 
-		// Draw waveform
-		ctx.drawImage(this.offscreenCanvas, 0, 0);
+		// Draw waveform (zoomed to selected range)
+		const sourceWidth = this.offscreenCanvas.width;
+		const startPx = Math.floor(this.startPosition * sourceWidth);
+		const endPx = Math.ceil(this.endPosition * sourceWidth);
+		const rangePx = Math.max(1, endPx - startPx);
+		ctx.drawImage(
+			this.offscreenCanvas,
+			startPx, 0, rangePx, this.offscreenCanvas.height, // source rect
+			0, 0, this.canvas.width, this.options.height      // dest rect (full width)
+		);
 
 		// Draw selection highlight
 		const startX = this.startPosition * width;

@@ -16,14 +16,14 @@ class AudioSlicerController {
 
 		// State
 		this.waveformPeaks      = [];
-		this.performanceOverlay = null;
+		// this.performanceOverlay = null;
 
 		// Bind events
 		this._bindEngineEvents();
 		this._bindViewEvents();
 
 		// Performance overlay
-		this._createPerformanceOverlay();
+		// this._createPerformanceOverlay();
 	}
 
 	async loadFile(file) {
@@ -165,15 +165,15 @@ class AudioSlicerController {
 
 	_bindEngineEvents() {
 		this.engine.addEventListener('fileloaded', (e) => {
-			this._updatePerformanceOverlay();
+			// this._updatePerformanceOverlay();
 		});
 		this.engine.addEventListener('segmentsliced', (e) => {
 			this.view.setSegments(this.engine.getSegments(), this.engine.getEnabledSegments());
-			this._updatePerformanceOverlay();
+			// this._updatePerformanceOverlay();
 		});
 		this.engine.addEventListener('segmentplay', (e) => {
 			this.view.setActiveSegment(e.detail.index);
-			this._updatePerformanceOverlay();
+			// this._updatePerformanceOverlay();
 			// Start playhead animation for new segment
 			this._startPlayheadAnimation(e.detail.index, 0);
 		});
@@ -184,7 +184,7 @@ class AudioSlicerController {
 				this.playSegmentAtPosition(next, 0);
 			} else {
 				this.view.setActiveSegment(-1);
-				this._updatePerformanceOverlay();
+				// this._updatePerformanceOverlay();
 				if (this._playheadAnimId) {
 					cancelAnimationFrame(this._playheadAnimId);
 					this._playheadAnimId = null;
@@ -256,31 +256,16 @@ class AudioSlicerController {
 		return peaks;
 	}
 
-	_createPerformanceOverlay() {
-		this.performanceOverlay = document.createElement('div');
-		this.performanceOverlay.style.position      = 'absolute';
-		this.performanceOverlay.style.top           = '4px';
-		this.performanceOverlay.style.right         = '4px';
-		this.performanceOverlay.style.background    = 'rgba(0,0,0,0.7)';
-		this.performanceOverlay.style.color         = '#fff';
-		this.performanceOverlay.style.fontSize      = '12px';
-		this.performanceOverlay.style.padding       = '4px 8px';
-		this.performanceOverlay.style.borderRadius  = '4px';
-		this.performanceOverlay.style.pointerEvents = 'none';
-		this.performanceOverlay.style.zIndex        = 10;
-		this.container.style.position               = 'relative';
-		this.container.appendChild(this.performanceOverlay);
-		this._updatePerformanceOverlay();
+	// Performance overlay disabled
+	// _createPerformanceOverlay() { ... }
+	// _updatePerformanceOverlay() { ... }
+
+	setVolume(val) {
+		this.engine.setVolume(val);
 	}
 
-	_updatePerformanceOverlay() {
-		const perf = this.engine.getPerformance();
-		this.performanceOverlay.innerHTML = `
-			<strong>Performance</strong><br>
-			Decode: ${perf.decode.toFixed(1)} ms<br>
-			Slice: ${perf.slice.toFixed(1)} ms<br>
-			Playback Latency: ${perf.playbackLatency.toFixed(1)} ms
-		`;
+	setPan(val) {
+		this.engine.setPan(val);
 	}
 }
 
