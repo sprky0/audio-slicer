@@ -1,0 +1,145 @@
+/* Example CSS: Demonstrates all CSS variables and styles in use */
+
+/* Color Swatches */
+.example-color {
+  display: inline-block;
+  width: 80px;
+  height: 40px;
+  margin: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-light);
+  line-height: 40px;
+  text-align: center;
+  color: #222;
+  font-size: 13px;
+  font-family: var(--font-family-base);
+}
+.example-color.text {
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+}
+
+/* Spacing Demo */
+.example-spacing {
+  display: inline-block;
+  background: var(--color-accent);
+  color: #fff;
+  margin: 4px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: var(--font-family-base);
+  text-align: center;
+}
+.space-xs { width: var(--space-xs); height: var(--space-xs);}
+.space-sm { width: var(--space-sm); height: var(--space-sm);}
+.space-md { width: var(--space-md); height: var(--space-md);}
+.space-lg { width: var(--space-lg); height: var(--space-lg);}
+.space-xl { width: var(--space-xl); height: var(--space-xl);}
+.space-xxl { width: var(--space-xxl); height: var(--space-xxl);}
+.space-xxxl { width: var(--space-xxxl); height: var(--space-xxxl);}
+
+/* Typography Demo */
+.example-font {
+  font-family: var(--font-family-base);
+  margin: 8px 0;
+}
+.font-base { font-size: var(--font-size-base);}
+.font-large { font-size: 1.5em;}
+.font-small { font-size: 0.85em;}
+
+/* Button Variants */
+.example-btn {
+  display: inline-block;
+  padding: var(--space-xs) var(--space-md);
+  margin: 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-base);
+  font-family: var(--font-family-base);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+.btn-accent { background: var(--color-accent); color: var(--color-text-primary);}
+.btn-marker { background: var(--color-marker); color: #fff;}
+.btn-border { background: var(--color-bg-secondary); color: var(--color-accent); border: 1px solid var(--color-accent);}
+.btn-disabled { opacity: var(--opacity-disabled); cursor: not-allowed;}
+
+/* Card Example */
+.example-card {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-lg);
+  padding: var(--space-xl);
+  margin: var(--space-lg) 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  max-width: 400px;
+}
+
+/* Alert Example */
+.example-alert {
+  padding: var(--space-md);
+  border-radius: var(--radius-md);
+  margin: var(--space-sm) 0;
+  font-size: var(--font-size-base);
+  font-family: var(--font-family-base);
+}
+.alert-accent { background: var(--color-accent); color: #fff;}
+.alert-marker { background: var(--color-marker); color: #fff;}
+.alert-border { background: var(--color-bg-secondary); color: var(--color-accent); border: 1px solid var(--color-accent);}
+
+/* Additional styles moved from example.html */
+body.example-demo {
+	max-width: 800px;
+	margin: 0 auto;
+	padding: 24px;
+}
+h1, h2, h3 {
+	margin-top: 2em;
+}
+.section {
+	margin-bottom: 2.5em;
+}
+.var-label {
+	font-size: 12px;
+	color: #888;
+	display: block;
+	margin-top: 2px;
+}
+.swatch-row,
+.spacing-row,
+.btn-row,
+.alert-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+}
+.spacing-row {
+	align-items: flex-end;
+}
+
+/* Utility classes for demo (backgrounds, colors, radius, flex) */
+.bg-primary        { background: var(--color-bg-primary) !important; }
+.bg-secondary      { background: var(--color-bg-secondary) !important; }
+.bg-accent         { background: var(--color-accent) !important; }
+.bg-marker         { background: var(--color-marker) !important; }
+.bg-border         { background: var(--color-border) !important; }
+.bg-border-light   { background: var(--color-border-light) !important; }
+
+.color-primary     { color: var(--color-text-primary) !important; }
+.color-accent      { color: var(--color-accent) !important; }
+.color-marker      { color: var(--color-marker) !important; }
+.color-border      { color: var(--color-border) !important; }
+.color-border-light{ color: var(--color-border-light) !important; }
+.color-white       { color: #fff !important; }
+.color-black       { color: #222 !important; }
+
+.radius-sm         { border-radius: var(--radius-sm) !important; }
+.radius-md         { border-radius: var(--radius-md) !important; }
+.radius-lg         { border-radius: var(--radius-lg) !important; }
+
+.flex-row          { display: flex !important; gap: 16px !important; }
+.w60               { width: 60px !important; }
+.h60               { height: 60px !important; }

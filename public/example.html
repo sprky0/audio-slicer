@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>CSS Variables & Styles Example Page</title>
+	<meta name="viewport" content="width=600, initial-scale=1">
+	<link rel="stylesheet" href="css/styles.css">
+	<link rel="stylesheet" href="css/example.css">
+</head>
+<body class="example-demo">
+	<h1>CSS Variables & Styles Example</h1>
+	<p>This page demonstrates the CSS variable system and styles. See <code>CSS.md</code> for documentation.</p>
+
+	<div class="section">
+		<h2>Color Variables</h2>
+		<div class="swatch-row">
+			<div class="example-color bg-primary color-primary">bg-primary<br><span class="var-label">--color-bg-primary</span></div>
+			<div class="example-color bg-secondary color-primary">bg-secondary<br><span class="var-label">--color-bg-secondary</span></div>
+			<div class="example-color bg-accent color-white">accent<br><span class="var-label">--color-accent</span></div>
+			<div class="example-color bg-marker color-white">marker<br><span class="var-label">--color-marker</span></div>
+			<div class="example-color bg-border color-white">border<br><span class="var-label">--color-border</span></div>
+			<div class="example-color bg-border-light color-black">border-light<br><span class="var-label">--color-border-light</span></div>
+			<div class="example-color text">text-primary<br><span class="var-label">--color-text-primary</span></div>
+		</div>
+	</div>
+
+	<div class="section">
+		<h2>Spacing Variables</h2>
+		<div class="spacing-row">
+			<div class="example-spacing space-xs">xs<br><span class="var-label">--space-xs</span></div>
+			<div class="example-spacing space-sm">sm<br><span class="var-label">--space-sm</span></div>
+			<div class="example-spacing space-md">md<br><span class="var-label">--space-md</span></div>
+			<div class="example-spacing space-lg">lg<br><span class="var-label">--space-lg</span></div>
+			<div class="example-spacing space-xl">xl<br><span class="var-label">--space-xl</span></div>
+			<div class="example-spacing space-xxl">xxl<br><span class="var-label">--space-xxl</span></div>
+			<div class="example-spacing space-xxxl">xxxl<br><span class="var-label">--space-xxxl</span></div>
+		</div>
+	</div>
+
+	<div class="section">
+		<h2>Typography</h2>
+		<div class="example-font font-base">Base font (var(--font-size-base))</div>
+		<div class="example-font font-large">Large font (1.5em)</div>
+		<div class="example-font font-small">Small font (0.85em)</div>
+		<div class="example-font" style="font-family: var(--font-family-base);">Font family: <code>var(--font-family-base)</code></div>
+	</div>
+
+	<div class="section">
+		<h2>Buttons</h2>
+		<div class="btn-row">
+			<button class="example-btn btn-accent">Accent Button</button>
+			<button class="example-btn btn-marker">Marker Button</button>
+			<button class="example-btn btn-border">Border Button</button>
+			<button class="example-btn btn-accent btn-disabled" disabled>Disabled</button>
+		</div>
+	</div>
+
+	<div class="section">
+		<h2>Cards</h2>
+		<div class="example-card">
+			<strong>Example Card</strong>
+			<p>This card uses <code>var(--color-bg-secondary)</code> and <code>var(--radius-lg)</code> for its background and border radius.</p>
+		</div>
+	</div>
+
+	<div class="section">
+		<h2>Alerts</h2>
+		<div class="alert-row">
+			<div class="example-alert alert-accent">Accent Alert</div>
+			<div class="example-alert alert-marker">Marker Alert</div>
+			<div class="example-alert alert-border">Border Alert</div>
+		</div>
+	</div>
+
+	<div class="section">
+		<h2>Border Radius</h2>
+		<div class="flex-row">
+			<div class="w60 h60 bg-accent radius-sm"></div>
+			<div class="w60 h60 bg-accent radius-md"></div>
+			<div class="w60 h60 bg-accent radius-lg"></div>
+		</div>
+		<div class="var-label">Left: --radius-sm | Middle: --radius-md | Right: --radius-lg</div>
+	</div>
+
+	<div class="section">
+		<h2>Disabled State</h2>
+		<button class="example-btn btn-accent btn-disabled" disabled>Disabled Button</button>
+		<span class="var-label">Uses <code>--opacity-disabled</code></span>
+	</div>
+
+	<div class="section">
+		<h2>How to Use & Extend</h2>
+		<p>
+			All styles on this page are powered by CSS variables defined in <code>css/styles.css</code>. You can override variables in <code>:root</code> or add new ones for your own components.<br>
+			See <code>CSS.md</code> for full documentation and best practices.
+		</p>
+	</div>
+</body>
+</html>
