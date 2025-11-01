@@ -94,4 +94,19 @@ body {
 	justify-content: center;
 	margin: 10px auto;
   }
-  
+
+  /* Audio Slicer Modular styles */
+  .slicer-container {
+	margin: 32px 0;
+	padding: 16px;
+	border: 1px solid #ccc;
+	border-radius: 8px;
+	background: #181818;
+	position: relative;
+  }
+  .slicer-controls {
+	margin-bottom: 12px;
+  }
+  .input-width-60 {
+	width: 60px;
+  }
