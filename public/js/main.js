@@ -1,8 +1,8 @@
 import AudioSlicerController from './audio-slicer-controller.js';
 
-const slicersDiv = document.getElementById('slicers');
-const addSlicerBtn = document.getElementById('addSlicerBtn');
-let slicerCount = 0;
+const slicersDiv    = document.getElementById('slicers');
+const addSlicerBtn  = document.getElementById('addSlicerBtn');
+let slicerCount     = 0;
 
 function createSlicer() {
 	slicerCount++;
@@ -14,26 +14,26 @@ function createSlicer() {
 	controls.className = 'slicer-controls';
 
 	const fileInput = document.createElement('input');
-	fileInput.type = 'file';
-	fileInput.accept = 'audio/wav,audio/mp3';
+	fileInput.type  = 'file';
+	fileInput.accept= 'audio/wav,audio/mp3';
 
 	const sliceBtn = document.createElement('button');
 	sliceBtn.textContent = 'Slice';
-	sliceBtn.disabled = true;
+	sliceBtn.disabled    = true;
 
 	const startInput = document.createElement('input');
-	startInput.type = 'number';
-	startInput.min = 0;
-	startInput.max = 1;
-	startInput.step = 0.01;
+	startInput.type  = 'number';
+	startInput.min   = 0;
+	startInput.max   = 1;
+	startInput.step  = 0.01;
 	startInput.value = 0;
 	startInput.classList.add('input-width-60');
 
 	const endInput = document.createElement('input');
-	endInput.type = 'number';
-	endInput.min = 0;
-	endInput.max = 1;
-	endInput.step = 0.01;
+	endInput.type  = 'number';
+	endInput.min   = 0;
+	endInput.max   = 1;
+	endInput.step  = 0.01;
 	endInput.value = 1;
 	endInput.classList.add('input-width-60');
 
@@ -72,8 +72,8 @@ function createSlicer() {
 
 	// Slicing
 	sliceBtn.addEventListener('click', () => {
-		const start = Math.max(0, Math.min(1, parseFloat(startInput.value)));
-		const end = Math.max(0, Math.min(1, parseFloat(endInput.value)));
+		const start        = Math.max(0, Math.min(1, parseFloat(startInput.value)));
+		const end          = Math.max(0, Math.min(1, parseFloat(endInput.value)));
 		const subdivisions = parseInt(subdivisionsSelect.value, 10);
 		if (end > start && subdivisions > 0) {
 			slicer.slice(start, end, subdivisions, { keepPlayhead: true });
@@ -82,8 +82,8 @@ function createSlicer() {
 
 	// Subdivision change triggers immediate re-slice and redraw, keeping playhead if playing
 	subdivisionsSelect.addEventListener('change', () => {
-		const start = Math.max(0, Math.min(1, parseFloat(startInput.value)));
-		const end = Math.max(0, Math.min(1, parseFloat(endInput.value)));
+		const start        = Math.max(0, Math.min(1, parseFloat(startInput.value)));
+		const end          = Math.max(0, Math.min(1, parseFloat(endInput.value)));
 		const subdivisions = parseInt(subdivisionsSelect.value, 10);
 		if (end > start && subdivisions > 0) {
 			slicer.slice(start, end, subdivisions, { keepPlayhead: true });

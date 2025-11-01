@@ -8,14 +8,14 @@ import WaveformView from './waveform-view.js';
 class AudioSlicerController {
 	constructor(container, options = {}) {
 		this.container = container;
-		this.options = options;
+		this.options   = options;
 
 		// Create modules
 		this.engine = new AudioEngine();
-		this.view = new WaveformView(container, options);
+		this.view   = new WaveformView(container, options);
 
 		// State
-		this.waveformPeaks = [];
+		this.waveformPeaks      = [];
 		this.performanceOverlay = null;
 
 		// Bind events
@@ -34,8 +34,8 @@ class AudioSlicerController {
 			this.view.setWaveformPeaks(this.waveformPeaks);
 
 			// Immediately slice and play first segment
-			const start = 0;
-			const end = 1;
+			const start        = 0;
+			const end          = 1;
 			const subdivisions = 2;
 			this.slice(start, end, subdivisions, { autoPlay: true });
 		} catch (err) {
@@ -49,16 +49,16 @@ class AudioSlicerController {
 	 */
 	slice(start, end, subdivisions, options = {}) {
 		// Track playhead and segment if needed
-		let playheadFrac = 0;
-		let wasPlaying = false;
+		let playheadFrac      = 0;
+		let wasPlaying        = false;
 		let prevActiveSegment = this.engine.activeSegment;
 		if (options.keepPlayhead && this.engine.isPlaying && prevActiveSegment !== -1) {
 			// Estimate playhead fraction in current segment
 			const segment = this.engine.segments[prevActiveSegment];
 			if (segment) {
 				const elapsed = this.engine.audioContext.currentTime - this.engine.playStartTime;
-				playheadFrac = Math.min(1, Math.max(0, elapsed / segment.duration));
-				wasPlaying = true;
+				playheadFrac  = Math.min(1, Math.max(0, elapsed / segment.duration));
+				wasPlaying    = true;
 			}
 		}
 
@@ -126,7 +126,7 @@ class AudioSlicerController {
 	 */
 	_findNextEnabledSegment(currentIndex) {
 		const enabled = this.engine.getEnabledSegments();
-		const n = enabled.length;
+		const n       = enabled.length;
 		if (n === 0) return null;
 		let idx = currentIndex;
 		for (let i = 1; i <= n; i++) {
@@ -213,15 +213,15 @@ class AudioSlicerController {
 		// Waveform click-to-jump
 		this.view.addEventListener('waveformjump', (e) => {
 			const rel = e.detail.rel;
-			const n = this.engine.segments.length;
+			const n   = this.engine.segments.length;
 			if (n === 0) return;
 			// Map rel (0-1) to segment and offset
 			const segmentIdx = Math.floor(rel * n);
-			const segment = this.engine.segments[segmentIdx];
+			const segment    = this.engine.segments[segmentIdx];
 			if (!segment) return;
-			const segRel = (rel * n) - segmentIdx;
-			const offsetSec = segRel * segment.duration;
-			const enabled = this.engine.getEnabledSegments();
+			const segRel     = (rel * n) - segmentIdx;
+			const offsetSec  = segRel * segment.duration;
+			const enabled    = this.engine.getEnabledSegments();
 			if (enabled[segmentIdx]) {
 				this.playSegmentAtPosition(segmentIdx, offsetSec);
 			} else {
@@ -236,13 +236,13 @@ class AudioSlicerController {
 
 	_precomputeWaveformPeaks(audioBuffer, precomputedWidth) {
 		if (!audioBuffer) return [];
-		const data = audioBuffer.getChannelData(0);
-		const length = data.length;
-		const peaks = new Array(precomputedWidth);
-		const samplesPerBucket = length / precomputedWidth;
+		const data            = audioBuffer.getChannelData(0);
+		const length          = data.length;
+		const peaks           = new Array(precomputedWidth);
+		const samplesPerBucket= length / precomputedWidth;
 		for (let i = 0; i < precomputedWidth; i++) {
 			let start = Math.floor(i * samplesPerBucket);
-			let end = Math.floor((i + 1) * samplesPerBucket);
+			let end   = Math.floor((i + 1) * samplesPerBucket);
 			if (end > length) end = length;
 			let min = 1.0;
 			let max = -1.0;
@@ -258,17 +258,17 @@ class AudioSlicerController {
 
 	_createPerformanceOverlay() {
 		this.performanceOverlay = document.createElement('div');
-		this.performanceOverlay.style.position = 'absolute';
-		this.performanceOverlay.style.top = '4px';
-		this.performanceOverlay.style.right = '4px';
-		this.performanceOverlay.style.background = 'rgba(0,0,0,0.7)';
-		this.performanceOverlay.style.color = '#fff';
-		this.performanceOverlay.style.fontSize = '12px';
-		this.performanceOverlay.style.padding = '4px 8px';
-		this.performanceOverlay.style.borderRadius = '4px';
+		this.performanceOverlay.style.position      = 'absolute';
+		this.performanceOverlay.style.top           = '4px';
+		this.performanceOverlay.style.right         = '4px';
+		this.performanceOverlay.style.background    = 'rgba(0,0,0,0.7)';
+		this.performanceOverlay.style.color         = '#fff';
+		this.performanceOverlay.style.fontSize      = '12px';
+		this.performanceOverlay.style.padding       = '4px 8px';
+		this.performanceOverlay.style.borderRadius  = '4px';
 		this.performanceOverlay.style.pointerEvents = 'none';
-		this.performanceOverlay.style.zIndex = 10;
-		this.container.style.position = 'relative';
+		this.performanceOverlay.style.zIndex        = 10;
+		this.container.style.position               = 'relative';
 		this.container.appendChild(this.performanceOverlay);
 		this._updatePerformanceOverlay();
 	}

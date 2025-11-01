@@ -1,112 +1,147 @@
+:root {
+	/* Colors */
+	--color-bg-primary: #282c34;
+	--color-bg-secondary: #181818;
+	--color-text-primary: #ffffff;
+	--color-accent: #3498db;
+	--color-marker: #e74c3c;
+	--color-border: #444;
+	--color-border-light: #ccc;
+
+	/* Border radius */
+	--radius-sm: 4px;
+	--radius-md: 6px;
+	--radius-lg: 8px;
+
+	/* Spacing */
+	--space-xs:   6px;
+	--space-sm:   8px;
+	--space-md:  10px;
+	--space-lg:  12px;
+	--space-xl:  16px;
+	--space-xxl: 20px;
+	--space-xxxl:32px;
+
+	/* Font */
+	--font-family-base: sans-serif;
+	--font-size-base:  14px;
+
+	/* Transition */
+	--transition-fast: 0.2s;
+
+	/* Opacity */
+	--opacity-disabled: 0.5;
+}
+
 /* Basic reset and layout */
 body {
 	margin: 0;
 	padding: 0;
-	background: #282c34;
-	color: #ffffff;
-	font-family: sans-serif;
+	background: var(--color-bg-primary);
+	color: var(--color-text-primary);
+	font-family: var(--font-family-base);
 	display: flex;
 	flex-direction: column;
 	align-items: center;
-  }
-  
-  /* Dropzone */
-  #dropzone {
+}
+
+/* Dropzone */
+#dropzone {
 	width: 300px;
 	height: 80px;
-	border: 2px dashed #3498db;
-	border-radius: 8px;
-	color: #3498db;
+	border: 2px dashed var(--color-accent);
+	border-radius: var(--radius-lg);
+	color: var(--color-accent);
 	text-align: center;
 	line-height: 80px;
-	margin: 20px auto;
+	margin: var(--space-xxl) auto;
 	cursor: pointer;
-	transition: background-color 0.2s;
-  }
-  #dropzone.drag-over {
-	background-color: rgba(52, 152, 219, 0.1);
-  }
-  
-  /* Subdivisions label and select */
-  label[for="subdivisions"] {
-	margin-right: 8px;
-  }
-  #subdivisions {
-	margin-right: 16px;
-  }
-  
-  /* Button styling */
-  button {
-	background-color: #3498db;
-	color: #ffffff;
+	transition: background-color var(--transition-fast);
+}
+#dropzone.drag-over {
+	background-color: rgba(52, 152, 219, 0.1); /* Could be var(--color-accent) with alpha, but CSS vars don't support alpha directly */
+}
+
+/* Subdivisions label and select */
+label[for="subdivisions"] {
+	margin-right: var(--space-sm);
+}
+#subdivisions {
+	margin-right: var(--space-xl);
+}
+
+/* Button styling */
+button {
+	background-color: var(--color-accent);
+	color: var(--color-text-primary);
 	border: none;
-	border-radius: 4px;
-	padding: 6px 10px;
-	margin: 6px;
+	border-radius: var(--radius-sm);
+	padding: var(--space-xs) var(--space-md);
+	margin: var(--space-xs);
 	cursor: pointer;
-	font-size: 14px;
-  }
-  button:disabled {
-	opacity: 0.5;
+	font-size: var(--font-size-base);
+}
+button:disabled {
+	opacity: var(--opacity-disabled);
 	cursor: not-allowed;
-  }
-  
-  /* Canvas container */
-  #canvasContainer {
+}
+
+/* Canvas container */
+#canvasContainer {
 	position: relative;
 	width: 80%;
 	max-width: 800px;
 	height: 200px;
-	margin: 20px auto;
-	border: 1px solid #444;
-	border-radius: 6px;
+	margin: var(--space-xxl) auto;
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
 	overflow: hidden;
-  }
-  
-  /* Waveform canvas */
-  #waveformCanvas {
+}
+
+/* Waveform canvas */
+#waveformCanvas {
 	width: 100%;
 	height: 100%;
 	display: block;
-  }
-  
-  /* Markers for start/end selection */
-  .marker {
+}
+
+/* Markers for start/end selection */
+.marker {
 	position: absolute;
 	top: 0;
 	width: 2px;
 	height: 100%;
-	background-color: #e74c3c;
+	background-color: var(--color-marker);
 	cursor: ew-resize;
 	z-index: 2;
-  }
-  .marker.start {
+}
+.marker.start {
 	left: 0;
-  }
-  .marker.end {
+}
+.marker.end {
 	right: 0;
-  }
-  
-  /* Segment controls container */
-  #segmentControls {
+}
+
+/* Segment controls container */
+#segmentControls {
 	display: flex;
 	flex-wrap: wrap;
 	justify-content: center;
 	margin: 10px auto;
-  }
+}
 
-  /* Audio Slicer Modular styles */
-  .slicer-container {
-	margin: 32px 0;
-	padding: 16px;
-	border: 1px solid #ccc;
-	border-radius: 8px;
-	background: #181818;
+/* Audio Slicer Modular styles */
+.slicer-container {
+	margin: var(--space-xxxl) 0;
+	padding: var(--space-xl);
+	border: 1px solid var(--color-border-light);
+	border-radius: var(--radius-lg);
+	background: var(--color-bg-secondary);
 	position: relative;
-  }
-  .slicer-controls {
-	margin-bottom: 12px;
-  }
-  .input-width-60 {
+}
+.slicer-controls {
+	margin-bottom: var(--space-lg);
+}
+.input-width-60 {
 	width: 60px;
-  }
+}
