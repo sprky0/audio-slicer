@@ -4,123 +4,12 @@
 	<meta charset="utf-8" />
 	<title>Audio Slicer Modular</title>
 	<link rel="stylesheet" href="css/styles.css" />
-	<style>
-		.slicer-container {
-			margin: 32px 0;
-			padding: 16px;
-			border: 1px solid #ccc;
-			border-radius: 8px;
-			background: #181818;
-			position: relative;
-		}
-		.slicer-controls {
-			margin-bottom: 12px;
-		}
-	</style>
 </head>
 <body>
 	<h1>Audio Slicer (Modular, Multi-Instance)</h1>
 	<button id="addSlicerBtn">Add Audio Slicer</button>
 	<div id="slicers"></div>
 
-	<script type="module">
-		import AudioSlicerController from './js/audio-slicer-controller.js';
-
-		const slicersDiv = document.getElementById('slicers');
-		const addSlicerBtn = document.getElementById('addSlicerBtn');
-		let slicerCount = 0;
-
-		function createSlicer() {
-			slicerCount++;
-			const container = document.createElement('div');
-			container.className = 'slicer-container';
-
-			// Controls
-			const controls = document.createElement('div');
-			controls.className = 'slicer-controls';
-
-			const fileInput = document.createElement('input');
-			fileInput.type = 'file';
-			fileInput.accept = 'audio/wav,audio/mp3';
-
-			const sliceBtn = document.createElement('button');
-			sliceBtn.textContent = 'Slice';
-			sliceBtn.disabled = true;
-
-			const startInput = document.createElement('input');
-			startInput.type = 'number';
-			startInput.min = 0;
-			startInput.max = 1;
-			startInput.step = 0.01;
-			startInput.value = 0;
-			startInput.style.width = '60px';
-
-			const endInput = document.createElement('input');
-			endInput.type = 'number';
-			endInput.min = 0;
-			endInput.max = 1;
-			endInput.step = 0.01;
-			endInput.value = 1;
-			endInput.style.width = '60px';
-
-			const subdivisionsSelect = document.createElement('select');
-			[2, 4, 8, 16].forEach(val => {
-				const opt = document.createElement('option');
-				opt.value = val;
-				opt.textContent = val;
-				subdivisionsSelect.appendChild(opt);
-			});
-
-			controls.appendChild(document.createTextNode('File: '));
-			controls.appendChild(fileInput);
-			controls.appendChild(document.createTextNode(' Start: '));
-			controls.appendChild(startInput);
-			controls.appendChild(document.createTextNode(' End: '));
-			controls.appendChild(endInput);
-			controls.appendChild(document.createTextNode(' Subdivisions: '));
-			controls.appendChild(subdivisionsSelect);
-			controls.appendChild(sliceBtn);
-
-			container.appendChild(controls);
-			slicersDiv.appendChild(container);
-
-			// Slicer instance
-			const slicer = new AudioSlicerController(container, { width: 800, height: 200 });
-
-		 // File loading
-			fileInput.addEventListener('change', async (e) => {
-				const file = e.target.files[0];
-				if (file) {
-					await slicer.loadFile(file);
-					sliceBtn.disabled = false;
-				}
-			});
-
-			// Slicing
-			sliceBtn.addEventListener('click', () => {
-				const start = Math.max(0, Math.min(1, parseFloat(startInput.value)));
-				const end = Math.max(0, Math.min(1, parseFloat(endInput.value)));
-				const subdivisions = parseInt(subdivisionsSelect.value, 10);
-				if (end > start && subdivisions > 0) {
-					slicer.slice(start, end, subdivisions, { keepPlayhead: true });
-				}
-			});
-
-			// Subdivision change triggers immediate re-slice and redraw, keeping playhead if playing
-			subdivisionsSelect.addEventListener('change', () => {
-				const start = Math.max(0, Math.min(1, parseFloat(startInput.value)));
-				const end = Math.max(0, Math.min(1, parseFloat(endInput.value)));
-				const subdivisions = parseInt(subdivisionsSelect.value, 10);
-				if (end > start && subdivisions > 0) {
-					slicer.slice(start, end, subdivisions, { keepPlayhead: true });
-				}
-			});
-		}
-
-		addSlicerBtn.addEventListener('click', createSlicer);
-
-		// Create one slicer by default
-		createSlicer();
-	</script>
+	<script type="module" src="js/main.js"></script>
 </body>
 </html>
