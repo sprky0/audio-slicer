@@ -14,6 +14,15 @@ function createSlicer() {
 	const controls = document.createElement('div');
 	controls.className = 'slicer-controls';
 
+	// --- Reset and Remove Buttons ---
+	const resetBtn = document.createElement('button');
+	resetBtn.textContent = 'Reset';
+	resetBtn.className = 'slicer-reset-btn';
+
+	const removeBtn = document.createElement('button');
+	removeBtn.textContent = 'Remove';
+	removeBtn.className = 'slicer-remove-btn';
+
 	const fileInput = document.createElement('input');
 	fileInput.type  = 'file';
 	fileInput.accept= 'audio/wav,audio/mp3';
@@ -55,6 +64,8 @@ function createSlicer() {
 	controls.appendChild(document.createTextNode(' Subdivisions: '));
 	controls.appendChild(subdivisionsSelect);
 	controls.appendChild(sliceBtn);
+	controls.appendChild(resetBtn);
+	controls.appendChild(removeBtn);
 
 	// --- Volume and Pan Knobs ---
 	const volumeKnob = new Knob({
@@ -79,6 +90,37 @@ function createSlicer() {
 
 	// Slicer instance
 	const slicer = new AudioSlicerController(container, { width: 800, height: 200 });
+
+	// --- Reset Button Logic ---
+	resetBtn.addEventListener('click', () => {
+		// Reset pan and volume knobs
+		volumeKnob.setValue(1);
+		panKnob.setValue(0);
+		slicer.setVolume(1);
+		slicer.setPan(0);
+
+		// Reset start/end/subdivisions UI
+		startInput.value = 0;
+		endInput.value = 1;
+		subdivisionsSelect.value = 2;
+
+		// Stop playback and reset slicing
+		slicer.stop();
+		slicer.slice(0, 1, 2, { autoPlay: false });
+
+		// Optionally clear waveform view (if needed)
+		// slicer.view.setWaveformPeaks([]);
+		// Optionally clear file input (if you want to force re-upload)
+		// fileInput.value = '';
+	});
+
+	// --- Remove Button Logic ---
+	removeBtn.addEventListener('click', () => {
+		slicer.dispose();
+		if (container.parentNode) {
+			container.parentNode.removeChild(container);
+		}
+	});
 
 	// --- Knob event wiring ---
 	volumeKnob.addEventListener('change', (e) => {
