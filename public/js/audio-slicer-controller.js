@@ -94,12 +94,32 @@ class AudioSlicerController {
 				console.error('Failed to resume AudioContext:', err);
 			}
 		}
+		// If requested segment is disabled or out of bounds, find first enabled
+		const enabled = this.engine.getEnabledSegments();
+		let startIndex = index;
+		if (
+			typeof startIndex !== "number" ||
+			startIndex < 0 ||
+			startIndex >= enabled.length ||
+			!enabled[startIndex]
+		) {
+			const next = this._findNextEnabledSegment();
+			if (next !== null) {
+				startIndex = next;
+				offsetSec = 0;
+			} else {
+				this.stop();
+				return;
+			}
+		}
 		this.isPaused = false;
 		this.pausedSegment = null;
 		this.pausedOffset = 0;
 		this.view.setIsPaused(false);
-		this.engine.playSegment(index, offsetSec);
-		this._startPlayheadAnimation(index, offsetSec);
+		this.engine.playSegment(startIndex, offsetSec);
+		this._startPlayheadAnimation(startIndex, offsetSec);
+		// Emit playstatechange event
+		this.container.dispatchEvent(new CustomEvent('playstatechange', { detail: { state: 'playing' } }));
 	}
 
 	/**
@@ -135,7 +155,7 @@ class AudioSlicerController {
 		const enabled = this.engine.getEnabledSegments();
 		const n       = enabled.length;
 		if (n === 0) return null;
-		let idx = currentIndex;
+		let idx = typeof currentIndex === "number" ? currentIndex : -1;
 		for (let i = 1; i <= n; i++) {
 			const next = (idx + i) % n;
 			if (enabled[next]) return next;
@@ -159,6 +179,8 @@ class AudioSlicerController {
 		this.view.setIsPlaying(false);
 		this.view.setIsPaused(false);
 		this.view.setPlayheadPosition(0);
+		// Emit playstatechange event
+		this.container.dispatchEvent(new CustomEvent('playstatechange', { detail: { state: 'stopped' } }));
 	}
 
 	pause() {
@@ -179,6 +201,8 @@ class AudioSlicerController {
 			this.view.setIsPlaying(false);
 			this.view.setIsPaused(true);
 			this.view.setPlayheadPosition(this.pausedOffset / segment.duration);
+			// Emit playstatechange event
+			this.container.dispatchEvent(new CustomEvent('playstatechange', { detail: { state: 'paused' } }));
 		}
 	}
 
@@ -186,6 +210,8 @@ class AudioSlicerController {
 		if (this.isPaused && this.pausedSegment !== null) {
 			this.view.setIsPaused(false);
 			this.playSegmentAtPosition(this.pausedSegment, this.pausedOffset);
+			// Emit playstatechange event
+			this.container.dispatchEvent(new CustomEvent('playstatechange', { detail: { state: 'playing' } }));
 		}
 	}
 
@@ -234,6 +260,34 @@ class AudioSlicerController {
 		});
 		this.engine.addEventListener('segmentenable', (e) => {
 			this.view.setEnabledSegments(this.engine.getEnabledSegments());
+			const disabledIndex = e.detail.index;
+			const isNowDisabled = !e.detail.enabled;
+			const isPlaying = this.engine.isPlaying && this.engine.activeSegment !== -1;
+			const isPaused = this.isPaused && this.pausedSegment !== null;
+			const activeSegment = this.engine.activeSegment;
+			const pausedSegment = this.pausedSegment;
+
+			// If the playhead is in the segment that was just disabled
+			if (isNowDisabled && (
+				(isPlaying && activeSegment === disabledIndex) ||
+				(isPaused && pausedSegment === disabledIndex)
+			)) {
+				const next = this._findNextEnabledSegment(disabledIndex);
+				if (next !== null) {
+					if (isPlaying) {
+						this.playSegmentAtPosition(next, 0);
+					} else if (isPaused) {
+						this.pausedSegment = next;
+						this.pausedOffset = 0;
+						this.view.setIsPlaying(false);
+						this.view.setActiveSegment(next);
+						this.view.setPlayheadPosition(0);
+					}
+				} else {
+					// No enabled segments left, stop and reset playhead
+					this.stop();
+				}
+			}
 		});
 	}
 

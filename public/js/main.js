@@ -106,16 +106,26 @@ function createSlicer() {
 	playPauseBtn.addEventListener('click', () => {
 		if (isPlaying) {
 			slicer.pause();
-			playPauseBtn.textContent = 'Play';
-			isPlaying = false;
+			// UI will update via playstatechange event
 		} else {
 			if (slicer.isPaused && slicer.pausedSegment !== null) {
 				slicer.resume();
 			} else {
 				slicer.playSegment(0);
 			}
+			// UI will update via playstatechange event
+		}
+	});
+
+	// --- Sync Play/Pause Button with Slicer State ---
+	container.addEventListener('playstatechange', (e) => {
+		const state = e.detail.state;
+		if (state === 'playing') {
 			playPauseBtn.textContent = 'Pause';
 			isPlaying = true;
+		} else if (state === 'paused' || state === 'stopped') {
+			playPauseBtn.textContent = 'Play';
+			isPlaying = false;
 		}
 	});
 
