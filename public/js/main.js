@@ -1,4 +1,5 @@
 import AudioSlicerController from './audio-slicer-controller.js';
+import Knob from './knob.js';
 
 const slicersDiv    = document.getElementById('slicers');
 const addSlicerBtn  = document.getElementById('addSlicerBtn');
@@ -12,6 +13,23 @@ function createSlicer() {
 	// Controls
 	const controls = document.createElement('div');
 	controls.className = 'slicer-controls';
+
+	// --- Play, Pause, Stop, Reset and Remove Buttons ---
+	const playPauseBtn = document.createElement('button');
+	playPauseBtn.textContent = 'Play';
+	playPauseBtn.className = 'slicer-playpause-btn';
+
+	const stopBtn = document.createElement('button');
+	stopBtn.textContent = 'Stop';
+	stopBtn.className = 'slicer-stop-btn';
+
+	const resetBtn = document.createElement('button');
+	resetBtn.textContent = 'Reset';
+	resetBtn.className = 'slicer-reset-btn';
+
+	const removeBtn = document.createElement('button');
+	removeBtn.textContent = 'Remove';
+	removeBtn.className = 'slicer-remove-btn';
 
 	const fileInput = document.createElement('input');
 	fileInput.type  = 'file';
@@ -54,12 +72,110 @@ function createSlicer() {
 	controls.appendChild(document.createTextNode(' Subdivisions: '));
 	controls.appendChild(subdivisionsSelect);
 	controls.appendChild(sliceBtn);
+	controls.appendChild(playPauseBtn);
+	controls.appendChild(stopBtn);
+	controls.appendChild(resetBtn);
+	controls.appendChild(removeBtn);
+
+	// --- Volume and Pan Knobs ---
+	const volumeKnob = new Knob({
+		label: 'Volume',
+		min: 0,
+		max: 1,
+		step: 0.01,
+		value: 1
+	});
+	const panKnob = new Knob({
+		label: 'Pan',
+		min: -1,
+		max: 1,
+		step: 0.01,
+		value: 0
+	});
+	controls.appendChild(volumeKnob.getElement());
+	controls.appendChild(panKnob.getElement());
 
 	container.appendChild(controls);
 	slicersDiv.appendChild(container);
 
 	// Slicer instance
 	const slicer = new AudioSlicerController(container, { width: 800, height: 200 });
+
+	// --- Play/Pause Button Logic ---
+	let isPlaying = false;
+	playPauseBtn.addEventListener('click', () => {
+		if (isPlaying) {
+			slicer.pause();
+			// UI will update via playstatechange event
+		} else {
+			if (slicer.isPaused && slicer.pausedSegment !== null) {
+				slicer.resume();
+			} else {
+				slicer.playSegment(0);
+			}
+			// UI will update via playstatechange event
+		}
+	});
+
+	// --- Sync Play/Pause Button with Slicer State ---
+	container.addEventListener('playstatechange', (e) => {
+		const state = e.detail.state;
+		if (state === 'playing') {
+			playPauseBtn.textContent = 'Pause';
+			isPlaying = true;
+		} else if (state === 'paused' || state === 'stopped') {
+			playPauseBtn.textContent = 'Play';
+			isPlaying = false;
+		}
+	});
+
+	// --- Stop Button Logic ---
+	stopBtn.addEventListener('click', () => {
+		slicer.stop();
+		playPauseBtn.textContent = 'Play';
+		isPlaying = false;
+	});
+
+	// --- Reset Button Logic ---
+	resetBtn.addEventListener('click', () => {
+		// Reset pan and volume knobs
+		volumeKnob.setValue(1);
+		panKnob.setValue(0);
+		slicer.setVolume(1);
+		slicer.setPan(0);
+
+		// Reset start/end/subdivisions UI
+		startInput.value = 0;
+		endInput.value = 1;
+		subdivisionsSelect.value = 2;
+
+		// Stop playback and reset slicing
+		slicer.stop();
+		playPauseBtn.textContent = 'Play';
+		isPlaying = false;
+		slicer.slice(0, 1, 2, { autoPlay: false });
+
+		// Optionally clear waveform view (if needed)
+		// slicer.view.setWaveformPeaks([]);
+		// Optionally clear file input (if you want to force re-upload)
+		// fileInput.value = '';
+	});
+
+	// --- Remove Button Logic ---
+	removeBtn.addEventListener('click', () => {
+		slicer.dispose();
+		if (container.parentNode) {
+			container.parentNode.removeChild(container);
+		}
+	});
+
+	// --- Knob event wiring ---
+	volumeKnob.addEventListener('change', (e) => {
+		slicer.setVolume(e.detail);
+	});
+	panKnob.addEventListener('change', (e) => {
+		slicer.setPan(e.detail);
+	});
 
 	// File loading
 	fileInput.addEventListener('change', async (e) => {
@@ -89,6 +205,18 @@ function createSlicer() {
 			slicer.slice(start, end, subdivisions, { keepPlayhead: true });
 		}
 	});
+
+	// Real-time zoom on start/end input change
+	const updateZoom = () => {
+		const start        = Math.max(0, Math.min(1, parseFloat(startInput.value)));
+		const end          = Math.max(0, Math.min(1, parseFloat(endInput.value)));
+		const subdivisions = parseInt(subdivisionsSelect.value, 10);
+		if (end > start && subdivisions > 0) {
+			slicer.slice(start, end, subdivisions, { keepPlayhead: true });
+		}
+	};
+	startInput.addEventListener('input', updateZoom);
+	endInput.addEventListener('input', updateZoom);
 }
 
 addSlicerBtn.addEventListener('click', createSlicer);

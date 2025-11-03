@@ -145,3 +145,68 @@ button:disabled {
 .input-width-60 {
 	width: 60px;
 }
+
+/* --- Knob Styles --- */
+.knob-container {
+	display: inline-flex;
+	flex-direction: column;
+	align-items: center;
+	margin: var(--space-lg);
+}
+
+.knob {
+	position: relative;
+	width: 48px;
+	height: 48px;
+	border-radius: 50%;
+	background: var(--color-bg-primary);
+	border: 2px solid var(--color-accent);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	margin-bottom: var(--space-xs);
+	transition: border-color var(--transition-fast);
+}
+
+.knob-input {
+	position: absolute;
+	width: 100%;
+	height: 100%;
+	opacity: 0;
+	cursor: pointer;
+	z-index: 2;
+}
+
+.knob-value {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	color: var(--color-text-primary);
+	font-size: 13px;
+	font-weight: bold;
+	pointer-events: none;
+	z-index: 3;
+}
+
+.knob-label {
+	margin-top: var(--space-xs);
+	color: var(--color-text-primary);
+	font-size: 12px;
+	text-align: center;
+}
+
+.knob::after {
+	content: '';
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	width: 4px;
+	height: 18px;
+	background: var(--color-accent);
+	border-radius: 2px;
+	transform: translate(-50%, -90%) rotate(var(--knob-rotation, -135deg));
+	transform-origin: 50% 90%;
+	transition: transform var(--transition-fast);
+	z-index: 1;
+}

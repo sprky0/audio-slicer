@@ -24,6 +24,7 @@ class WaveformView extends EventTarget {
 		this.subdivisions    = 2;
 		this.playheadPosition= 0;
 		this.isPlaying       = false;
+		this.isPaused        = false;
 
 		// Create canvas
 		this.canvas = document.createElement('canvas');
@@ -79,6 +80,11 @@ class WaveformView extends EventTarget {
 		this.draw();
 	}
 
+	setIsPaused(isPaused) {
+		this.isPaused = isPaused;
+		this.draw();
+	}
+
 	setSelection(start, end, subdivisions) {
 		this.startPosition = start;
 		this.endPosition   = end;
@@ -126,8 +132,16 @@ class WaveformView extends EventTarget {
 		const indicatorHeight = this.options.segmentIndicatorHeight;
 		ctx.clearRect(0, 0, width, height + indicatorHeight);
 
-		// Draw waveform
-		ctx.drawImage(this.offscreenCanvas, 0, 0);
+		// Draw waveform (zoomed to selected range)
+		const sourceWidth = this.offscreenCanvas.width;
+		const startPx = Math.floor(this.startPosition * sourceWidth);
+		const endPx = Math.ceil(this.endPosition * sourceWidth);
+		const rangePx = Math.max(1, endPx - startPx);
+		ctx.drawImage(
+			this.offscreenCanvas,
+			startPx, 0, rangePx, this.offscreenCanvas.height, // source rect
+			0, 0, this.canvas.width, this.options.height      // dest rect (full width)
+		);
 
 		// Draw selection highlight
 		const startX = this.startPosition * width;
@@ -159,7 +173,7 @@ class WaveformView extends EventTarget {
 		}
 
 		// Draw playhead
-		if (this.isPlaying && this.activeSegment !== -1) {
+		if ((this.isPlaying || this.isPaused) && this.activeSegment !== -1) {
 			const segmentWidth = (endX - startX) / this.subdivisions;
 			const segmentStart = startX + (segmentWidth * this.activeSegment);
 			const playheadX    = segmentStart + (segmentWidth * this.playheadPosition);
