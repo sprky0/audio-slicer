@@ -14,7 +14,15 @@ function createSlicer() {
 	const controls = document.createElement('div');
 	controls.className = 'slicer-controls';
 
-	// --- Reset and Remove Buttons ---
+	// --- Play, Pause, Stop, Reset and Remove Buttons ---
+	const playPauseBtn = document.createElement('button');
+	playPauseBtn.textContent = 'Play';
+	playPauseBtn.className = 'slicer-playpause-btn';
+
+	const stopBtn = document.createElement('button');
+	stopBtn.textContent = 'Stop';
+	stopBtn.className = 'slicer-stop-btn';
+
 	const resetBtn = document.createElement('button');
 	resetBtn.textContent = 'Reset';
 	resetBtn.className = 'slicer-reset-btn';
@@ -64,6 +72,8 @@ function createSlicer() {
 	controls.appendChild(document.createTextNode(' Subdivisions: '));
 	controls.appendChild(subdivisionsSelect);
 	controls.appendChild(sliceBtn);
+	controls.appendChild(playPauseBtn);
+	controls.appendChild(stopBtn);
 	controls.appendChild(resetBtn);
 	controls.appendChild(removeBtn);
 
@@ -91,6 +101,31 @@ function createSlicer() {
 	// Slicer instance
 	const slicer = new AudioSlicerController(container, { width: 800, height: 200 });
 
+	// --- Play/Pause Button Logic ---
+	let isPlaying = false;
+	playPauseBtn.addEventListener('click', () => {
+		if (isPlaying) {
+			slicer.pause();
+			playPauseBtn.textContent = 'Play';
+			isPlaying = false;
+		} else {
+			if (slicer.isPaused && slicer.pausedSegment !== null) {
+				slicer.resume();
+			} else {
+				slicer.playSegment(0);
+			}
+			playPauseBtn.textContent = 'Pause';
+			isPlaying = true;
+		}
+	});
+
+	// --- Stop Button Logic ---
+	stopBtn.addEventListener('click', () => {
+		slicer.stop();
+		playPauseBtn.textContent = 'Play';
+		isPlaying = false;
+	});
+
 	// --- Reset Button Logic ---
 	resetBtn.addEventListener('click', () => {
 		// Reset pan and volume knobs
@@ -106,6 +141,8 @@ function createSlicer() {
 
 		// Stop playback and reset slicing
 		slicer.stop();
+		playPauseBtn.textContent = 'Play';
+		isPlaying = false;
 		slicer.slice(0, 1, 2, { autoPlay: false });
 
 		// Optionally clear waveform view (if needed)

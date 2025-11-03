@@ -24,6 +24,7 @@ class WaveformView extends EventTarget {
 		this.subdivisions    = 2;
 		this.playheadPosition= 0;
 		this.isPlaying       = false;
+		this.isPaused        = false;
 
 		// Create canvas
 		this.canvas = document.createElement('canvas');
@@ -76,6 +77,11 @@ class WaveformView extends EventTarget {
 
 	setIsPlaying(isPlaying) {
 		this.isPlaying = isPlaying;
+		this.draw();
+	}
+
+	setIsPaused(isPaused) {
+		this.isPaused = isPaused;
 		this.draw();
 	}
 
@@ -167,7 +173,7 @@ class WaveformView extends EventTarget {
 		}
 
 		// Draw playhead
-		if (this.isPlaying && this.activeSegment !== -1) {
+		if ((this.isPlaying || this.isPaused) && this.activeSegment !== -1) {
 			const segmentWidth = (endX - startX) / this.subdivisions;
 			const segmentStart = startX + (segmentWidth * this.activeSegment);
 			const playheadX    = segmentStart + (segmentWidth * this.playheadPosition);

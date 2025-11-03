@@ -16,6 +16,9 @@ class AudioSlicerController {
 
 		// State
 		this.waveformPeaks      = [];
+		this.isPaused           = false;
+		this.pausedSegment      = null;
+		this.pausedOffset       = 0;
 		// this.performanceOverlay = null;
 
 		// Bind events
@@ -33,11 +36,11 @@ class AudioSlicerController {
 			this.waveformPeaks = this._precomputeWaveformPeaks(this.engine.audioBuffer, this.view.options.precomputedWidth);
 			this.view.setWaveformPeaks(this.waveformPeaks);
 
-			// Immediately slice and play first segment
+			// Immediately slice but do NOT play first segment
 			const start        = 0;
 			const end          = 1;
 			const subdivisions = 2;
-			this.slice(start, end, subdivisions, { autoPlay: true });
+			this.slice(start, end, subdivisions, { autoPlay: false });
 		} catch (err) {
 			console.error('Error loading file:', err);
 		}
@@ -91,6 +94,10 @@ class AudioSlicerController {
 				console.error('Failed to resume AudioContext:', err);
 			}
 		}
+		this.isPaused = false;
+		this.pausedSegment = null;
+		this.pausedOffset = 0;
+		this.view.setIsPaused(false);
 		this.engine.playSegment(index, offsetSec);
 		this._startPlayheadAnimation(index, offsetSec);
 	}
@@ -142,12 +149,44 @@ class AudioSlicerController {
 
 	stop() {
 		this.engine.stop();
+		this.isPaused = false;
+		this.pausedSegment = null;
+		this.pausedOffset = 0;
 		if (this._playheadAnimId) {
 			cancelAnimationFrame(this._playheadAnimId);
 			this._playheadAnimId = null;
 		}
 		this.view.setIsPlaying(false);
+		this.view.setIsPaused(false);
 		this.view.setPlayheadPosition(0);
+	}
+
+	pause() {
+		if (this.engine.isPlaying && this.engine.activeSegment !== -1) {
+			const segmentIdx = this.engine.activeSegment;
+			const segment = this.engine.segments[segmentIdx];
+			if (segment) {
+				const elapsed = this.engine.audioContext.currentTime - this.engine.playStartTime;
+				this.pausedSegment = segmentIdx;
+				this.pausedOffset = Math.min(segment.duration, Math.max(0, elapsed));
+				this.isPaused = true;
+			}
+			this.engine.stop();
+			if (this._playheadAnimId) {
+				cancelAnimationFrame(this._playheadAnimId);
+				this._playheadAnimId = null;
+			}
+			this.view.setIsPlaying(false);
+			this.view.setIsPaused(true);
+			this.view.setPlayheadPosition(this.pausedOffset / segment.duration);
+		}
+	}
+
+	resume() {
+		if (this.isPaused && this.pausedSegment !== null) {
+			this.view.setIsPaused(false);
+			this.playSegmentAtPosition(this.pausedSegment, this.pausedOffset);
+		}
 	}
 
 	enableSegment(index, enabled) {
@@ -202,7 +241,16 @@ class AudioSlicerController {
 		this.view.addEventListener('segmentclick', (e) => {
 			// Only play if segment is enabled
 			if (this.engine.getEnabledSegments()[e.detail.index]) {
-				this.playSegment(e.detail.index);
+				if (this.isPaused) {
+					// Move playhead to segment, do not play
+					this.pausedSegment = e.detail.index;
+					this.pausedOffset = 0;
+					this.view.setIsPlaying(false);
+					this.view.setActiveSegment(e.detail.index);
+					this.view.setPlayheadPosition(0);
+				} else {
+					this.playSegment(e.detail.index);
+				}
 			}
 		});
 		this.view.addEventListener('segmenttoggle', (e) => {
@@ -223,12 +271,29 @@ class AudioSlicerController {
 			const offsetSec  = segRel * segment.duration;
 			const enabled    = this.engine.getEnabledSegments();
 			if (enabled[segmentIdx]) {
-				this.playSegmentAtPosition(segmentIdx, offsetSec);
+				if (this.isPaused) {
+					// Move playhead, do not play
+					this.pausedSegment = segmentIdx;
+					this.pausedOffset = offsetSec;
+					this.view.setIsPlaying(false);
+					this.view.setActiveSegment(segmentIdx);
+					this.view.setPlayheadPosition(offsetSec / segment.duration);
+				} else {
+					this.playSegmentAtPosition(segmentIdx, offsetSec);
+				}
 			} else {
 				// Find next enabled segment
 				const next = this._findNextEnabledSegment(segmentIdx);
 				if (next !== null) {
-					this.playSegmentAtPosition(next, 0);
+					if (this.isPaused) {
+						this.pausedSegment = next;
+						this.pausedOffset = 0;
+						this.view.setIsPlaying(false);
+						this.view.setActiveSegment(next);
+						this.view.setPlayheadPosition(0);
+					} else {
+						this.playSegmentAtPosition(next, 0);
+					}
 				}
 			}
 		});
