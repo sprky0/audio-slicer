@@ -23,6 +23,10 @@ function createSlicer() {
 	stopBtn.textContent = 'Stop';
 	stopBtn.className = 'slicer-stop-btn';
 
+	const cutBtn = document.createElement('button');
+	cutBtn.textContent = 'Cut';
+	cutBtn.className   = 'slicer-cut-btn';
+
 	const resetBtn = document.createElement('button');
 	resetBtn.textContent = 'Reset';
 	resetBtn.className = 'slicer-reset-btn';
@@ -55,6 +59,23 @@ function createSlicer() {
 	endInput.value = 1;
 	endInput.classList.add('input-width-60');
 
+	// --- Start / End range sliders ---
+	const startSlider = document.createElement('input');
+	startSlider.type  = 'range';
+	startSlider.min   = 0;
+	startSlider.max   = 1;
+	startSlider.step  = 0.001;
+	startSlider.value = 0;
+	startSlider.className = 'slicer-range-slider slicer-range-start';
+
+	const endSlider = document.createElement('input');
+	endSlider.type  = 'range';
+	endSlider.min   = 0;
+	endSlider.max   = 1;
+	endSlider.step  = 0.001;
+	endSlider.value = 1;
+	endSlider.className = 'slicer-range-slider slicer-range-end';
+
 	const subdivisionsSelect = document.createElement('select');
 	[2, 4, 8, 16].forEach(val => {
 		const opt = document.createElement('option');
@@ -72,10 +93,29 @@ function createSlicer() {
 	controls.appendChild(document.createTextNode(' Subdivisions: '));
 	controls.appendChild(subdivisionsSelect);
 	controls.appendChild(sliceBtn);
+	controls.appendChild(cutBtn);
 	controls.appendChild(playPauseBtn);
 	controls.appendChild(stopBtn);
 	controls.appendChild(resetBtn);
 	controls.appendChild(removeBtn);
+
+	// --- Slider row ---
+	const sliderRow = document.createElement('div');
+	sliderRow.className = 'slicer-slider-row';
+
+	const startSliderLabel = document.createElement('label');
+	startSliderLabel.className = 'slicer-slider-label';
+	startSliderLabel.textContent = 'Start';
+	startSliderLabel.appendChild(startSlider);
+
+	const endSliderLabel = document.createElement('label');
+	endSliderLabel.className = 'slicer-slider-label';
+	endSliderLabel.textContent = 'End';
+	endSliderLabel.appendChild(endSlider);
+
+	sliderRow.appendChild(startSliderLabel);
+	sliderRow.appendChild(endSliderLabel);
+	controls.appendChild(sliderRow);
 
 	// --- Volume and Pan Knobs ---
 	const volumeKnob = new Knob({
@@ -98,8 +138,8 @@ function createSlicer() {
 	container.appendChild(controls);
 	slicersDiv.appendChild(container);
 
-	// Slicer instance
-	const slicer = new AudioSlicerController(container, { width: 800, height: 200 });
+	// Slicer instance — width is responsive (driven by the slicer container).
+	const slicer = new AudioSlicerController(container, { height: 200 });
 
 	// --- Play/Pause Button Logic ---
 	let isPlaying = false;
@@ -144,9 +184,16 @@ function createSlicer() {
 		slicer.setVolume(1);
 		slicer.setPan(0);
 
+		// Reset virtual zoom window back to the full buffer
+		virtualStart = 0;
+		virtualEnd   = 1;
+		slicer.setView(0, 1);
+
 		// Reset start/end/subdivisions UI
-		startInput.value = 0;
-		endInput.value = 1;
+		startInput.value  = 0;
+		endInput.value    = 1;
+		startSlider.value = 0;
+		endSlider.value   = 1;
 		subdivisionsSelect.value = 2;
 
 		// Stop playback and reset slicing
@@ -154,11 +201,6 @@ function createSlicer() {
 		playPauseBtn.textContent = 'Play';
 		isPlaying = false;
 		slicer.slice(0, 1, 2, { autoPlay: false });
-
-		// Optionally clear waveform view (if needed)
-		// slicer.view.setWaveformPeaks([]);
-		// Optionally clear file input (if you want to force re-upload)
-		// fileInput.value = '';
 	});
 
 	// --- Remove Button Logic ---
@@ -186,37 +228,101 @@ function createSlicer() {
 		}
 	});
 
-	// Slicing
-	sliceBtn.addEventListener('click', () => {
-		const start        = Math.max(0, Math.min(1, parseFloat(startInput.value)));
-		const end          = Math.max(0, Math.min(1, parseFloat(endInput.value)));
-		const subdivisions = parseInt(subdivisionsSelect.value, 10);
-		if (end > start && subdivisions > 0) {
-			slicer.slice(start, end, subdivisions, { keepPlayhead: true });
-		}
-	});
+	// --- Virtual zoom window (slider 0..1 → [virtualStart..virtualEnd] of real buffer) ---
+	let virtualStart = 0;
+	let virtualEnd   = 1;
 
-	// Subdivision change triggers immediate re-slice and redraw, keeping playhead if playing
-	subdivisionsSelect.addEventListener('change', () => {
-		const start        = Math.max(0, Math.min(1, parseFloat(startInput.value)));
-		const end          = Math.max(0, Math.min(1, parseFloat(endInput.value)));
-		const subdivisions = parseInt(subdivisionsSelect.value, 10);
-		if (end > start && subdivisions > 0) {
-			slicer.slice(start, end, subdivisions, { keepPlayhead: true });
-		}
-	});
+	const MIN_GAP = 0.001;
+	const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
-	// Real-time zoom on start/end input change
-	const updateZoom = () => {
-		const start        = Math.max(0, Math.min(1, parseFloat(startInput.value)));
-		const end          = Math.max(0, Math.min(1, parseFloat(endInput.value)));
-		const subdivisions = parseInt(subdivisionsSelect.value, 10);
-		if (end > start && subdivisions > 0) {
-			slicer.slice(start, end, subdivisions, { keepPlayhead: true });
-		}
+	const sliderToActual = (sliderVal) => virtualStart + sliderVal * (virtualEnd - virtualStart);
+
+	const syncControls = (start, end) => {
+		startInput.value  = start.toFixed(3);
+		endInput.value    = end.toFixed(3);
+		startSlider.value = start;
+		endSlider.value   = end;
 	};
-	startInput.addEventListener('input', updateZoom);
-	endInput.addEventListener('input', updateZoom);
+
+	// Take slider-space [start, end] (0..1), map through virtual window, slice the engine.
+	const applyRange = (sliderStart, sliderEnd, opts = { keepPlayhead: true }) => {
+		const subdivisions = parseInt(subdivisionsSelect.value, 10);
+		if (!(sliderEnd > sliderStart) || subdivisions <= 0) return;
+		const actualStart = sliderToActual(sliderStart);
+		const actualEnd   = sliderToActual(sliderEnd);
+		slicer.slice(actualStart, actualEnd, subdivisions, opts);
+	};
+
+	const setStart = (raw) => {
+		let start  = clamp01(parseFloat(raw));
+		const end  = clamp01(parseFloat(endInput.value));
+		if (isNaN(start)) return;
+		if (start > end - MIN_GAP) start = Math.max(0, end - MIN_GAP);
+		syncControls(start, end);
+		applyRange(start, end);
+	};
+
+	const setEnd = (raw) => {
+		const start = clamp01(parseFloat(startInput.value));
+		let end     = clamp01(parseFloat(raw));
+		if (isNaN(end)) return;
+		if (end < start + MIN_GAP) end = Math.min(1, start + MIN_GAP);
+		syncControls(start, end);
+		applyRange(start, end);
+	};
+
+	startInput.addEventListener('input',  (e) => setStart(e.target.value));
+	endInput.addEventListener('input',    (e) => setEnd(e.target.value));
+	startSlider.addEventListener('input', (e) => setStart(e.target.value));
+	endSlider.addEventListener('input',   (e) => setEnd(e.target.value));
+
+	// Slice button — just re-applies the current slider range.
+	sliceBtn.addEventListener('click', () => {
+		const start = clamp01(parseFloat(startInput.value));
+		const end   = clamp01(parseFloat(endInput.value));
+		applyRange(start, end);
+	});
+
+	// Subdivisions change → re-slice using current slider range.
+	subdivisionsSelect.addEventListener('change', () => {
+		const start = clamp01(parseFloat(startInput.value));
+		const end   = clamp01(parseFloat(endInput.value));
+		applyRange(start, end);
+	});
+
+	// --- Cut: commit current slider selection as the new virtual window ---
+	cutBtn.addEventListener('click', () => {
+		const sStart = clamp01(parseFloat(startInput.value));
+		const sEnd   = clamp01(parseFloat(endInput.value));
+		if (!(sEnd > sStart + MIN_GAP)) return;
+
+		const newStart = sliderToActual(sStart);
+		const newEnd   = sliderToActual(sEnd);
+		// Guard against pathological collapse.
+		if (newEnd - newStart < MIN_GAP) return;
+
+		virtualStart = newStart;
+		virtualEnd   = newEnd;
+		slicer.setView(newStart, newEnd);
+
+		// Sliders snap to 0..1 of the new window; the visible waveform now zooms in.
+		syncControls(0, 1);
+		applyRange(0, 1);
+	});
+
+	// --- Handle drag on the canvas → drive the sliders ---
+	slicer.view.addEventListener('handledrag', (e) => {
+		const { which, fraction } = e.detail;
+		// fraction is a real-buffer fraction within the current view window.
+		const span = virtualEnd - virtualStart;
+		if (span <= 0) return;
+		const sliderVal = clamp01((fraction - virtualStart) / span);
+		if (which === 'start') {
+			setStart(sliderVal);
+		} else if (which === 'end') {
+			setEnd(sliderVal);
+		}
+	});
 }
 
 addSlicerBtn.addEventListener('click', createSlicer);

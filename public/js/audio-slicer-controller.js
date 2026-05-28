@@ -15,7 +15,6 @@ class AudioSlicerController {
 		this.view   = new WaveformView(container, options);
 
 		// State
-		this.waveformPeaks      = [];
 		this.isPaused           = false;
 		this.pausedSegment      = null;
 		this.pausedOffset       = 0;
@@ -32,18 +31,21 @@ class AudioSlicerController {
 	async loadFile(file) {
 		try {
 			await this.engine.loadFile(file);
-			// Precompute waveform peaks for visualization
-			this.waveformPeaks = this._precomputeWaveformPeaks(this.engine.audioBuffer, this.view.options.precomputedWidth);
-			this.view.setWaveformPeaks(this.waveformPeaks);
+			// Hand the raw buffer to the view; it builds its own peak cache.
+			this.view.setAudioBuffer(this.engine.audioBuffer);
 
-			// Immediately slice but do NOT play first segment
-			const start        = 0;
-			const end          = 1;
-			const subdivisions = 2;
-			this.slice(start, end, subdivisions, { autoPlay: false });
+			// Reset the view window to the full buffer.
+			this.setView(0, 1);
+
+			// Immediately slice but do NOT play first segment.
+			this.slice(0, 1, 2, { autoPlay: false });
 		} catch (err) {
 			console.error('Error loading file:', err);
 		}
+	}
+
+	setView(start, end) {
+		this.view.setView(start, end);
 	}
 
 	/**
@@ -221,8 +223,9 @@ class AudioSlicerController {
 
 	dispose() {
 		this.engine.dispose();
-		// Remove canvas and overlay
-		if (this.view.canvas.parentNode) this.view.canvas.parentNode.removeChild(this.view.canvas);
+		if (this.view && typeof this.view.dispose === 'function') {
+			this.view.dispose();
+		}
 		if (this.performanceOverlay && this.performanceOverlay.parentNode) {
 			this.performanceOverlay.parentNode.removeChild(this.performanceOverlay);
 		}
@@ -351,28 +354,6 @@ class AudioSlicerController {
 				}
 			}
 		});
-	}
-
-	_precomputeWaveformPeaks(audioBuffer, precomputedWidth) {
-		if (!audioBuffer) return [];
-		const data            = audioBuffer.getChannelData(0);
-		const length          = data.length;
-		const peaks           = new Array(precomputedWidth);
-		const samplesPerBucket= length / precomputedWidth;
-		for (let i = 0; i < precomputedWidth; i++) {
-			let start = Math.floor(i * samplesPerBucket);
-			let end   = Math.floor((i + 1) * samplesPerBucket);
-			if (end > length) end = length;
-			let min = 1.0;
-			let max = -1.0;
-			for (let j = start; j < end; j++) {
-				const val = data[j];
-				if (val < min) min = val;
-				if (val > max) max = val;
-			}
-			peaks[i] = { min, max };
-		}
-		return peaks;
 	}
 
 	// Performance overlay disabled
