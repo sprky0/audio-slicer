@@ -1,3 +1,5 @@
+import PALETTE from './palette.js';
+
 /**
  * WaveformView: Handles all canvas drawing and user interaction for the waveform, markers, playhead, and segment controls.
  * Emits events for marker movement, segment clicks, and enable/disable toggles.
@@ -14,7 +16,7 @@ class WaveformView extends EventTarget {
 		this.container = container;
 		this.options   = Object.assign({
 			height: 200,
-			segmentIndicatorHeight: 24,
+			segmentIndicatorHeight: 52,
 			peakBucketTarget: 250000, // upper bound on cached peak buckets
 			handleTriangleW:  9,
 			handleTriangleH:  12,
@@ -22,6 +24,12 @@ class WaveformView extends EventTarget {
 			handleHitTolerance: 8,
 			startHandleColor: '#2ecc40',
 			endHandleColor:   '#e74c3c',
+			// Segment indicator inner layout
+			indPadTop:        4,
+			indNumberH:       24,
+			indGap:           4,
+			indToggleH:       18,
+			indMinToggleW:    28,
 		}, options);
 
 		// Audio buffer + peak cache
@@ -65,7 +73,7 @@ class WaveformView extends EventTarget {
 		this.helpMsg.style.color    = '#aaa';
 		this.helpMsg.style.fontSize = '13px';
 		this.helpMsg.style.margin   = '4px 0 8px 0';
-		this.helpMsg.textContent    = 'Drag the green/red triangle handles or the sliders to pick a region. Click a segment indicator to play it.';
+		this.helpMsg.textContent    = 'Drag the green/red triangle handles or the sliders to pick a region. Click a numbered tile to play it; click its on/off row to mute it.';
 		this.container.appendChild(this.helpMsg);
 
 		// Canvas
@@ -382,6 +390,14 @@ class WaveformView extends EventTarget {
 		ctx.stroke();
 	}
 
+	// Layout for one segment's indicator block, given the waveform `height`.
+	_indicatorLayout(height) {
+		const o = this.options;
+		const numberY = height + o.indPadTop;
+		const toggleY = numberY + o.indNumberH + o.indGap;
+		return { numberY, numberH: o.indNumberH, toggleY, toggleH: o.indToggleH };
+	}
+
 	_drawSegmentIndicators(width, height, indicatorHeight) {
 		if (this.segments.length === 0) return;
 		const ctx          = this.ctx;
@@ -390,25 +406,44 @@ class WaveformView extends EventTarget {
 		const selWidth     = endX - startX;
 		if (selWidth <= 0) return;
 		const segmentWidth = selWidth / this.segments.length;
-		for (let i = 0; i < this.segments.length; i++) {
-			const x = startX + segmentWidth * i;
-			ctx.save();
-			ctx.globalAlpha = this.enabledSegments[i] ? 1.0 : 0.3;
-			ctx.fillStyle   = (i === this.activeSegment) ? '#3498db' : '#888';
-			ctx.fillRect(x, height + 4, Math.max(1, segmentWidth - 2), indicatorHeight - 8);
+		const layout       = this._indicatorLayout(height);
+		const minToggleW   = this.options.indMinToggleW;
 
-			ctx.fillStyle    = '#fff';
+		for (let i = 0; i < this.segments.length; i++) {
+			const x       = startX + segmentWidth * i;
+			const boxW    = Math.max(1, segmentWidth - 2);
+			const color   = PALETTE[i % PALETTE.length];
+			const enabled = this.enabledSegments[i];
+
+			ctx.save();
+
+			// --- Number rectangle (top) ---
+			ctx.globalAlpha = enabled ? 1.0 : 0.4;
+			ctx.fillStyle   = color;
+			ctx.fillRect(x, layout.numberY, boxW, layout.numberH);
+
+			if (i === this.activeSegment) {
+				ctx.strokeStyle = '#ffffff';
+				ctx.lineWidth   = 2;
+				ctx.strokeRect(x + 1, layout.numberY + 1, boxW - 2, layout.numberH - 2);
+			}
+
+			ctx.globalAlpha  = 1.0;
+			ctx.fillStyle    = '#ffffff';
 			ctx.font         = 'bold 14px sans-serif';
 			ctx.textAlign    = 'center';
 			ctx.textBaseline = 'middle';
-			ctx.fillText(`${i + 1}`, x + segmentWidth / 2, height + indicatorHeight / 2);
+			ctx.fillText(`${i + 1}`, x + boxW / 2, layout.numberY + layout.numberH / 2);
 
-			if (segmentWidth >= 32) {
-				ctx.beginPath();
-				ctx.arc(x + segmentWidth - 14, height + indicatorHeight / 2, 7, 0, 2 * Math.PI);
-				ctx.fillStyle = this.enabledSegments[i] ? '#2ecc40' : '#e74c3c';
-				ctx.fill();
+			// --- on/off toggle rectangle (bottom) ---
+			if (boxW >= minToggleW) {
+				ctx.fillStyle = enabled ? '#2ecc40' : '#e74c3c';
+				ctx.fillRect(x, layout.toggleY, boxW, layout.toggleH);
+				ctx.fillStyle = '#ffffff';
+				ctx.font      = 'bold 11px sans-serif';
+				ctx.fillText(enabled ? 'on' : 'off', x + boxW / 2, layout.toggleY + layout.toggleH / 2 + 0.5);
 			}
+
 			ctx.restore();
 		}
 	}
@@ -553,10 +588,14 @@ class WaveformView extends EventTarget {
 				const selWidth     = endX - startX;
 				if (selWidth <= 0) return;
 				const segmentWidth = selWidth / this.segments.length;
+				const layout       = this._indicatorLayout(height);
+				const minToggleW   = this.options.indMinToggleW;
+				const inToggleRow  = y >= layout.toggleY && y <= layout.toggleY + layout.toggleH;
 				for (let i = 0; i < this.segments.length; i++) {
 					const segX = startX + segmentWidth * i;
 					if (x >= segX && x < segX + segmentWidth) {
-						if (segmentWidth >= 32 && x > segX + segmentWidth - 28) {
+						const boxW = Math.max(1, segmentWidth - 2);
+						if (inToggleRow && boxW >= minToggleW) {
 							this.dispatchEvent(new CustomEvent('segmenttoggle', { detail: { index: i, enabled: !this.enabledSegments[i] } }));
 						} else {
 							this.dispatchEvent(new CustomEvent('segmentclick', { detail: { index: i } }));

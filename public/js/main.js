@@ -1,5 +1,6 @@
 import AudioSlicerController from './audio-slicer-controller.js';
 import Knob from './knob.js';
+import PALETTE from './palette.js';
 
 const slicersDiv    = document.getElementById('slicers');
 const addSlicerBtn  = document.getElementById('addSlicerBtn');
@@ -84,12 +85,14 @@ function createSlicer() {
 		subdivisionsSelect.appendChild(opt);
 	});
 
+	// --- Details toggle (hides Start/End inputs + sliders behind a button) ---
+	const detailsBtn = document.createElement('button');
+	detailsBtn.textContent = 'Show details';
+	detailsBtn.className   = 'slicer-details-btn';
+	detailsBtn.setAttribute('aria-expanded', 'false');
+
 	controls.appendChild(document.createTextNode('File: '));
 	controls.appendChild(fileInput);
-	controls.appendChild(document.createTextNode(' Start: '));
-	controls.appendChild(startInput);
-	controls.appendChild(document.createTextNode(' End: '));
-	controls.appendChild(endInput);
 	controls.appendChild(document.createTextNode(' Subdivisions: '));
 	controls.appendChild(subdivisionsSelect);
 	controls.appendChild(sliceBtn);
@@ -97,7 +100,29 @@ function createSlicer() {
 	controls.appendChild(playPauseBtn);
 	controls.appendChild(stopBtn);
 	controls.appendChild(resetBtn);
+	controls.appendChild(detailsBtn);
 	controls.appendChild(removeBtn);
+
+	// --- Collapsible details panel: Start/End number inputs + range sliders ---
+	const detailsPanel = document.createElement('div');
+	detailsPanel.className = 'slicer-details';
+	detailsPanel.hidden    = true;
+
+	const numRow = document.createElement('div');
+	numRow.className = 'slicer-details-row';
+
+	const startNumLabel = document.createElement('label');
+	startNumLabel.className = 'slicer-details-label';
+	startNumLabel.appendChild(document.createTextNode('Start: '));
+	startNumLabel.appendChild(startInput);
+
+	const endNumLabel = document.createElement('label');
+	endNumLabel.className = 'slicer-details-label';
+	endNumLabel.appendChild(document.createTextNode('End: '));
+	endNumLabel.appendChild(endInput);
+
+	numRow.appendChild(startNumLabel);
+	numRow.appendChild(endNumLabel);
 
 	// --- Slider row ---
 	const sliderRow = document.createElement('div');
@@ -115,7 +140,18 @@ function createSlicer() {
 
 	sliderRow.appendChild(startSliderLabel);
 	sliderRow.appendChild(endSliderLabel);
-	controls.appendChild(sliderRow);
+
+	detailsPanel.appendChild(numRow);
+	detailsPanel.appendChild(sliderRow);
+	controls.appendChild(detailsPanel);
+
+	detailsBtn.addEventListener('click', () => {
+		const showing = !detailsPanel.hidden;
+		detailsPanel.hidden = showing;
+		detailsBtn.textContent = showing ? 'Show details' : 'Hide details';
+		detailsBtn.setAttribute('aria-expanded', String(!showing));
+		detailsBtn.classList.toggle('active', !showing);
+	});
 
 	// --- Volume and Pan Knobs ---
 	const volumeKnob = new Knob({
@@ -323,6 +359,356 @@ function createSlicer() {
 			setEnd(sliderVal);
 		}
 	});
+
+	// ============================================================
+	// Sequencer
+	// ============================================================
+	const seqEl = document.createElement('div');
+	seqEl.className = 'sequencer';
+
+	const seqToolbar = document.createElement('div');
+	seqToolbar.className = 'seq-toolbar';
+
+	const seqLabel = document.createElement('span');
+	seqLabel.className   = 'seq-label';
+	seqLabel.textContent = 'Sequencer';
+
+	const seqPlayBtn = document.createElement('button');
+	seqPlayBtn.textContent = 'Play Seq';
+	seqPlayBtn.className   = 'seq-play-btn';
+
+	const seqStopBtn = document.createElement('button');
+	seqStopBtn.textContent = 'Stop Seq';
+	seqStopBtn.className   = 'seq-stop-btn';
+
+	const seqClearBtn = document.createElement('button');
+	seqClearBtn.textContent = 'Clear';
+	seqClearBtn.className   = 'seq-clear-btn';
+
+	const seqLoopBtn = document.createElement('button');
+	seqLoopBtn.textContent = 'Loop';
+	seqLoopBtn.className   = 'seq-loop-btn';
+	seqLoopBtn.setAttribute('aria-pressed', 'false');
+
+	const seqStatus = document.createElement('span');
+	seqStatus.className = 'seq-status';
+
+	seqToolbar.appendChild(seqLabel);
+	seqToolbar.appendChild(seqPlayBtn);
+	seqToolbar.appendChild(seqStopBtn);
+	seqToolbar.appendChild(seqLoopBtn);
+	seqToolbar.appendChild(seqClearBtn);
+	seqToolbar.appendChild(seqStatus);
+
+	const seqStepsRow = document.createElement('div');
+	seqStepsRow.className = 'seq-steps';
+
+	seqEl.appendChild(seqToolbar);
+	seqEl.appendChild(seqStepsRow);
+	container.appendChild(seqEl);
+
+	// Sequencer state.
+	// cursor: null = no insertion cursor (play-on-click mode).
+	//         integer 0..steps.length = insert position for next added slice.
+	const seq = {
+		steps:        [],
+		cursor:       null,
+		isPlaying:    false,
+		currentStep:  -1,
+		timeoutId:    null,
+		loop:         false,
+	};
+
+	const updateSeqMode = () => {
+		slicer.sequencerMode = (seq.cursor !== null);
+	};
+
+	// Drag-and-drop state lives outside of renderSequencer so it survives re-renders.
+	let dragFromIdx = null;
+
+	const clearDropMarkers = () => {
+		seqStepsRow.querySelectorAll('.drop-before, .drop-after, .drop-into, .drop-clone')
+			.forEach((el) => el.classList.remove('drop-before', 'drop-after', 'drop-into', 'drop-clone'));
+	};
+
+	const moveStep = (from, to) => {
+		if (from < 0 || from >= seq.steps.length) return;
+		if (to < 0) to = 0;
+		if (to > seq.steps.length) to = seq.steps.length;
+
+		const selectedIdx = seq.cursor !== null ? seq.cursor - 1 : null;
+		const item        = seq.steps[from];
+		seq.steps.splice(from, 1);
+		const insertAt    = (from < to) ? to - 1 : to;
+		seq.steps.splice(insertAt, 0, item);
+
+		if (selectedIdx !== null) {
+			let s;
+			if (selectedIdx === from) {
+				// The selected step itself was dragged — keep it selected.
+				s = insertAt;
+			} else {
+				s = selectedIdx;
+				if (from < s)        s--;        // removal shifted us left
+				if (insertAt <= s)   s++;        // insert shifted us right
+			}
+			seq.cursor = s + 1;
+		}
+
+		// Reflect the new ordering in playback if we're mid-play.
+		// (We don't try to track which "physical" step is playing — simpler to keep
+		//  advancing by index in the new array.)
+		renderSequencer();
+	};
+
+	// Option-drag: copy the source step to the drop position; source stays in place.
+	const cloneStep = (from, to) => {
+		if (from < 0 || from >= seq.steps.length) return;
+		if (to < 0) to = 0;
+		if (to > seq.steps.length) to = seq.steps.length;
+
+		const sliceIdx = seq.steps[from];
+		seq.steps.splice(to, 0, sliceIdx);
+
+		// Anything at index >= `to` shifted right by 1 — including the selection.
+		if (seq.cursor !== null) {
+			const selectedIdx = seq.cursor - 1;
+			if (to <= selectedIdx) seq.cursor++;
+		}
+
+		renderSequencer();
+	};
+
+	const renderSequencer = () => {
+		seqStepsRow.innerHTML = '';
+
+		for (let i = 0; i < seq.steps.length; i++) {
+			const sliceIdx = seq.steps[i];
+			const stepBox  = document.createElement('div');
+			stepBox.className   = 'seq-step';
+			stepBox.textContent = String(sliceIdx + 1);
+			stepBox.style.background = PALETTE[sliceIdx % PALETTE.length];
+			stepBox.title       = 'Click to set insertion cursor here. Drag to reorder. Shift-click to delete.';
+			stepBox.draggable   = true;
+			if (seq.cursor === i + 1)      stepBox.classList.add('selected');
+			if (seq.currentStep === i)     stepBox.classList.add('playing');
+
+			stepBox.addEventListener('click', (ev) => {
+				if (ev.shiftKey) {
+					removeStep(i);
+					return;
+				}
+				seq.cursor = (seq.cursor === i + 1) ? null : i + 1;
+				updateSeqMode();
+				renderSequencer();
+			});
+
+			// --- Drag source ---
+			stepBox.addEventListener('dragstart', (ev) => {
+				dragFromIdx = i;
+				// Allow either copy or move; the actual choice is decided by altKey at drop.
+				ev.dataTransfer.effectAllowed = 'copyMove';
+				ev.dataTransfer.setData('text/plain', String(i));
+				stepBox.classList.add('dragging');
+			});
+			stepBox.addEventListener('dragend', () => {
+				dragFromIdx = null;
+				stepBox.classList.remove('dragging');
+				clearDropMarkers();
+			});
+
+			// --- Drop target ---
+			stepBox.addEventListener('dragover', (ev) => {
+				if (dragFromIdx === null) return;
+				ev.preventDefault();
+				ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
+				const rect  = stepBox.getBoundingClientRect();
+				const after = (ev.clientX - rect.left) > rect.width / 2;
+				stepBox.classList.toggle('drop-after',  after);
+				stepBox.classList.toggle('drop-before', !after);
+				stepBox.classList.toggle('drop-clone',  ev.altKey);
+			});
+			stepBox.addEventListener('dragleave', () => {
+				stepBox.classList.remove('drop-before', 'drop-after', 'drop-clone');
+			});
+			stepBox.addEventListener('drop', (ev) => {
+				if (dragFromIdx === null) return;
+				ev.preventDefault();
+				const rect  = stepBox.getBoundingClientRect();
+				const after = (ev.clientX - rect.left) > rect.width / 2;
+				const to    = i + (after ? 1 : 0);
+				const from  = dragFromIdx;
+				const clone = ev.altKey;
+				dragFromIdx = null;
+				clearDropMarkers();
+				if (clone) {
+					cloneStep(from, to);
+				} else {
+					moveStep(from, to);
+				}
+			});
+
+			seqStepsRow.appendChild(stepBox);
+		}
+
+		const addSlot = document.createElement('div');
+		addSlot.className   = 'seq-add-slot';
+		addSlot.textContent = '+';
+		addSlot.title       = 'Click to append after the last step. Drop here to move a step to the end.';
+		if (seq.cursor === seq.steps.length) addSlot.classList.add('selected');
+		addSlot.addEventListener('click', () => {
+			seq.cursor = (seq.cursor === seq.steps.length) ? null : seq.steps.length;
+			updateSeqMode();
+			renderSequencer();
+		});
+		addSlot.addEventListener('dragover', (ev) => {
+			if (dragFromIdx === null) return;
+			ev.preventDefault();
+			ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
+			addSlot.classList.add('drop-into');
+			addSlot.classList.toggle('drop-clone', ev.altKey);
+		});
+		addSlot.addEventListener('dragleave', () => {
+			addSlot.classList.remove('drop-into', 'drop-clone');
+		});
+		addSlot.addEventListener('drop', (ev) => {
+			if (dragFromIdx === null) return;
+			ev.preventDefault();
+			const from  = dragFromIdx;
+			const clone = ev.altKey;
+			dragFromIdx = null;
+			clearDropMarkers();
+			if (clone) {
+				cloneStep(from, seq.steps.length);
+			} else {
+				moveStep(from, seq.steps.length);
+			}
+		});
+		seqStepsRow.appendChild(addSlot);
+
+		if (seq.isPlaying) {
+			seqStatus.textContent = `Playing step ${seq.currentStep + 1} of ${seq.steps.length}`;
+		} else if (seq.cursor === null) {
+			seqStatus.textContent = seq.steps.length === 0
+				? 'Click + to start, then click slices to add.'
+				: 'Click a step (or +) to add new slices there.';
+		} else {
+			const pos = seq.cursor;
+			const where = pos === 0 ? 'before step 1'
+				: pos === seq.steps.length ? 'at end'
+				: `after step ${pos}`;
+			seqStatus.textContent = `Add mode — clicking a slice inserts ${where}.`;
+		}
+	};
+
+	const removeStep = (i) => {
+		if (i < 0 || i >= seq.steps.length) return;
+		seq.steps.splice(i, 1);
+		if (seq.cursor !== null) {
+			if (seq.cursor > i) seq.cursor--;
+			if (seq.cursor > seq.steps.length) seq.cursor = seq.steps.length;
+		}
+		renderSequencer();
+	};
+
+	const addStepAtCursor = (sliceIdx) => {
+		if (seq.cursor === null) return;
+		seq.steps.splice(seq.cursor, 0, sliceIdx);
+		seq.cursor += 1;
+		renderSequencer();
+	};
+
+	// Intercept segment clicks while in add mode and route them into the sequencer.
+	slicer.view.addEventListener('segmentclick', (e) => {
+		if (seq.cursor !== null) {
+			addStepAtCursor(e.detail.index);
+		}
+	});
+
+	// Re-render whenever subdivisions change — the labels we show (slice numbers)
+	// still refer to indices; out-of-range steps just no-op during playback.
+	subdivisionsSelect.addEventListener('change', () => renderSequencer());
+
+	// --- Sequencer playback ---
+	const getUnitDurationSec = () => {
+		const segs = slicer.engine.getSegments();
+		if (segs && segs.length > 0 && segs[0].duration > 0) return segs[0].duration;
+		return 0.5;
+	};
+
+	const stopSeqPlayback = () => {
+		if (seq.timeoutId) {
+			clearTimeout(seq.timeoutId);
+			seq.timeoutId = null;
+		}
+		seq.isPlaying    = false;
+		seq.currentStep  = -1;
+		slicer.sequencerPlaying = false;
+		slicer.stop();
+		renderSequencer();
+	};
+
+	const startSeqPlayback = () => {
+		if (seq.isPlaying) return;
+		if (seq.steps.length === 0) return;
+
+		// Exit add mode while playing so the highlights aren't confusing.
+		seq.cursor = null;
+		updateSeqMode();
+
+		seq.isPlaying    = true;
+		seq.currentStep  = -1;
+		slicer.sequencerPlaying = true;
+		slicer.stop(); // cancel any current playback
+
+		const unitMs = Math.max(20, Math.floor(getUnitDurationSec() * 1000));
+		let stepIdx = 0;
+
+		const tick = () => {
+			if (!seq.isPlaying) return;
+			if (stepIdx >= seq.steps.length) {
+				if (seq.loop && seq.steps.length > 0) {
+					stepIdx = 0;
+				} else {
+					stopSeqPlayback();
+					return;
+				}
+			}
+			seq.currentStep = stepIdx;
+			const sliceIdx  = seq.steps[stepIdx];
+			const segs      = slicer.engine.getSegments();
+			const enabled   = slicer.engine.getEnabledSegments();
+			if (segs && sliceIdx >= 0 && sliceIdx < segs.length && enabled[sliceIdx]) {
+				slicer.playSegment(sliceIdx);
+			}
+			renderSequencer();
+			stepIdx++;
+			seq.timeoutId = setTimeout(tick, unitMs);
+		};
+		tick();
+	};
+
+	seqPlayBtn.addEventListener('click', startSeqPlayback);
+	seqStopBtn.addEventListener('click', stopSeqPlayback);
+	seqLoopBtn.addEventListener('click', () => {
+		seq.loop = !seq.loop;
+		seqLoopBtn.classList.toggle('active', seq.loop);
+		seqLoopBtn.setAttribute('aria-pressed', String(seq.loop));
+	});
+	seqClearBtn.addEventListener('click', () => {
+		stopSeqPlayback();
+		seq.steps  = [];
+		seq.cursor = null;
+		updateSeqMode();
+		renderSequencer();
+	});
+
+	// Wipe sequencer state when this slicer is removed.
+	removeBtn.addEventListener('click', () => {
+		stopSeqPlayback();
+	});
+
+	renderSequencer();
 }
 
 addSlicerBtn.addEventListener('click', createSlicer);

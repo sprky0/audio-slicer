@@ -18,6 +18,13 @@ class AudioSlicerController {
 		this.isPaused           = false;
 		this.pausedSegment      = null;
 		this.pausedOffset       = 0;
+
+		// Sequencer integration flags. When set by an outside controller
+		// (e.g. the sequencer in main.js):
+		//   sequencerMode    -> ignore segmentclick auto-play (caller adds to lane instead)
+		//   sequencerPlaying -> ignore segmentend auto-advance (caller drives timing)
+		this.sequencerMode      = false;
+		this.sequencerPlaying   = false;
 		// this.performanceOverlay = null;
 
 		// Bind events
@@ -246,13 +253,22 @@ class AudioSlicerController {
 			this._startPlayheadAnimation(e.detail.index, 0);
 		});
 		this.engine.addEventListener('segmentend', (e) => {
+			// Sequencer drives its own scheduling — don't auto-advance.
+			if (this.sequencerPlaying) {
+				if (this._playheadAnimId) {
+					cancelAnimationFrame(this._playheadAnimId);
+					this._playheadAnimId = null;
+				}
+				this.view.setIsPlaying(false);
+				this.view.setPlayheadPosition(0);
+				return;
+			}
 			// Find and play the next enabled segment, or stop if none
 			const next = this._findNextEnabledSegment(e.detail.index);
 			if (next !== null && next !== e.detail.index) {
 				this.playSegmentAtPosition(next, 0);
 			} else {
 				this.view.setActiveSegment(-1);
-				// this._updatePerformanceOverlay();
 				if (this._playheadAnimId) {
 					cancelAnimationFrame(this._playheadAnimId);
 					this._playheadAnimId = null;
@@ -296,6 +312,8 @@ class AudioSlicerController {
 
 	_bindViewEvents() {
 		this.view.addEventListener('segmentclick', (e) => {
+			// Sequencer is in add mode — let the sequencer handle it.
+			if (this.sequencerMode) return;
 			// Only play if segment is enabled
 			if (this.engine.getEnabledSegments()[e.detail.index]) {
 				if (this.isPaused) {
