@@ -276,6 +276,21 @@ button:disabled {
 	color: var(--color-text-primary);
 }
 
+.seq-bpm-label,
+.seq-division-label {
+	display: flex;
+	align-items: center;
+	gap: var(--space-xs);
+	color: var(--color-text-primary);
+	font-size: 13px;
+}
+
+.seq-bpm-reset-btn {
+	font-size: 12px;
+	padding: 2px 8px;
+	cursor: pointer;
+}
+
 .seq-status {
 	margin-left: var(--space-md);
 	color: #aaa;

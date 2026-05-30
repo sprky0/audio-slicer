@@ -11,6 +11,7 @@ class AudioEngine extends EventTarget {
 		this.segments        = [];
 		this.enabledSegments = [];
 		this.activeSegment   = -1;
+		this.scheduledSources= [];
 		this.isPlaying       = false;
 		this.audioSource     = null;
 		this.playStartTime   = 0;
@@ -121,6 +122,80 @@ class AudioEngine extends EventTarget {
 		}, 0);
 	}
 
+	/**
+	 * Resume the AudioContext if it's suspended (browser autoplay policy).
+	 */
+	async resume() {
+		if (this.audioContext && this.audioContext.state === 'suspended') {
+			try {
+				await this.audioContext.resume();
+			} catch (err) {
+				console.error('Failed to resume AudioContext:', err);
+			}
+		}
+	}
+
+	/**
+	 * Schedule a segment to start at absolute audio-clock time `when`, cut at
+	 * `stopAt` (with a short declick fade) if the step is shorter than the slice.
+	 * This is the sequencer's playback path — it is event-silent and independent
+	 * of the single-source playSegment()/onended path used by free-run playback.
+	 * Each voice gets its own gain node so the declick ramp is per-voice.
+	 *
+	 * playbackRate (default 1) repitches the slice — rates != 1 make it audibly
+	 * longer/shorter, which is how the sequencer "fills" a step when the tempo
+	 * differs from the slice's natural tempo. The cut boundary is computed
+	 * against the rate-scaled (effective) duration.
+	 */
+	scheduleSegment(index, when, stopAt, playbackRate = 1) {
+		if (!this.segments[index]) return null;
+		const source = this.audioContext.createBufferSource();
+		source.buffer = this.segments[index];
+		source.playbackRate.value = playbackRate > 0 ? playbackRate : 1;
+
+		const voiceGain = this.audioContext.createGain();
+		voiceGain.gain.value = 1;
+		source.connect(voiceGain);
+		voiceGain.connect(this.gainNode);
+
+		const DECLICK   = 0.005;
+		const effDur    = source.buffer.duration / source.playbackRate.value;
+		source.start(when);
+		// Only cut (and declick) when the step ends before the slice naturally
+		// would. A shorter (effective) slice just rings out, leaving a gap.
+		if (typeof stopAt === 'number' && stopAt > when && stopAt < when + effDur) {
+			voiceGain.gain.setValueAtTime(1, Math.max(when, stopAt - DECLICK));
+			voiceGain.gain.linearRampToValueAtTime(0, stopAt);
+			source.stop(stopAt + DECLICK);
+		}
+
+		const entry = { source, voiceGain };
+		this.scheduledSources.push(entry);
+		source.onended = () => {
+			try { voiceGain.disconnect(); } catch (err) { /* already torn down */ }
+			const i = this.scheduledSources.indexOf(entry);
+			if (i !== -1) this.scheduledSources.splice(i, 1);
+		};
+		return source;
+	}
+
+	/**
+	 * Stop and disconnect every scheduled voice, including ones whose start time
+	 * is still in the future (they would otherwise fire after a stop/clear).
+	 */
+	cancelScheduled() {
+		if (this.audioContext.state === 'closed') {
+			this.scheduledSources = [];
+			return;
+		}
+		for (const entry of this.scheduledSources) {
+			try { entry.source.onended = null; entry.source.stop(); } catch (err) { /* not started / already stopped */ }
+			try { entry.source.disconnect(); } catch (err) { /* already disconnected */ }
+			try { entry.voiceGain.disconnect(); } catch (err) { /* already disconnected */ }
+		}
+		this.scheduledSources = [];
+	}
+
 	stop() {
 		if (this.audioSource) {
 			this.audioSource.onended = null;
@@ -161,6 +236,7 @@ class AudioEngine extends EventTarget {
 
 	dispose() {
 		this.stop();
+		this.cancelScheduled();
 		if (this.audioContext) {
 			this.audioContext.close();
 		}

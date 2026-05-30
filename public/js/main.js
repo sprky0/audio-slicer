@@ -1,4 +1,5 @@
 import AudioSlicerController from './audio-slicer-controller.js';
+import Transport from './transport.js';
 import Knob from './knob.js';
 import PALETTE from './palette.js';
 
@@ -237,10 +238,18 @@ function createSlicer() {
 		playPauseBtn.textContent = 'Play';
 		isPlaying = false;
 		slicer.slice(0, 1, 2, { autoPlay: false });
+
+		// Restore auto-derived tempo.
+		bpmManual      = false;
+		divisionManual = false;
+		deriveTransport(0, 1, 2);
 	});
 
 	// --- Remove Button Logic ---
 	removeBtn.addEventListener('click', () => {
+		// Stop the sequencer (cancels scheduled audio + timers) BEFORE disposing the
+		// engine, so we never touch a closed AudioContext.
+		stopSeqPlayback();
 		slicer.dispose();
 		if (container.parentNode) {
 			container.parentNode.removeChild(container);
@@ -261,6 +270,7 @@ function createSlicer() {
 		if (file) {
 			await slicer.loadFile(file);
 			sliceBtn.disabled = false;
+			deriveTransport(0, 1, parseInt(subdivisionsSelect.value, 10));
 		}
 	});
 
@@ -287,6 +297,7 @@ function createSlicer() {
 		const actualStart = sliderToActual(sliderStart);
 		const actualEnd   = sliderToActual(sliderEnd);
 		slicer.slice(actualStart, actualEnd, subdivisions, opts);
+		deriveTransport(actualStart, actualEnd, subdivisions);
 	};
 
 	const setStart = (raw) => {
@@ -390,6 +401,41 @@ function createSlicer() {
 	seqLoopBtn.className   = 'seq-loop-btn';
 	seqLoopBtn.setAttribute('aria-pressed', 'false');
 
+	// --- Transport: BPM + step division ---
+	const bpmInput = document.createElement('input');
+	bpmInput.type  = 'number';
+	bpmInput.min   = 20;
+	bpmInput.max   = 400;
+	bpmInput.step  = 0.01;
+	bpmInput.value = 120;
+	bpmInput.className = 'seq-bpm-input input-width-60';
+	const bpmLabel = document.createElement('label');
+	bpmLabel.className = 'seq-bpm-label';
+	bpmLabel.appendChild(document.createTextNode('BPM '));
+	bpmLabel.appendChild(bpmInput);
+
+	// Shown only when BPM has been manually overridden; click resets to the
+	// auto-derived original tempo.
+	const bpmResetBtn = document.createElement('button');
+	bpmResetBtn.className = 'seq-bpm-reset-btn';
+	bpmResetBtn.hidden    = true;
+	bpmResetBtn.title     = 'Reset to the original calculated BPM';
+
+	const divisionSelect = document.createElement('select');
+	divisionSelect.className = 'seq-division-select';
+	// value = note denominator: 1/2, 1/4, 1/8, 1/16, 1/32
+	[2, 4, 8, 16, 32].forEach((denom) => {
+		const opt = document.createElement('option');
+		opt.value = denom;
+		opt.textContent = '1/' + denom;
+		divisionSelect.appendChild(opt);
+	});
+	divisionSelect.value = 16;
+	const divisionLabel = document.createElement('label');
+	divisionLabel.className = 'seq-division-label';
+	divisionLabel.appendChild(document.createTextNode('Step '));
+	divisionLabel.appendChild(divisionSelect);
+
 	const seqStatus = document.createElement('span');
 	seqStatus.className = 'seq-status';
 
@@ -398,6 +444,9 @@ function createSlicer() {
 	seqToolbar.appendChild(seqStopBtn);
 	seqToolbar.appendChild(seqLoopBtn);
 	seqToolbar.appendChild(seqClearBtn);
+	seqToolbar.appendChild(bpmLabel);
+	seqToolbar.appendChild(bpmResetBtn);
+	seqToolbar.appendChild(divisionLabel);
 	seqToolbar.appendChild(seqStatus);
 
 	const seqStepsRow = document.createElement('div');
@@ -415,16 +464,89 @@ function createSlicer() {
 		cursor:       null,
 		isPlaying:    false,
 		currentStep:  -1,
-		timeoutId:    null,
 		loop:         false,
+	};
+
+	// --- Transport tempo state ---
+	// The sliced selection is treated as one bar (4 beats). On (re)slice we
+	// auto-derive BPM and step division so a freshly loaded loop reconstructs
+	// itself, unless the user has manually overridden either control.
+	let bpm           = 120;
+	let originalBPM   = 120;            // last auto-derived (natural) tempo of the selection
+	let divisionDenom = 16;
+	let bpmManual     = false;
+	let divisionManual= false;
+
+	const stepSec = () => (60 / bpm) * (4 / divisionDenom);
+
+	// Fill strategy: how each step's slice is fit into its step. Current mode is
+	// "repitch" — scale playback rate by the tempo ratio so the slice fills the
+	// space created by a BPM change (rate 1 at the original tempo). This is the
+	// single swap point for future fill modes (gap / time-stretch / per-slice).
+	const playbackRateForStep = (/* sliceIdx */) => (originalBPM > 0 ? bpm / originalBPM : 1);
+
+	const updateBpmResetBtn = () => {
+		const show = bpmManual && isFinite(originalBPM) && originalBPM > 0;
+		bpmResetBtn.hidden = !show;
+		if (show) bpmResetBtn.textContent = `↺ ${originalBPM.toFixed(2)}`;
+	};
+
+	const deriveTransport = (selStart, selEnd, n) => {
+		const buf = slicer.engine.audioBuffer;
+		if (!buf) return;
+		const selDur = (selEnd - selStart) * buf.duration;
+		if (selDur <= 0) return;
+		originalBPM = 240 / selDur;        // one bar (4 beats) == the selection
+		if (!bpmManual) {
+			bpm = originalBPM;
+			bpmInput.value = bpm.toFixed(2);
+		}
+		if (!divisionManual && [2, 4, 8, 16, 32].includes(n)) {
+			divisionDenom = n;             // each step == one slice
+			divisionSelect.value = String(n);
+		}
+		updateBpmResetBtn();
 	};
 
 	const updateSeqMode = () => {
 		slicer.sequencerMode = (seq.cursor !== null);
 	};
 
+	bpmInput.addEventListener('input', () => {
+		const v = parseFloat(bpmInput.value);
+		if (!isNaN(v) && v > 0) {
+			bpm = v;
+			bpmManual = true;
+			updateBpmResetBtn();
+		}
+	});
+	bpmResetBtn.addEventListener('click', () => {
+		bpm       = originalBPM;
+		bpmManual = false;
+		bpmInput.value = bpm.toFixed(2);
+		updateBpmResetBtn();
+	});
+	divisionSelect.addEventListener('change', () => {
+		divisionDenom  = parseInt(divisionSelect.value, 10);
+		divisionManual = true;
+	});
+
 	// Drag-and-drop state lives outside of renderSequencer so it survives re-renders.
 	let dragFromIdx = null;
+
+	// The transport's visual loop owns the `.playing` highlight (renderSequencer no
+	// longer paints it). Toggling directly avoids a full DOM rebuild every step.
+	// Self-healing: if renderSequencer rebuilds the row mid-play, playingStepEl
+	// points at a detached node and the next frame swaps onto the fresh node.
+	let playingStepEl = null;
+	const setPlayingStep = (idx) => {
+		const child = (idx >= 0 && idx < seqStepsRow.children.length) ? seqStepsRow.children[idx] : null;
+		const target = (child && child.classList.contains('seq-step')) ? child : null;
+		if (target === playingStepEl) return;
+		if (playingStepEl) playingStepEl.classList.remove('playing');
+		if (target) target.classList.add('playing');
+		playingStepEl = target;
+	};
 
 	const clearDropMarkers = () => {
 		seqStepsRow.querySelectorAll('.drop-before, .drop-after, .drop-into, .drop-clone')
@@ -489,11 +611,12 @@ function createSlicer() {
 			stepBox.textContent = String(sliceIdx + 1);
 			stepBox.style.background = PALETTE[sliceIdx % PALETTE.length];
 			stepBox.title       = 'Click to set insertion cursor here. Drag to reorder. Shift-click to delete.';
-			stepBox.draggable   = true;
+			// Structural edits are disabled during playback (see onStepVisual / setPlayingStep).
+			stepBox.draggable   = !seq.isPlaying;
 			if (seq.cursor === i + 1)      stepBox.classList.add('selected');
-			if (seq.currentStep === i)     stepBox.classList.add('playing');
 
 			stepBox.addEventListener('click', (ev) => {
+				if (seq.isPlaying) return;
 				if (ev.shiftKey) {
 					removeStep(i);
 					return;
@@ -557,6 +680,7 @@ function createSlicer() {
 		addSlot.title       = 'Click to append after the last step. Drop here to move a step to the end.';
 		if (seq.cursor === seq.steps.length) addSlot.classList.add('selected');
 		addSlot.addEventListener('click', () => {
+			if (seq.isPlaying) return;
 			seq.cursor = (seq.cursor === seq.steps.length) ? null : seq.steps.length;
 			updateSeqMode();
 			renderSequencer();
@@ -629,26 +753,37 @@ function createSlicer() {
 	// still refer to indices; out-of-range steps just no-op during playback.
 	subdivisionsSelect.addEventListener('change', () => renderSequencer());
 
-	// --- Sequencer playback ---
-	const getUnitDurationSec = () => {
-		const segs = slicer.engine.getSegments();
-		if (segs && segs.length > 0 && segs[0].duration > 0) return segs[0].duration;
-		return 0.5;
-	};
+	// --- Sequencer playback (sample-accurate, via Transport on the audio clock) ---
+	const transport = new Transport({
+		engine:          slicer.engine,
+		getSteps:        () => seq.steps,
+		getStepSec:      stepSec,
+		getPlaybackRate: playbackRateForStep,
+		isLooping:       () => seq.loop,
+		onStepVisual: (step, sliceIdx, frac) => {
+			setPlayingStep(step);
+			if (seq.currentStep !== step) {
+				seq.currentStep = step;
+				seqStatus.textContent = `Playing step ${step + 1} of ${seq.steps.length}`;
+			}
+			// All three are required for the playhead to draw (waveform-view.js).
+			slicer.view.setActiveSegment(sliceIdx);
+			slicer.view.setIsPlaying(true);
+			slicer.view.setPlayheadPosition(frac);
+		},
+		onStop: () => {
+			seq.isPlaying   = false;
+			seq.currentStep = -1;
+			slicer.sequencerPlaying = false;
+			setPlayingStep(-1);
+			slicer.view.setIsPlaying(false);
+			slicer.view.setActiveSegment(-1);
+			slicer.view.setPlayheadPosition(0);
+			renderSequencer();
+		},
+	});
 
-	const stopSeqPlayback = () => {
-		if (seq.timeoutId) {
-			clearTimeout(seq.timeoutId);
-			seq.timeoutId = null;
-		}
-		seq.isPlaying    = false;
-		seq.currentStep  = -1;
-		slicer.sequencerPlaying = false;
-		slicer.stop();
-		renderSequencer();
-	};
-
-	const startSeqPlayback = () => {
+	const startSeqPlayback = async () => {
 		if (seq.isPlaying) return;
 		if (seq.steps.length === 0) return;
 
@@ -656,37 +791,18 @@ function createSlicer() {
 		seq.cursor = null;
 		updateSeqMode();
 
-		seq.isPlaying    = true;
-		seq.currentStep  = -1;
+		seq.isPlaying   = true;
+		seq.currentStep = -1;
 		slicer.sequencerPlaying = true;
-		slicer.stop(); // cancel any current playback
+		slicer.stop();        // cancel any free-run playback + its playhead animation
+		renderSequencer();    // reflect playing state (disables drag, clears cursor)
 
-		const unitMs = Math.max(20, Math.floor(getUnitDurationSec() * 1000));
-		let stepIdx = 0;
-
-		const tick = () => {
-			if (!seq.isPlaying) return;
-			if (stepIdx >= seq.steps.length) {
-				if (seq.loop && seq.steps.length > 0) {
-					stepIdx = 0;
-				} else {
-					stopSeqPlayback();
-					return;
-				}
-			}
-			seq.currentStep = stepIdx;
-			const sliceIdx  = seq.steps[stepIdx];
-			const segs      = slicer.engine.getSegments();
-			const enabled   = slicer.engine.getEnabledSegments();
-			if (segs && sliceIdx >= 0 && sliceIdx < segs.length && enabled[sliceIdx]) {
-				slicer.playSegment(sliceIdx);
-			}
-			renderSequencer();
-			stepIdx++;
-			seq.timeoutId = setTimeout(tick, unitMs);
-		};
-		tick();
+		await transport.start();
 	};
+
+	// transport.stop() cancels scheduled audio + both timers, then fires onStop
+	// (above), which resets all UI/view state.
+	const stopSeqPlayback = () => transport.stop();
 
 	seqPlayBtn.addEventListener('click', startSeqPlayback);
 	seqStopBtn.addEventListener('click', stopSeqPlayback);
@@ -701,11 +817,6 @@ function createSlicer() {
 		seq.cursor = null;
 		updateSeqMode();
 		renderSequencer();
-	});
-
-	// Wipe sequencer state when this slicer is removed.
-	removeBtn.addEventListener('click', () => {
-		stopSeqPlayback();
 	});
 
 	renderSequencer();
