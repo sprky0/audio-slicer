@@ -298,8 +298,8 @@ button:disabled {
 }
 
 .seq-steps {
-	display: flex;
-	flex-wrap: wrap;
+	display: grid;
+	grid-template-columns: repeat(var(--seq-cols, 8), minmax(0, 1fr));
 	gap: var(--space-xs);
 	align-items: center;
 	min-height: 44px;
@@ -310,9 +310,9 @@ button:disabled {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	min-width: 36px;
+	min-width: 0;          /* let the grid track size the box (scales with slice count) */
 	height: 36px;
-	padding: 0 var(--space-sm);
+	padding: 0 var(--space-xs);
 	border-radius: var(--radius-sm);
 	font-weight: bold;
 	font-size: var(--font-size-base);
@@ -326,8 +326,29 @@ button:disabled {
 }
 
 .seq-step {
+	position: relative;
 	background: var(--color-accent); /* fallback; overridden inline with palette color */
 	text-shadow: 0 1px 1px rgba(0, 0, 0, 0.55);
+}
+
+/* Per-step pitch-offset badge (top-right corner; hidden when offset is 0). */
+.seq-step-pitch {
+	position: absolute;
+	top: -6px;
+	right: -6px;
+	min-width: 16px;
+	height: 16px;
+	padding: 0 3px;
+	border-radius: 8px;
+	background: #111;
+	color: #fff;
+	font-size: 10px;
+	font-weight: bold;
+	line-height: 16px;
+	text-align: center;
+	text-shadow: none;
+	box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+	pointer-events: none;
 }
 .seq-step:hover {
 	transform: translateY(-1px);
@@ -342,7 +363,6 @@ button:disabled {
 	border-color: #ffffff;
 	box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.45),
 	            0 0 12px rgba(255, 255, 255, 0.55);
-	transform: scale(1.06);
 }
 
 .seq-step.dragging {
@@ -413,31 +433,64 @@ button:disabled {
 	height: 48px;
 	border-radius: 50%;
 	background: var(--color-bg-primary);
-	border: 2px solid var(--color-accent);
+	border: 1px solid var(--color-border);
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	margin-bottom: var(--space-xs);
-	transition: border-color var(--transition-fast);
+	cursor: ns-resize;          /* signals vertical drag */
+	touch-action: none;         /* don't scroll the page while dragging on touch */
+	user-select: none;
+	outline: none;
+	transition: border-color var(--transition-fast),
+	            box-shadow   var(--transition-fast);
 }
 
+/* Defensive: the rewritten knob has no range input, but a stale-cached old
+   knob.js may still inject one. Keep it hidden (and harmless) so it never shows
+   through the dial. Inert once the new knob.js loads. */
 .knob-input {
 	position: absolute;
-	width: 100%;
-	height: 100%;
+	inset: 0;
 	opacity: 0;
-	cursor: pointer;
 	z-index: 2;
+	cursor: ns-resize;
+}
+
+/* Value arc: a 270° ring filled to the current value (set via --knob-fraction). */
+.knob::before {
+	content: '';
+	position: absolute;
+	inset: -3px;
+	border-radius: 50%;
+	background: conic-gradient(from -135deg,
+		var(--color-accent) calc(var(--knob-fraction, 0) * 270deg),
+		rgba(255, 255, 255, 0.12) 0 270deg,
+		transparent 270deg);
+	-webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
+	        mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
+	z-index: 0;
+	pointer-events: none;
+}
+
+.knob:focus-visible {
+	box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.25);
+}
+
+.knob.dragging {
+	border-color: #ffffff;
+	box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.3);
 }
 
 .knob-value {
 	position: absolute;
-	top: 50%;
+	bottom: 4px;
 	left: 50%;
-	transform: translate(-50%, -50%);
+	transform: translateX(-50%);
 	color: var(--color-text-primary);
-	font-size: 13px;
+	font-size: 11px;
 	font-weight: bold;
+	line-height: 1;
 	pointer-events: none;
 	z-index: 3;
 }
@@ -454,12 +507,13 @@ button:disabled {
 	position: absolute;
 	left: 50%;
 	top: 50%;
-	width: 4px;
+	width: 3px;
 	height: 18px;
-	background: var(--color-accent);
+	background: var(--color-text-primary);
 	border-radius: 2px;
 	transform: translate(-50%, -90%) rotate(var(--knob-rotation, -135deg));
 	transform-origin: 50% 90%;
-	transition: transform var(--transition-fast);
+	/* No transition — the indicator tracks the pointer 1:1 (the old transition
+	   made the knob feel laggy/unresponsive). */
 	z-index: 1;
 }

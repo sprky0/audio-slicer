@@ -136,21 +136,24 @@ class AudioEngine extends EventTarget {
 	}
 
 	/**
-	 * Schedule a segment to start at absolute audio-clock time `when`, cut at
-	 * `stopAt` (with a short declick fade) if the step is shorter than the slice.
-	 * This is the sequencer's playback path — it is event-silent and independent
+	 * Schedule an arbitrary AudioBuffer to start at absolute audio-clock time
+	 * `when`. This is the sequencer's playback path — event-silent and independent
 	 * of the single-source playSegment()/onended path used by free-run playback.
 	 * Each voice gets its own gain node so the declick ramp is per-voice.
 	 *
-	 * playbackRate (default 1) repitches the slice — rates != 1 make it audibly
-	 * longer/shorter, which is how the sequencer "fills" a step when the tempo
-	 * differs from the slice's natural tempo. The cut boundary is computed
-	 * against the rate-scaled (effective) duration.
+	 * `declick`: when true, always fade to 0 ending exactly at `stopAt` and stop
+	 * there — used for time-stretched fill buffers, which are built to fill the
+	 * step and whose boundary sample isn't a guaranteed zero-crossing. When false,
+	 * the voice only cuts if `stopAt` lands before the buffer would naturally end
+	 * (so a shorter slice rings out, leaving a gap).
+	 *
+	 * `playbackRate` resamples (repitches). For stretched buffers it carries the
+	 * pitch-shift ratio; for raw buffers it's 1 (or a fill ratio in fallback).
 	 */
-	scheduleSegment(index, when, stopAt, playbackRate = 1) {
-		if (!this.segments[index]) return null;
+	scheduleBuffer(buffer, when, stopAt, playbackRate = 1, { declick = false } = {}) {
+		if (!buffer) return null;
 		const source = this.audioContext.createBufferSource();
-		source.buffer = this.segments[index];
+		source.buffer = buffer;
 		source.playbackRate.value = playbackRate > 0 ? playbackRate : 1;
 
 		const voiceGain = this.audioContext.createGain();
@@ -158,12 +161,10 @@ class AudioEngine extends EventTarget {
 		source.connect(voiceGain);
 		voiceGain.connect(this.gainNode);
 
-		const DECLICK   = 0.005;
-		const effDur    = source.buffer.duration / source.playbackRate.value;
+		const DECLICK = 0.005;
+		const effDur  = source.buffer.duration / source.playbackRate.value;
 		source.start(when);
-		// Only cut (and declick) when the step ends before the slice naturally
-		// would. A shorter (effective) slice just rings out, leaving a gap.
-		if (typeof stopAt === 'number' && stopAt > when && stopAt < when + effDur) {
+		if (typeof stopAt === 'number' && stopAt > when && (declick || stopAt < when + effDur)) {
 			voiceGain.gain.setValueAtTime(1, Math.max(when, stopAt - DECLICK));
 			voiceGain.gain.linearRampToValueAtTime(0, stopAt);
 			source.stop(stopAt + DECLICK);
@@ -177,6 +178,11 @@ class AudioEngine extends EventTarget {
 			if (i !== -1) this.scheduledSources.splice(i, 1);
 		};
 		return source;
+	}
+
+	/** Convenience wrapper: schedule a raw slice by index (ring-out, no forced declick). */
+	scheduleSegment(index, when, stopAt, playbackRate = 1) {
+		return this.scheduleBuffer(this.segments[index], when, stopAt, playbackRate);
 	}
 
 	/**

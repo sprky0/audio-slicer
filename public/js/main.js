@@ -2,13 +2,41 @@ import AudioSlicerController from './audio-slicer-controller.js';
 import Transport from './transport.js';
 import Knob from './knob.js';
 import PALETTE from './palette.js';
+import { timeStretch } from './timestretch.js';
+import {
+	saveStateRaw, loadStateRaw, clearStateRaw,
+	putAudio, getAudio, deleteAudio, clearAudio,
+} from './storage.js';
 
 const slicersDiv    = document.getElementById('slicers');
 const addSlicerBtn  = document.getElementById('addSlicerBtn');
+const clearStateBtn = document.getElementById('clearStateBtn');
 let slicerCount     = 0;
 
-function createSlicer() {
+// --- Persistence: registry of live slicers + debounced save ---
+let nextSlicerId  = 0;
+const slicers     = [];     // { id, getState }
+let restoreCount  = 0;      // > 0 while restoring — suppresses save thrash
+let saveTimer     = null;
+
+function saveState() {
+	saveStateRaw({
+		version:      2,
+		nextSlicerId,
+		slicers:      slicers.map((s) => s.getState()),
+	});
+}
+
+function scheduleSave() {
+	if (restoreCount > 0) return;
+	clearTimeout(saveTimer);
+	saveTimer = setTimeout(saveState, 400);
+}
+
+function createSlicer(savedState = null) {
 	slicerCount++;
+	const id = savedState && typeof savedState.id === 'number' ? savedState.id : nextSlicerId++;
+	let currentFileName = savedState ? (savedState.fileName || null) : null;
 	const container = document.createElement('div');
 	container.className = 'slicer-container';
 
@@ -160,17 +188,31 @@ function createSlicer() {
 		min: 0,
 		max: 1,
 		step: 0.01,
-		value: 1
+		value: 1,
+		format: (v) => `${Math.round(v * 100)}%`,
 	});
 	const panKnob = new Knob({
 		label: 'Pan',
 		min: -1,
 		max: 1,
 		step: 0.01,
-		value: 0
+		value: 0,
+		format: (v) => (Math.abs(v) < 0.005 ? 'C' : (v < 0 ? `L${Math.round(-v * 100)}` : `R${Math.round(v * 100)}`)),
+	});
+	// Master pitch (semitones) — shifts every sequencer step; per-step offsets stack
+	// on top. Center detent at 0, double-click to reset.
+	const pitchKnob = new Knob({
+		label: 'Pitch',
+		min: -5,
+		max: 5,
+		step: 1,
+		value: 0,
+		detent: 0,
+		signed: true,
 	});
 	controls.appendChild(volumeKnob.getElement());
 	controls.appendChild(panKnob.getElement());
+	controls.appendChild(pitchKnob.getElement());
 
 	container.appendChild(controls);
 	slicersDiv.appendChild(container);
@@ -254,14 +296,24 @@ function createSlicer() {
 		if (container.parentNode) {
 			container.parentNode.removeChild(container);
 		}
+		const idx = slicers.findIndex((s) => s.id === id);
+		if (idx !== -1) slicers.splice(idx, 1);
+		deleteAudio('audio-' + id);
+		scheduleSave();
 	});
 
 	// --- Knob event wiring ---
 	volumeKnob.addEventListener('change', (e) => {
 		slicer.setVolume(e.detail);
+		scheduleSave();
 	});
 	panKnob.addEventListener('change', (e) => {
 		slicer.setPan(e.detail);
+		scheduleSave();
+	});
+	pitchKnob.addEventListener('change', (e) => {
+		masterPitch = e.detail;
+		scheduleSave();
 	});
 
 	// File loading
@@ -271,6 +323,9 @@ function createSlicer() {
 			await slicer.loadFile(file);
 			sliceBtn.disabled = false;
 			deriveTransport(0, 1, parseInt(subdivisionsSelect.value, 10));
+			currentFileName = file.name;
+			await putAudio('audio-' + id, file);
+			scheduleSave();
 		}
 	});
 
@@ -298,6 +353,7 @@ function createSlicer() {
 		const actualEnd   = sliderToActual(sliderEnd);
 		slicer.slice(actualStart, actualEnd, subdivisions, opts);
 		deriveTransport(actualStart, actualEnd, subdivisions);
+		scheduleSave();
 	};
 
 	const setStart = (raw) => {
@@ -476,14 +532,120 @@ function createSlicer() {
 	let divisionDenom = 16;
 	let bpmManual     = false;
 	let divisionManual= false;
+	let masterPitch   = 0;             // semitones; per-step offsets stack on top
 
 	const stepSec = () => (60 / bpm) * (4 / divisionDenom);
 
-	// Fill strategy: how each step's slice is fit into its step. Current mode is
-	// "repitch" — scale playback rate by the tempo ratio so the slice fills the
-	// space created by a BPM change (rate 1 at the original tempo). This is the
-	// single swap point for future fill modes (gap / time-stretch / per-slice).
-	const playbackRateForStep = (/* sliceIdx */) => (originalBPM > 0 ? bpm / originalBPM : 1);
+	// --- Time-stretch / pitch cache ---
+	// Pre-rendered, pitch-preserving stretched buffers keyed by slice index + a
+	// quantized stretch factor (~2% — sub-perceptual, keeps the cache tiny during a
+	// BPM sweep). Cleared whenever the engine re-slices (segments[] are replaced, so
+	// a positional key would otherwise return stale audio). LRU-capped.
+	const STRETCH_CACHE_MAX = 128;
+	const stretchCache = new Map();          // key -> AudioBuffer
+	const stretchPending = new Set();        // keys with an async build in flight
+	const clampPitch = (s) => Math.max(-12, Math.min(12, s));
+	const quantStretch = (f) => Math.round(f * 50) / 50;
+
+	const cacheGet = (key) => {
+		if (!stretchCache.has(key)) return undefined;
+		const buf = stretchCache.get(key);   // refresh LRU recency
+		stretchCache.delete(key);
+		stretchCache.set(key, buf);
+		return buf;
+	};
+	const cacheSet = (key, buf) => {
+		stretchCache.set(key, buf);
+		while (stretchCache.size > STRETCH_CACHE_MAX) {
+			stretchCache.delete(stretchCache.keys().next().value);
+		}
+	};
+
+	const buildStretchedBuffer = (sliceIdx, factor) => {
+		const segs = slicer.engine.getSegments();
+		const src  = segs && segs[sliceIdx];
+		if (!src) return null;
+		const channels = [];
+		for (let c = 0; c < src.numberOfChannels; c++) channels.push(src.getChannelData(c));
+		const stretched = timeStretch(channels, factor);
+		const out = slicer.engine.audioContext.createBuffer(stretched.length, stretched[0].length, src.sampleRate);
+		for (let c = 0; c < stretched.length; c++) out.copyToChannel(stretched[c], c);
+		return out;
+	};
+
+	// Return a cached stretched buffer, or null (and kick an async build off the
+	// scheduler tick) on a miss.
+	const getStretched = (sliceIdx, factor) => {
+		const key = `${sliceIdx}:${factor}`;
+		const hit = cacheGet(key);
+		if (hit) return hit;
+		if (!stretchPending.has(key)) {
+			stretchPending.add(key);
+			setTimeout(() => {
+				try {
+					const buf = buildStretchedBuffer(sliceIdx, factor);
+					if (buf) cacheSet(key, buf);
+				} catch (err) {
+					console.warn('time-stretch failed:', err);
+				} finally {
+					stretchPending.delete(key);
+				}
+			}, 0);
+		}
+		return null;
+	};
+
+	// Transport policy: resolve a step to a ready-to-play buffer + rate.
+	const getStepPlayback = (i, stepSecVal) => {
+		const step = seq.steps[i];
+		if (!step) return null;
+		const sliceIdx = step.slice;
+		const segs     = slicer.engine.getSegments();
+		const enabled  = slicer.engine.getEnabledSegments();
+		if (!(segs && sliceIdx >= 0 && sliceIdx < segs.length && enabled[sliceIdx])) {
+			return { sliceIdx, buffer: null, playbackRate: 1, effDur: stepSecVal, fill: false };
+		}
+		const naturalDur  = segs[sliceIdx].duration;
+		const fillStretch = naturalDur > 0 ? stepSecVal / naturalDur : 1;
+		const eff         = clampPitch(masterPitch + (step.offset || 0));
+		const P           = Math.pow(2, eff / 12);
+		const rawFactor   = fillStretch * P;
+
+		// No stretch and no pitch shift → play the raw slice (today's behavior).
+		if (Math.abs(rawFactor - 1) < 0.01 && Math.abs(P - 1) < 1e-6) {
+			return { sliceIdx, buffer: segs[sliceIdx], playbackRate: 1, effDur: naturalDur, fill: false };
+		}
+
+		const buffer = getStretched(sliceIdx, quantStretch(rawFactor));
+		if (buffer) {
+			return { sliceIdx, buffer, playbackRate: P, effDur: stepSecVal, fill: true };
+		}
+		// Cache miss: repitch-fill the raw slice for this one pass (today's fill —
+		// rate = naturalDur/stepSec fills the step), snaps to pitch-preserving once
+		// the async build lands.
+		return { sliceIdx, buffer: segs[sliceIdx], playbackRate: fillStretch > 0 ? 1 / fillStretch : 1, effDur: stepSecVal, fill: false };
+	};
+
+	// Re-slicing replaces segments[]; positional cache keys would go stale.
+	// When the slice COUNT changes (new file, or subdivisions changed) we also
+	// prepopulate the sequence with all slices in order — a useful default. Pure
+	// re-slices that keep the same count (slider drags, cut) leave the sequence
+	// alone. Restore is skipped (the saved sequence wins).
+	let lastSegCount = 0;
+	slicer.engine.addEventListener('segmentsliced', () => {
+		stretchCache.clear();
+		stretchPending.clear();
+		const n = (slicer.engine.getSegments() || []).length;
+		if (n !== lastSegCount) {
+			lastSegCount = n;
+			if (restoreCount === 0 && n > 0) {
+				seq.steps  = Array.from({ length: n }, (_, i) => ({ slice: i, offset: 0 }));
+				seq.cursor = null;
+				updateSeqMode();
+				renderSequencer();
+			}
+		}
+	});
 
 	const updateBpmResetBtn = () => {
 		const show = bpmManual && isFinite(originalBPM) && originalBPM > 0;
@@ -518,6 +680,7 @@ function createSlicer() {
 			bpm = v;
 			bpmManual = true;
 			updateBpmResetBtn();
+			scheduleSave();
 		}
 	});
 	bpmResetBtn.addEventListener('click', () => {
@@ -525,10 +688,12 @@ function createSlicer() {
 		bpmManual = false;
 		bpmInput.value = bpm.toFixed(2);
 		updateBpmResetBtn();
+		scheduleSave();
 	});
 	divisionSelect.addEventListener('change', () => {
 		divisionDenom  = parseInt(divisionSelect.value, 10);
 		divisionManual = true;
+		scheduleSave();
 	});
 
 	// Drag-and-drop state lives outside of renderSequencer so it survives re-renders.
@@ -538,6 +703,16 @@ function createSlicer() {
 	// longer paints it). Toggling directly avoids a full DOM rebuild every step.
 	// Self-healing: if renderSequencer rebuilds the row mid-play, playingStepEl
 	// points at a detached node and the next frame swaps onto the fresh node.
+	const updatePitchBadge = (badge, offset) => {
+		if (offset) {
+			badge.textContent   = (offset > 0 ? '+' : '') + offset;
+			badge.style.display = '';
+		} else {
+			badge.textContent   = '';
+			badge.style.display = 'none';
+		}
+	};
+
 	let playingStepEl = null;
 	const setPlayingStep = (idx) => {
 		const child = (idx >= 0 && idx < seqStepsRow.children.length) ? seqStepsRow.children[idx] : null;
@@ -589,8 +764,9 @@ function createSlicer() {
 		if (to < 0) to = 0;
 		if (to > seq.steps.length) to = seq.steps.length;
 
-		const sliceIdx = seq.steps[from];
-		seq.steps.splice(to, 0, sliceIdx);
+		// Deep-copy so the clone's pitch offset is independent of the source.
+		const item = { ...seq.steps[from] };
+		seq.steps.splice(to, 0, item);
 
 		// Anything at index >= `to` shifted right by 1 — including the selection.
 		if (seq.cursor !== null) {
@@ -604,16 +780,45 @@ function createSlicer() {
 	const renderSequencer = () => {
 		seqStepsRow.innerHTML = '';
 
+		// One column per slice: 2 slices → 2 columns/row, 16 slices → 16/row. Steps
+		// beyond the slice count wrap to the next row.
+		const cols = (slicer.engine.getSegments() || []).length || parseInt(subdivisionsSelect.value, 10) || 1;
+		seqStepsRow.style.setProperty('--seq-cols', cols);
+
 		for (let i = 0; i < seq.steps.length; i++) {
-			const sliceIdx = seq.steps[i];
+			const step     = seq.steps[i];
+			const sliceIdx = step.slice;
 			const stepBox  = document.createElement('div');
 			stepBox.className   = 'seq-step';
 			stepBox.textContent = String(sliceIdx + 1);
 			stepBox.style.background = PALETTE[sliceIdx % PALETTE.length];
-			stepBox.title       = 'Click to set insertion cursor here. Drag to reorder. Shift-click to delete.';
+			stepBox.title       = 'Click: cursor · Shift-click: delete · Drag: reorder · Scroll: pitch · Dbl-click: reset pitch';
 			// Structural edits are disabled during playback (see onStepVisual / setPlayingStep).
 			stepBox.draggable   = !seq.isPlaying;
 			if (seq.cursor === i + 1)      stepBox.classList.add('selected');
+
+			// Pitch-offset badge (shown only when non-zero).
+			const badge = document.createElement('span');
+			badge.className = 'seq-step-pitch';
+			updatePitchBadge(badge, step.offset || 0);
+			stepBox.appendChild(badge);
+
+			// Wheel over a step nudges its pitch offset (±5), independent of master.
+			stepBox.addEventListener('wheel', (ev) => {
+				ev.preventDefault();
+				const dir = ev.deltaY < 0 ? 1 : -1;
+				step.offset = Math.max(-5, Math.min(5, (step.offset || 0) + dir));
+				updatePitchBadge(badge, step.offset);
+				scheduleSave();
+			}, { passive: false });
+
+			// Double-click resets this step's pitch offset to 0 (follow master).
+			stepBox.addEventListener('dblclick', (ev) => {
+				ev.preventDefault();
+				step.offset = 0;
+				updatePitchBadge(badge, 0);
+				scheduleSave();
+			});
 
 			stepBox.addEventListener('click', (ev) => {
 				if (seq.isPlaying) return;
@@ -723,6 +928,8 @@ function createSlicer() {
 				: `after step ${pos}`;
 			seqStatus.textContent = `Add mode — clicking a slice inserts ${where}.`;
 		}
+
+		scheduleSave();
 	};
 
 	const removeStep = (i) => {
@@ -737,7 +944,7 @@ function createSlicer() {
 
 	const addStepAtCursor = (sliceIdx) => {
 		if (seq.cursor === null) return;
-		seq.steps.splice(seq.cursor, 0, sliceIdx);
+		seq.steps.splice(seq.cursor, 0, { slice: sliceIdx, offset: 0 });
 		seq.cursor += 1;
 		renderSequencer();
 	};
@@ -758,7 +965,7 @@ function createSlicer() {
 		engine:          slicer.engine,
 		getSteps:        () => seq.steps,
 		getStepSec:      stepSec,
-		getPlaybackRate: playbackRateForStep,
+		getStepPlayback: getStepPlayback,
 		isLooping:       () => seq.loop,
 		onStepVisual: (step, sliceIdx, frac) => {
 			setPlayingStep(step);
@@ -810,6 +1017,7 @@ function createSlicer() {
 		seq.loop = !seq.loop;
 		seqLoopBtn.classList.toggle('active', seq.loop);
 		seqLoopBtn.setAttribute('aria-pressed', String(seq.loop));
+		scheduleSave();
 	});
 	seqClearBtn.addEventListener('click', () => {
 		stopSeqPlayback();
@@ -819,10 +1027,110 @@ function createSlicer() {
 		renderSequencer();
 	});
 
+	// --- Persistence: expose this slicer's serializable state + register it ---
+	const getState = () => ({
+		id,
+		fileName:       currentFileName,
+		virtualStart,
+		virtualEnd,
+		start:          parseFloat(startInput.value),
+		end:            parseFloat(endInput.value),
+		subdivisions:   parseInt(subdivisionsSelect.value, 10),
+		bpm,
+		divisionDenom,
+		bpmManual,
+		divisionManual,
+		volume:         volumeKnob.value,
+		pan:            panKnob.value,
+		masterPitch,
+		seq:            {
+			steps: seq.steps.map((s) => ({ slice: s.slice, offset: s.offset || 0 })),
+			loop:  seq.loop,
+		},
+	});
+	slicers.push({ id, getState });
+
+	if (savedState) {
+		// Settings that don't need the decoded audio buffer — apply synchronously.
+		if (Number.isFinite(savedState.subdivisions)) subdivisionsSelect.value = String(savedState.subdivisions);
+		if (Number.isFinite(savedState.start))        startInput.value = savedState.start;
+		if (Number.isFinite(savedState.end))          endInput.value   = savedState.end;
+		startSlider.value = startInput.value;
+		endSlider.value   = endInput.value;
+		if (Number.isFinite(savedState.virtualStart)) virtualStart = savedState.virtualStart;
+		if (Number.isFinite(savedState.virtualEnd))   virtualEnd   = savedState.virtualEnd;
+
+		if (Number.isFinite(savedState.bpm))           { bpm = savedState.bpm; bpmInput.value = bpm.toFixed(2); }
+		if (Number.isFinite(savedState.divisionDenom)) { divisionDenom = savedState.divisionDenom; divisionSelect.value = String(divisionDenom); }
+		bpmManual      = !!savedState.bpmManual;
+		divisionManual = !!savedState.divisionManual;
+		updateBpmResetBtn();
+
+		if (Number.isFinite(savedState.volume)) { volumeKnob.setValue(savedState.volume); slicer.setVolume(savedState.volume); }
+		if (Number.isFinite(savedState.pan))    { panKnob.setValue(savedState.pan);       slicer.setPan(savedState.pan); }
+		if (Number.isFinite(savedState.masterPitch)) { masterPitch = savedState.masterPitch; pitchKnob.setValue(masterPitch); }
+
+		if (savedState.seq) {
+			// Migrate v1 bare-number steps → { slice, offset }.
+			seq.steps = Array.isArray(savedState.seq.steps)
+				? savedState.seq.steps.map((s) => (typeof s === 'number'
+					? { slice: s, offset: 0 }
+					: { slice: s.slice, offset: s.offset || 0 }))
+				: [];
+			seq.loop  = !!savedState.seq.loop;
+			seqLoopBtn.classList.toggle('active', seq.loop);
+			seqLoopBtn.setAttribute('aria-pressed', String(seq.loop));
+		}
+
+		// Re-load + re-slice the audio from IndexedDB, then re-apply tempo.
+		restoreCount++;
+		(async () => {
+			try {
+				const blob = await getAudio('audio-' + id);
+				if (blob) {
+					await slicer.loadFile(blob);
+					slicer.setView(virtualStart, virtualEnd);
+					// Re-slice with the saved window/subdivisions. applyRange →
+					// deriveTransport recomputes originalBPM and respects bpmManual.
+					applyRange(parseFloat(startInput.value), parseFloat(endInput.value), { keepPlayhead: false });
+					bpmInput.value = bpm.toFixed(2);
+					updateBpmResetBtn();
+					sliceBtn.disabled = false;
+					renderSequencer();
+				} else {
+					console.warn(`No saved audio for slicer ${id} (${currentFileName || 'unknown'}) — restored silent.`);
+				}
+			} catch (err) {
+				console.warn('Failed to restore audio for slicer ' + id + ':', err);
+			} finally {
+				restoreCount--;
+				if (restoreCount === 0) saveState();
+			}
+		})();
+	}
+
 	renderSequencer();
 }
 
-addSlicerBtn.addEventListener('click', createSlicer);
+addSlicerBtn.addEventListener('click', () => createSlicer());
 
-// Create one slicer by default
-createSlicer();
+clearStateBtn.addEventListener('click', async () => {
+	if (!window.confirm('Clear all saved slicers and audio? This cannot be undone.')) return;
+	clearStateRaw();
+	await clearAudio();
+	location.reload();
+});
+
+// Flush the small settings JSON on the way out (audio is persisted at load time).
+window.addEventListener('pagehide', saveState);
+window.addEventListener('beforeunload', saveState);
+
+// Restore saved slicers if any, otherwise start with one empty slicer.
+const savedAll = loadStateRaw();
+if (savedAll && Array.isArray(savedAll.slicers) && savedAll.slicers.length) {
+	const maxId  = savedAll.slicers.reduce((m, st) => Math.max(m, Number.isFinite(st.id) ? st.id : -1), -1);
+	nextSlicerId = Number.isFinite(savedAll.nextSlicerId) ? Math.max(savedAll.nextSlicerId, maxId + 1) : maxId + 1;
+	savedAll.slicers.forEach((st) => createSlicer(st));
+} else {
+	createSlicer();
+}

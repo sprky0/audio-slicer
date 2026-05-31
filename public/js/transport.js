@@ -13,11 +13,11 @@
  *   engine        AudioEngine instance (owns the AudioContext + scheduleSegment)
  *   getSteps      () => number[]   live array of slice indices to play
  *   getStepSec       () => number   seconds per step (from BPM + division)
- *   getPlaybackRate  (sliceIdx) => number   per-step playback-rate policy (the
- *                    "fill" strategy — see main.js). Defaults to 1 (natural).
- *                    This is the seam for alternate fill modes (gap, repitch,
- *                    time-stretch, …): the engine just applies the returned
- *                    rate, the policy lives outside.
+ *   getStepPlayback  (i, stepSec) => { sliceIdx, buffer, playbackRate, effDur, fill } | null
+ *                    The fill/pitch policy (lives in main.js): resolves a step to
+ *                    a ready-to-play buffer + rate (time-stretch + pitch shift,
+ *                    cached), or null for a silent slot. The engine just plays it,
+ *                    so all DSP stays outside the Transport.
  *   isLooping        () => boolean  whether to wrap at the end
  *   onStepVisual     (step, sliceIdx, frac) => void   per-frame visual update
  *   onStop           () => void     fired once when playback ends/stops
@@ -27,7 +27,7 @@ class Transport {
 		this.engine          = opts.engine;
 		this.getSteps        = opts.getSteps;
 		this.getStepSec      = opts.getStepSec;
-		this.getPlaybackRate = opts.getPlaybackRate || (() => 1);
+		this.getStepPlayback = opts.getStepPlayback;
 		this.isLooping       = opts.isLooping;
 		this.onStepVisual    = opts.onStepVisual;
 		this.onStop          = opts.onStop;
@@ -96,23 +96,26 @@ class Transport {
 	}
 
 	_scheduleStep(i, when, stepSec) {
-		const steps    = this.getSteps();
-		const sliceIdx = steps[i];
-		const segs     = this.engine.getSegments();
-		const enabled  = this.engine.getEnabledSegments();
-
-		// Schedule audio only if the slice index is in range and enabled. Either
-		// way we still record the time slot below so visuals + timing advance
+		// The policy resolves the step to a ready buffer + rate (or null = silent).
+		// We always record the time slot so visuals + timing advance even on silence
 		// (an out-of-range or disabled step is a silent slot, not a skipped one).
-		// effDur = how long the slice is actually audible (buffer length scaled by
-		// playback rate); the visual playhead sweeps over this, not the raw step.
-		let effDur = stepSec;
-		if (segs && sliceIdx >= 0 && sliceIdx < segs.length && enabled[sliceIdx]) {
-			const rate = this.getPlaybackRate(sliceIdx) || 1;
-			this.engine.scheduleSegment(sliceIdx, when, when + stepSec, rate);
-			effDur = segs[sliceIdx].duration / rate;
+		// effDur = how long the slice is actually audible; the visual playhead
+		// sweeps over this, not necessarily the whole step.
+		const r = this.getStepPlayback(i, stepSec);
+		if (!r) {
+			this.noteQueue.push({ step: i, sliceIdx: -1, time: when, stopAt: when + stepSec, effDur: stepSec });
+			return;
 		}
-		this.noteQueue.push({ step: i, sliceIdx, time: when, stopAt: when + stepSec, effDur });
+		if (r.buffer) {
+			this.engine.scheduleBuffer(r.buffer, when, when + stepSec, r.playbackRate || 1, { declick: !!r.fill });
+		}
+		this.noteQueue.push({
+			step:     i,
+			sliceIdx: r.sliceIdx,
+			time:     when,
+			stopAt:   when + stepSec,
+			effDur:   r.effDur != null ? r.effDur : stepSec,
+		});
 	}
 
 	_visualLoop() {
