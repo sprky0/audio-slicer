@@ -318,7 +318,8 @@ button:disabled {
 	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
 	cursor: grab;
 	user-select: none;
-	overflow: hidden;
+	/* No overflow clip: the start/end flag handles sit on the slice edges and
+	   straddle the boundary, so they must be allowed to paint past the tile box. */
 	border: 2px solid transparent;
 	/* Subtle seam between adjacent slices without shifting layout. */
 	box-shadow: inset -1px 0 0 0 rgba(0, 0, 0, 0.55);
@@ -382,31 +383,54 @@ button:disabled {
 	z-index: 2;
 }
 
-/* Resize handles: one on each edge (start = left, end = right). Subtle until
-   the tile is hovered, so two grips per slice don't clutter the row. */
+/* Resize handles: a coloured line + flag on each slice edge, echoing the
+   waveform canvas — green = start (drag back), red = end (drag forward).
+   Hidden until the slice is hovered (desktop) or tapped (touch: .handles-visible),
+   so two grips per slice don't clutter the row. Centred on the boundary. */
 .seq-tile-resize {
 	position: absolute;
 	top: 0;
-	width: 9px;
+	width: 16px;
 	height: 100%;
 	cursor: ew-resize;
-	z-index: 3;
+	z-index: 4;
 	opacity: 0;
+	pointer-events: none;   /* invisible handles must not steal taps/clicks */
 	transition: opacity var(--transition-fast);
+	touch-action: none;
 }
-.seq-tile-resize.start { left: -1px; }
-.seq-tile-resize.end   { right: -1px; }
-.seq-tile:hover .seq-tile-resize { opacity: 1; }
+.seq-tile-resize.start { left:  -8px; color: #2ecc40; }  /* green, left boundary  */
+.seq-tile-resize.end   { right: -8px; color: #e74c3c; }  /* red,   right boundary */
+
+.seq-tile:hover .seq-tile-resize,
+.seq-tile.handles-visible .seq-tile-resize {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+/* Vertical line on the boundary. */
 .seq-tile-resize::after {
 	content: '';
 	position: absolute;
-	top: 25%;
+	top: 0;
 	left: 50%;
 	transform: translateX(-50%);
-	width: 2px;
-	height: 50%;
-	background: rgba(255, 255, 255, 0.7);
-	border-radius: 1px;
+	width: 3px;
+	height: 100%;
+	background: currentColor;
+}
+/* Flag: triangle pointing down, sitting at the top of the line. */
+.seq-tile-resize::before {
+	content: '';
+	position: absolute;
+	top: 0;
+	left: 50%;
+	transform: translateX(-50%);
+	width: 0;
+	height: 0;
+	border-left:  6px solid transparent;
+	border-right: 6px solid transparent;
+	border-top:   9px solid currentColor;
 }
 
 /* Per-tile pitch-offset badge (top-right corner; hidden when offset is 0). */
