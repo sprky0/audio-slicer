@@ -382,16 +382,21 @@ button:disabled {
 	z-index: 2;
 }
 
-/* Resize handle on the shared right boundary. */
+/* Resize handles: one on each edge (start = left, end = right). Subtle until
+   the tile is hovered, so two grips per slice don't clutter the row. */
 .seq-tile-resize {
 	position: absolute;
 	top: 0;
-	right: -3px;
-	width: 8px;
+	width: 9px;
 	height: 100%;
 	cursor: ew-resize;
 	z-index: 3;
+	opacity: 0;
+	transition: opacity var(--transition-fast);
 }
+.seq-tile-resize.start { left: -1px; }
+.seq-tile-resize.end   { right: -1px; }
+.seq-tile:hover .seq-tile-resize { opacity: 1; }
 .seq-tile-resize::after {
 	content: '';
 	position: absolute;
@@ -400,7 +405,7 @@ button:disabled {
 	transform: translateX(-50%);
 	width: 2px;
 	height: 50%;
-	background: rgba(255, 255, 255, 0.55);
+	background: rgba(255, 255, 255, 0.7);
 	border-radius: 1px;
 }
 

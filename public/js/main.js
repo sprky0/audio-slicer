@@ -768,6 +768,9 @@ function createSlicer(savedState = null) {
 
 	// Drag state for HTML5 reorder lives outside renderSequencer so it survives re-renders.
 	let dragFromIdx = null;
+	// True while an edge-resize pointer drag is active — suppresses the tile's
+	// native reorder drag (dragstart) so the two gestures never collide.
+	let resizing    = false;
 
 	const updatePitchBadge = (badge, offset) => {
 		if (offset) {
@@ -796,7 +799,10 @@ function createSlicer(savedState = null) {
 			.forEach((el) => el.classList.remove('drop-before', 'drop-after'));
 	};
 
-	// --- Tile edits (all conserve Σ w === U, so the loop stays one bar) ---
+	// --- Tile edits ---
+	// Each tile owns an independent source window [src, src+w) into the cut. Edits
+	// keep every tile within the cut (0 ≤ src, src+w ≤ U) and w ≥ 1. The loop length
+	// is Σ w steps and varies as slices grow/shrink (no neighbour compensation).
 
 	// Reorder: pull tile `from` out and reinsert at `to` (carries its src/w/offset).
 	const moveTile = (from, to) => {
@@ -810,31 +816,21 @@ function createSlicer(savedState = null) {
 		renderSequencer();
 	};
 
-	// Resize: transfer `delta` units across the boundary between tile i and i+1.
-	// delta>0 grows tile i (eats forward into source), shrinks i+1; both stay ≥ 1.
-	const resizeBoundary = (i, delta) => {
-		const a = seq.tiles[i];
-		const b = seq.tiles[i + 1];
-		if (!a || !b) return false;
-		let d = delta;
-		if (d > 0) d = Math.min(d,  b.w - 1);
-		else       d = Math.max(d, -(a.w - 1));
-		if (d === 0) return false;
-		a.w += d;
-		b.w -= d;
-		return true;
-	};
-
 	// Merge tile i into its left neighbour (or the right one if it's the first),
 	// combining widths — the quick way down from 16 unit-tiles to a few wide slices.
+	// The kept tile's window stays within the cut (its src may not be contiguous
+	// with the absorbed one after reordering, so the combined width is capped).
 	const mergeTile = (i) => {
 		if (seq.tiles.length <= 1 || i < 0 || i >= seq.tiles.length) return;
+		const U = unitCount() || 1;
 		if (i > 0) {
-			seq.tiles[i - 1].w += seq.tiles[i].w;   // left neighbour extends forward
+			const a = seq.tiles[i - 1];               // left neighbour extends forward
+			a.w = Math.min(a.w + seq.tiles[i].w, U - a.src);
 			seq.tiles.splice(i, 1);
 		} else {
-			seq.tiles[1].src = seq.tiles[0].src;     // absorb into the right neighbour
-			seq.tiles[1].w  += seq.tiles[0].w;
+			const b = seq.tiles[1];                   // absorb into the right neighbour
+			b.src = seq.tiles[0].src;
+			b.w   = Math.min(b.w + seq.tiles[0].w, U - b.src);
 			seq.tiles.splice(0, 1);
 		}
 		renderSequencer();
@@ -924,7 +920,6 @@ function createSlicer(savedState = null) {
 	const renderSequencer = () => {
 		seqStepsRow.innerHTML = '';
 		const U    = unitCount() || 1;
-		const last = seq.tiles.length - 1;
 
 		for (let i = 0; i < seq.tiles.length; i++) {
 			const tile = seq.tiles[i];
@@ -1000,6 +995,8 @@ function createSlicer(savedState = null) {
 
 			// --- Reorder (HTML5 drag) ---
 			el.addEventListener('dragstart', (ev) => {
+				// An edge resize is in progress — don't let the browser hijack it with DnD.
+				if (resizing) { ev.preventDefault(); return; }
 				dragFromIdx = i;
 				ev.dataTransfer.effectAllowed = 'move';
 				ev.dataTransfer.setData('text/plain', String(i));
@@ -1032,49 +1029,64 @@ function createSlicer(savedState = null) {
 				moveTile(from, to);
 			});
 
-			// --- Resize handle on the shared boundary (every tile but the last) ---
-			if (i < last && !seq.isPlaying) {
-				const handle = document.createElement('span');
-				handle.className = 'seq-tile-resize';
-				handle.title     = 'Drag to move this boundary by units';
-				handle.draggable = false;
-				handle.addEventListener('pointerdown', (ev) => {
-					ev.preventDefault();
-					ev.stopPropagation();
-					el.draggable = false;            // suppress the reorder drag while resizing
-					const rowRect  = seqStepsRow.getBoundingClientRect();
-					const pxPerU   = rowRect.width / U;
-					const startX   = ev.clientX;
-					const aw0      = seq.tiles[i].w;
-					const bw0      = seq.tiles[i + 1].w;
-					const elA      = seqStepsRow.children[i];
-					const elB      = seqStepsRow.children[i + 1];
-					const onMove = (e2) => {
-						let d = pxPerU > 0 ? Math.round((e2.clientX - startX) / pxPerU) : 0;
-						if (d > 0) d = Math.min(d,  bw0 - 1);
-						else       d = Math.max(d, -(aw0 - 1));
-						seq.tiles[i].w     = aw0 + d;
-						seq.tiles[i + 1].w = bw0 - d;
-						if (elA) elA.style.flexGrow = String(seq.tiles[i].w);
-						if (elB) elB.style.flexGrow = String(seq.tiles[i + 1].w);
-						const cA = elA && elA.querySelector('.seq-tile-width');
-						const cB = elB && elB.querySelector('.seq-tile-width');
-						if (cA) cA.textContent = String(seq.tiles[i].w);
-						if (cB) cB.textContent = String(seq.tiles[i + 1].w);
-						// Redraw both backdrops so the waveform follows the boundary live.
-						if (elA) drawTileWave(elA.querySelector('.seq-tile-wave'), seq.tiles[i].src,     seq.tiles[i].w,     PALETTE[seq.tiles[i].src % PALETTE.length]);
-						if (elB) drawTileWave(elB.querySelector('.seq-tile-wave'), seq.tiles[i + 1].src, seq.tiles[i + 1].w, PALETTE[seq.tiles[i + 1].src % PALETTE.length]);
-					};
-					const onUp = () => {
-						window.removeEventListener('pointermove', onMove);
-						window.removeEventListener('pointerup',   onUp);
-						renderSequencer();
-						scheduleSave();
-					};
-					window.addEventListener('pointermove', onMove);
-					window.addEventListener('pointerup',   onUp);
-				});
-				el.appendChild(handle);
+			// --- Edge resize: start (drag back) + end (drag forward), bounded by cut ---
+			// Each tile owns [src, src+w). Dragging the START edge keeps the END
+			// pinned and moves src (back to 0 / forward to end-1). Dragging the END
+			// edge keeps src pinned and moves the end (forward to U / back to src+1).
+			if (!seq.isPlaying) {
+				const addHandle = (edge) => {
+					const handle = document.createElement('span');
+					handle.className = `seq-tile-resize ${edge}`;
+					handle.title     = edge === 'start'
+						? 'Drag to move this slice’s start back/forward (within the cut)'
+						: 'Drag to move this slice’s end forward/back (within the cut)';
+					handle.draggable = false;
+					handle.addEventListener('pointerdown', (ev) => {
+						ev.preventDefault();
+						ev.stopPropagation();
+						resizing     = true;
+						el.draggable = false;       // belt-and-suspenders with the dragstart guard
+						const rowRect = seqStepsRow.getBoundingClientRect();
+						const pxPerU  = rowRect.width / U;
+						const startX  = ev.clientX;
+						const src0    = seq.tiles[i].src;
+						const w0      = seq.tiles[i].w;
+						const end0    = src0 + w0;  // fixed when dragging start
+						const onMove = (e2) => {
+							const dU = pxPerU > 0 ? Math.round((e2.clientX - startX) / pxPerU) : 0;
+							const t  = seq.tiles[i];
+							if (!t) return;
+							if (edge === 'end') {
+								// src fixed; end moves within [src+1, U].
+								t.w = Math.max(1, Math.min(w0 + dU, U - src0));
+							} else {
+								// end fixed; src moves within [0, end-1].
+								const newSrc = Math.max(0, Math.min(src0 + dU, end0 - 1));
+								t.src = newSrc;
+								t.w   = end0 - newSrc;
+							}
+							// Update this tile's flex weight so it (and its siblings)
+							// re-proportion, then repaint every backdrop at its new width.
+							const cur = seqStepsRow.children[i];
+							if (cur) cur.style.flexGrow = String(t.w);
+							redrawTileWaves();
+							const wc = cur && cur.querySelector('.seq-tile-width');
+							if (wc) wc.textContent = String(t.w);
+						};
+						const onUp = () => {
+							window.removeEventListener('pointermove', onMove);
+							window.removeEventListener('pointerup',   onUp);
+							resizing = false;
+							renderSequencer();
+							scheduleSave();
+						};
+						window.addEventListener('pointermove', onMove);
+						window.addEventListener('pointerup',   onUp);
+					});
+					el.appendChild(handle);
+				};
+				addHandle('start');
+				addHandle('end');
 			}
 
 			seqStepsRow.appendChild(el);
@@ -1083,7 +1095,7 @@ function createSlicer(savedState = null) {
 		if (seq.isPlaying) {
 			seqStatus.textContent = `Playing slice ${seq.currentTile + 1} of ${seq.tiles.length}`;
 		} else {
-			seqStatus.textContent = `${seq.tiles.length} slices · ${totalUnits()}/${U} units`;
+			seqStatus.textContent = `${seq.tiles.length} slices · ${totalUnits()} steps/loop · grid ${U}`;
 		}
 
 		// Draw backdrops once flex layout has assigned tile widths.
@@ -1243,10 +1255,11 @@ function createSlicer(savedState = null) {
 					updateBpmResetBtn();
 					sliceBtn.disabled = false;
 					// Saved tiles win, but fall back to defaults if absent (pre-v3 save)
-					// or inconsistent with the restored unit resolution.
-					if (seq.tiles.length === 0 || totalUnits() !== unitCount()) {
-						seq.tiles = defaultTiles(unitCount());
-					}
+					// or any tile falls outside the cut at the restored resolution.
+					const Ur = unitCount();
+					const valid = seq.tiles.length > 0 &&
+						seq.tiles.every((t) => t.w >= 1 && t.src >= 0 && t.src + t.w <= Ur);
+					if (!valid) seq.tiles = defaultTiles(Ur);
 					renderSequencer();
 				} else {
 					console.warn(`No saved audio for slicer ${id} (${currentFileName || 'unknown'}) — restored silent.`);
