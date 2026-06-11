@@ -297,30 +297,45 @@ button:disabled {
 	font-size: 13px;
 }
 
-/* Tile row: one flex item per slice, width proportional to its unit span. */
+/* Tile row: one flex item per slice, width ∝ unit span. Laid edge-to-edge so the
+   row reads as one continuous waveform that rearranges with the slices. */
 .seq-steps {
 	display: flex;
 	align-items: stretch;
-	gap: 2px;
-	min-height: 56px;
+	gap: 0;
+	min-height: 84px;
+	border-radius: var(--radius-sm);
+	overflow: hidden;
 }
 
 .seq-tile {
 	position: relative;
 	flex: 1 1 0;            /* flex-grow set inline to the tile's unit width */
 	min-width: 14px;
-	height: 52px;
-	border-radius: var(--radius-sm);
-	background: var(--color-accent); /* fallback; overridden inline with palette color */
+	height: 84px;
+	background: #161616;   /* dark so the waveform backdrop pops */
 	color: var(--color-text-primary);
-	text-shadow: 0 1px 1px rgba(0, 0, 0, 0.55);
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
 	cursor: grab;
 	user-select: none;
 	overflow: hidden;
 	border: 2px solid transparent;
+	/* Subtle seam between adjacent slices without shifting layout. */
+	box-shadow: inset -1px 0 0 0 rgba(0, 0, 0, 0.55);
 	transition: border-color var(--transition-fast),
 	            transform     var(--transition-fast),
 	            opacity       var(--transition-fast);
+}
+
+/* This slice's audio, filling the tile behind the chrome. */
+.seq-tile-wave {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	display: block;
+	z-index: 0;
+	pointer-events: none;
 }
 .seq-tile:hover {
 	transform: translateY(-1px);
@@ -339,6 +354,7 @@ button:disabled {
 	font-weight: bold;
 	font-size: var(--font-size-base);
 	pointer-events: none;
+	z-index: 1;
 }
 
 /* Small unit-width readout, bottom-center. */
@@ -349,8 +365,9 @@ button:disabled {
 	right: 0;
 	text-align: center;
 	font-size: 10px;
-	opacity: 0.8;
+	opacity: 0.85;
 	pointer-events: none;
+	z-index: 1;
 }
 
 /* Mute dot (top-left). */

@@ -851,6 +851,74 @@ function createSlicer(savedState = null) {
 		renderSequencer();
 	};
 
+	// Draw a tile's own slice waveform (the source region [src, src+w) it reads)
+	// into its backdrop canvas, in the slice's palette colour. Laid edge-to-edge,
+	// the tiles read as one continuous waveform that rearranges with the slices —
+	// each tile sits 1:1 over the audio it plays.
+	const drawTileWave = (canvas, src, w, color) => {
+		if (!canvas) return;
+		const cssW = canvas.clientWidth;
+		const cssH = canvas.clientHeight;
+		if (cssW <= 0 || cssH <= 0) return;
+		const dpr = window.devicePixelRatio || 1;
+		canvas.width  = Math.max(1, Math.floor(cssW * dpr));
+		canvas.height = Math.max(1, Math.floor(cssH * dpr));
+		const ctx = canvas.getContext('2d');
+		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+		ctx.clearRect(0, 0, cssW, cssH);
+
+		const buf  = slicer.engine.audioBuffer;
+		const U    = unitCount() || 1;
+		const span = selEndFrac - selStartFrac;
+		if (!buf || !(span > 0)) return;
+		const u0 = Math.max(0, Math.min(U, src));
+		const u1 = Math.max(0, Math.min(U, src + w));
+		if (u1 <= u0) return;
+
+		const data = buf.getChannelData(0);
+		const len  = buf.length;
+		let s0 = Math.floor((selStartFrac + (u0 / U) * span) * len);
+		let s1 = Math.floor((selStartFrac + (u1 / U) * span) * len);
+		s0 = Math.max(0, Math.min(len, s0));
+		s1 = Math.max(s0 + 1, Math.min(len, s1));
+		const spp = (s1 - s0) / cssW;
+		const amp = cssH / 2;
+		const mid = cssH / 2;
+
+		ctx.strokeStyle = color;
+		ctx.lineWidth   = 1;
+		ctx.beginPath();
+		for (let px = 0; px < cssW; px++) {
+			let a = s0 + Math.floor(px * spp);
+			let b = s0 + Math.floor((px + 1) * spp) + 1;
+			if (a < s0) a = s0;
+			if (b > s1) b = s1;
+			if (b <= a) b = a + 1;
+			let min = 1.0, max = -1.0;
+			for (let j = a; j < b; j++) {
+				const v = data[j];
+				if (v < min) min = v;
+				if (v > max) max = v;
+			}
+			if (min > max) { min = 0; max = 0; }
+			const x = px + 0.5;
+			ctx.moveTo(x, mid + min * amp);
+			ctx.lineTo(x, mid + max * amp);
+		}
+		ctx.stroke();
+	};
+
+	// Redraw every tile's backdrop (children are tiles in order).
+	const redrawTileWaves = () => {
+		let idx = 0;
+		for (const el of seqStepsRow.children) {
+			if (!el.classList.contains('seq-tile')) continue;
+			const t = seq.tiles[idx++];
+			if (!t) continue;
+			drawTileWave(el.querySelector('.seq-tile-wave'), t.src, t.w, PALETTE[t.src % PALETTE.length]);
+		}
+	};
+
 	const TILE_TITLE = 'Drag: reorder · drag right edge: resize · dbl-click: split · shift-click: merge · scroll: pitch';
 
 	const renderSequencer = () => {
@@ -864,10 +932,14 @@ function createSlicer(savedState = null) {
 			el.className        = 'seq-tile';
 			el.style.flexGrow   = String(tile.w);  // width ∝ unit span (Σ flexGrow = U)
 			el.style.flexBasis  = '0';
-			el.style.background  = PALETTE[tile.src % PALETTE.length];
 			el.title             = TILE_TITLE;
 			el.draggable         = !seq.isPlaying;
 			if (tile.muted) el.classList.add('muted');
+
+			// Waveform backdrop: this slice's own audio, drawn after layout settles.
+			const wave = document.createElement('canvas');
+			wave.className = 'seq-tile-wave';
+			el.appendChild(wave);
 
 			const label = document.createElement('span');
 			label.className   = 'seq-tile-label';
@@ -989,6 +1061,9 @@ function createSlicer(savedState = null) {
 						const cB = elB && elB.querySelector('.seq-tile-width');
 						if (cA) cA.textContent = String(seq.tiles[i].w);
 						if (cB) cB.textContent = String(seq.tiles[i + 1].w);
+						// Redraw both backdrops so the waveform follows the boundary live.
+						if (elA) drawTileWave(elA.querySelector('.seq-tile-wave'), seq.tiles[i].src,     seq.tiles[i].w,     PALETTE[seq.tiles[i].src % PALETTE.length]);
+						if (elB) drawTileWave(elB.querySelector('.seq-tile-wave'), seq.tiles[i + 1].src, seq.tiles[i + 1].w, PALETTE[seq.tiles[i + 1].src % PALETTE.length]);
 					};
 					const onUp = () => {
 						window.removeEventListener('pointermove', onMove);
@@ -1011,8 +1086,15 @@ function createSlicer(savedState = null) {
 			seqStatus.textContent = `${seq.tiles.length} slices · ${totalUnits()}/${U} units`;
 		}
 
+		// Draw backdrops once flex layout has assigned tile widths.
+		requestAnimationFrame(redrawTileWaves);
+
 		scheduleSave();
 	};
+
+	// Redraw tile backdrops when the row's width changes (responsive container).
+	const tileRowResizeObs = new ResizeObserver(() => requestAnimationFrame(redrawTileWaves));
+	tileRowResizeObs.observe(seqStepsRow);
 
 	// --- Sequencer playback (sample-accurate, via Transport on the audio clock) ---
 	// Map a tile's unit span [src, src+w) to the real-buffer region it sounds, so the
