@@ -19,11 +19,8 @@ class AudioSlicerController {
 		this.pausedSegment      = null;
 		this.pausedOffset       = 0;
 
-		// Sequencer integration flags. When set by an outside controller
-		// (e.g. the sequencer in main.js):
-		//   sequencerMode    -> ignore segmentclick auto-play (caller adds to lane instead)
-		//   sequencerPlaying -> ignore segmentend auto-advance (caller drives timing)
-		this.sequencerMode      = false;
+		// Set by the sequencer in main.js while it drives its own timing — tells the
+		// free-run engine handlers not to auto-advance on segmentend.
 		this.sequencerPlaying   = false;
 		// this.performanceOverlay = null;
 
@@ -44,8 +41,9 @@ class AudioSlicerController {
 			// Reset the view window to the full buffer.
 			this.setView(0, 1);
 
-			// Immediately slice but do NOT play first segment.
-			this.slice(0, 1, 2, { autoPlay: false });
+			// Immediately slice at the default unit resolution (the caller re-slices
+			// to honor the UI's selected resolution). Do NOT play first segment.
+			this.slice(0, 1, 16, { autoPlay: false });
 		} catch (err) {
 			console.error('Error loading file:', err);
 		}
@@ -139,6 +137,8 @@ class AudioSlicerController {
 			cancelAnimationFrame(this._playheadAnimId);
 			this._playheadAnimId = null;
 		}
+		const region = this._segmentRegion(segmentIndex);
+		if (region) this.view.setPlayingRegion(region.start, region.end);
 		const update = () => {
 			if (!this.engine.isPlaying || this.engine.activeSegment !== segmentIndex) {
 				this.view.setIsPlaying(false);
@@ -154,6 +154,22 @@ class AudioSlicerController {
 			this._playheadAnimId = requestAnimationFrame(update);
 		};
 		update();
+	}
+
+	/**
+	 * Real-buffer fraction span of equal-segment `index` within the current
+	 * selection, used to drive the waveform's playing-region playhead during
+	 * free-run (Play/Pause, waveform click) playback.
+	 */
+	_segmentRegion(index) {
+		const n = this.engine.segments.length;
+		if (n <= 0 || index < 0 || index >= n) return null;
+		const s = this.view.selectionStart;
+		const e = this.view.selectionEnd;
+		return {
+			start: s + (index / n)       * (e - s),
+			end:   s + ((index + 1) / n) * (e - s),
+		};
 	}
 
 	/**
@@ -188,6 +204,7 @@ class AudioSlicerController {
 		this.view.setIsPlaying(false);
 		this.view.setIsPaused(false);
 		this.view.setPlayheadPosition(0);
+		this.view.setPlayingRegion(null);
 		// Emit playstatechange event
 		this.container.dispatchEvent(new CustomEvent('playstatechange', { detail: { state: 'stopped' } }));
 	}
@@ -243,13 +260,11 @@ class AudioSlicerController {
 			// this._updatePerformanceOverlay();
 		});
 		this.engine.addEventListener('segmentsliced', (e) => {
-			this.view.setSegments(this.engine.getSegments(), this.engine.getEnabledSegments());
-			// this._updatePerformanceOverlay();
+			// The waveform no longer draws an equal-segment strip; sequencing tiles
+			// live in the DOM (main.js). Nothing to push to the view here.
 		});
 		this.engine.addEventListener('segmentplay', (e) => {
-			this.view.setActiveSegment(e.detail.index);
-			// this._updatePerformanceOverlay();
-			// Start playhead animation for new segment
+			// Start playhead animation for new segment (it sets the playing region).
 			this._startPlayheadAnimation(e.detail.index, 0);
 		});
 		this.engine.addEventListener('segmentend', (e) => {
@@ -268,7 +283,7 @@ class AudioSlicerController {
 			if (next !== null && next !== e.detail.index) {
 				this.playSegmentAtPosition(next, 0);
 			} else {
-				this.view.setActiveSegment(-1);
+				this.view.setPlayingRegion(null);
 				if (this._playheadAnimId) {
 					cancelAnimationFrame(this._playheadAnimId);
 					this._playheadAnimId = null;
@@ -278,7 +293,6 @@ class AudioSlicerController {
 			}
 		});
 		this.engine.addEventListener('segmentenable', (e) => {
-			this.view.setEnabledSegments(this.engine.getEnabledSegments());
 			const disabledIndex = e.detail.index;
 			const isNowDisabled = !e.detail.enabled;
 			const isPlaying = this.engine.isPlaying && this.engine.activeSegment !== -1;
@@ -299,7 +313,8 @@ class AudioSlicerController {
 						this.pausedSegment = next;
 						this.pausedOffset = 0;
 						this.view.setIsPlaying(false);
-						this.view.setActiveSegment(next);
+						const region = this._segmentRegion(next);
+						if (region) this.view.setPlayingRegion(region.start, region.end);
 						this.view.setPlayheadPosition(0);
 					}
 				} else {
@@ -311,28 +326,6 @@ class AudioSlicerController {
 	}
 
 	_bindViewEvents() {
-		this.view.addEventListener('segmentclick', (e) => {
-			// Sequencer is in add mode — let the sequencer handle it.
-			if (this.sequencerMode) return;
-			// Only play if segment is enabled
-			if (this.engine.getEnabledSegments()[e.detail.index]) {
-				if (this.isPaused) {
-					// Move playhead to segment, do not play
-					this.pausedSegment = e.detail.index;
-					this.pausedOffset = 0;
-					this.view.setIsPlaying(false);
-					this.view.setActiveSegment(e.detail.index);
-					this.view.setPlayheadPosition(0);
-				} else {
-					this.playSegment(e.detail.index);
-				}
-			}
-		});
-		this.view.addEventListener('segmenttoggle', (e) => {
-			this.enableSegment(e.detail.index, e.detail.enabled);
-		});
-		// Additional events (marker movement, etc.) can be handled here.
-
 		// Waveform click-to-jump
 		this.view.addEventListener('waveformjump', (e) => {
 			const rel = e.detail.rel;
@@ -351,7 +344,8 @@ class AudioSlicerController {
 					this.pausedSegment = segmentIdx;
 					this.pausedOffset = offsetSec;
 					this.view.setIsPlaying(false);
-					this.view.setActiveSegment(segmentIdx);
+					const region = this._segmentRegion(segmentIdx);
+					if (region) this.view.setPlayingRegion(region.start, region.end);
 					this.view.setPlayheadPosition(offsetSec / segment.duration);
 				} else {
 					this.playSegmentAtPosition(segmentIdx, offsetSec);
@@ -364,7 +358,8 @@ class AudioSlicerController {
 						this.pausedSegment = next;
 						this.pausedOffset = 0;
 						this.view.setIsPlaying(false);
-						this.view.setActiveSegment(next);
+						const region = this._segmentRegion(next);
+						if (region) this.view.setPlayingRegion(region.start, region.end);
 						this.view.setPlayheadPosition(0);
 					} else {
 						this.playSegmentAtPosition(next, 0);

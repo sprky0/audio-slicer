@@ -21,7 +21,7 @@ let saveTimer     = null;
 
 function saveState() {
 	saveStateRaw({
-		version:      2,
+		version:      3,
 		nextSlicerId,
 		slicers:      slicers.map((s) => s.getState()),
 	});
@@ -106,13 +106,16 @@ function createSlicer(savedState = null) {
 	endSlider.value = 1;
 	endSlider.className = 'slicer-range-slider slicer-range-end';
 
+	// Unit resolution U: the selection (one bar) is split into this many equal
+	// units — the finest step grid. Tiles are contiguous runs of these units.
 	const subdivisionsSelect = document.createElement('select');
-	[2, 4, 8, 16].forEach(val => {
+	[2, 4, 8, 16, 32].forEach(val => {
 		const opt = document.createElement('option');
 		opt.value = val;
 		opt.textContent = val;
 		subdivisionsSelect.appendChild(opt);
 	});
+	subdivisionsSelect.value = 16;
 
 	// --- Details toggle (hides Start/End inputs + sliders behind a button) ---
 	const detailsBtn = document.createElement('button');
@@ -122,7 +125,7 @@ function createSlicer(savedState = null) {
 
 	controls.appendChild(document.createTextNode('File: '));
 	controls.appendChild(fileInput);
-	controls.appendChild(document.createTextNode(' Subdivisions: '));
+	controls.appendChild(document.createTextNode(' Units: '));
 	controls.appendChild(subdivisionsSelect);
 	controls.appendChild(sliceBtn);
 	controls.appendChild(cutBtn);
@@ -268,23 +271,21 @@ function createSlicer(savedState = null) {
 		virtualEnd   = 1;
 		slicer.setView(0, 1);
 
-		// Reset start/end/subdivisions UI
+		// Reset start/end/unit resolution UI
 		startInput.value  = 0;
 		endInput.value    = 1;
 		startSlider.value = 0;
 		endSlider.value   = 1;
-		subdivisionsSelect.value = 2;
+		subdivisionsSelect.value = 16;
 
-		// Stop playback and reset slicing
+		// Stop playback, re-slice the full buffer at the default resolution
+		// (segmentsliced → default tiles), and restore the auto-derived tempo.
 		slicer.stop();
 		playPauseBtn.textContent = 'Play';
 		isPlaying = false;
-		slicer.slice(0, 1, 2, { autoPlay: false });
-
-		// Restore auto-derived tempo.
 		bpmManual      = false;
 		divisionManual = false;
-		deriveTransport(0, 1, 2);
+		applyRange(0, 1, { autoPlay: false, keepPlayhead: false });
 	});
 
 	// --- Remove Button Logic ---
@@ -322,7 +323,16 @@ function createSlicer(savedState = null) {
 		if (file) {
 			await slicer.loadFile(file);
 			sliceBtn.disabled = false;
-			deriveTransport(0, 1, parseInt(subdivisionsSelect.value, 10));
+			// Reset selection to the whole buffer and slice at the current unit
+			// resolution (loadFile slices with a placeholder count). This drives
+			// segmentsliced → default tiles + deriveTransport.
+			virtualStart = 0;
+			virtualEnd   = 1;
+			startInput.value  = 0;
+			endInput.value    = 1;
+			startSlider.value = 0;
+			endSlider.value   = 1;
+			applyRange(0, 1, { autoPlay: false, keepPlayhead: false });
 			currentFileName = file.name;
 			await putAudio('audio-' + id, file);
 			scheduleSave();
@@ -332,6 +342,11 @@ function createSlicer(savedState = null) {
 	// --- Virtual zoom window (slider 0..1 → [virtualStart..virtualEnd] of real buffer) ---
 	let virtualStart = 0;
 	let virtualEnd   = 1;
+
+	// Currently-applied selection in real-buffer fractions (the sliced region).
+	// Region buffers + the unit grid are derived from this.
+	let selStartFrac = 0;
+	let selEndFrac   = 1;
 
 	const MIN_GAP = 0.001;
 	const clamp01 = (v) => Math.max(0, Math.min(1, v));
@@ -351,6 +366,10 @@ function createSlicer(savedState = null) {
 		if (!(sliderEnd > sliderStart) || subdivisions <= 0) return;
 		const actualStart = sliderToActual(sliderStart);
 		const actualEnd   = sliderToActual(sliderEnd);
+		// Record the applied selection BEFORE slicing — region buffers + the unit
+		// grid (built lazily during playback) read from these.
+		selStartFrac = actualStart;
+		selEndFrac   = actualEnd;
 		slicer.slice(actualStart, actualEnd, subdivisions, opts);
 		deriveTransport(actualStart, actualEnd, subdivisions);
 		scheduleSave();
@@ -449,7 +468,7 @@ function createSlicer(savedState = null) {
 	seqStopBtn.className   = 'seq-stop-btn';
 
 	const seqClearBtn = document.createElement('button');
-	seqClearBtn.textContent = 'Clear';
+	seqClearBtn.textContent = 'Reset Tiles';
 	seqClearBtn.className   = 'seq-clear-btn';
 
 	const seqLoopBtn = document.createElement('button');
@@ -512,16 +531,28 @@ function createSlicer(savedState = null) {
 	seqEl.appendChild(seqStepsRow);
 	container.appendChild(seqEl);
 
-	// Sequencer state.
-	// cursor: null = no insertion cursor (play-on-click mode).
-	//         integer 0..steps.length = insert position for next added slice.
+	// Sequencer state — an ordered list of variable-width tiles.
+	//   tile = { src, w, offset, muted }
+	//     src    : start unit (0..U-1) this tile reads source from
+	//     w      : width in units (also its playback duration = w steps)
+	//     offset : per-tile pitch offset (semitones), stacks on master
+	//     muted  : silent slot (keeps its timing)
+	// Invariant: Σ tile.w === U (unit resolution), so a loop is always one bar.
 	const seq = {
-		steps:        [],
-		cursor:       null,
+		tiles:        [],
 		isPlaying:    false,
-		currentStep:  -1,
+		currentTile:  -1,
 		loop:         false,
 	};
+
+	// Unit resolution U. After a slice the engine holds U equal unit-segments,
+	// so their count is the source of truth; fall back to the select while empty.
+	const unitCount = () => {
+		const n = (slicer.engine.getSegments() || []).length;
+		return n > 0 ? n : (parseInt(subdivisionsSelect.value, 10) || 16);
+	};
+	const defaultTiles = (n) => Array.from({ length: n }, (_, i) => ({ src: i, w: 1, offset: 0, muted: false }));
+	const totalUnits   = () => seq.tiles.reduce((sum, t) => sum + t.w, 0);
 
 	// --- Transport tempo state ---
 	// The sliced selection is treated as one bar (4 beats). On (re)slice we
@@ -561,29 +592,63 @@ function createSlicer(savedState = null) {
 		}
 	};
 
-	const buildStretchedBuffer = (sliceIdx, factor) => {
-		const segs = slicer.engine.getSegments();
-		const src  = segs && segs[sliceIdx];
-		if (!src) return null;
+	// --- Region buffers ---
+	// A tile reads `w` units of source starting at unit `src`, copied straight from
+	// the original buffer over the current selection (advances roadmap Tier 1c —
+	// no reliance on the equal-segment copies). Unit positions clamp to [0, U] so a
+	// tile that overhangs the selection (possible after reorder+resize) reads only
+	// what's inside it. Cached by `src:w`, cleared on re-slice.
+	const regionCache = new Map();
+	const getRegionBuffer = (src, w) => {
+		const buf = slicer.engine.audioBuffer;
+		if (!buf) return null;
+		const U   = unitCount();
+		const key = `${src}:${w}`;
+		const hit = regionCache.get(key);
+		if (hit) return hit;
+
+		const span = selEndFrac - selStartFrac;
+		if (!(span > 0) || U <= 0) return null;
+		const u0   = Math.max(0, Math.min(U, src));
+		const u1   = Math.max(0, Math.min(U, src + w));
+		if (u1 <= u0) return null;
+		const startSample = Math.floor((selStartFrac + (u0 / U) * span) * buf.length);
+		const endSample   = Math.floor((selStartFrac + (u1 / U) * span) * buf.length);
+		const len         = endSample - startSample;
+		if (len <= 0) return null;
+
+		const out = slicer.engine.audioContext.createBuffer(buf.numberOfChannels, len, buf.sampleRate);
+		for (let c = 0; c < buf.numberOfChannels; c++) {
+			const dst = out.getChannelData(c);
+			const srcData = buf.getChannelData(c);
+			for (let j = 0; j < len; j++) dst[j] = srcData[startSample + j];
+		}
+		regionCache.set(key, out);
+		return out;
+	};
+
+	const buildStretchedBuffer = (src, w, factor) => {
+		const region = getRegionBuffer(src, w);
+		if (!region) return null;
 		const channels = [];
-		for (let c = 0; c < src.numberOfChannels; c++) channels.push(src.getChannelData(c));
+		for (let c = 0; c < region.numberOfChannels; c++) channels.push(region.getChannelData(c));
 		const stretched = timeStretch(channels, factor);
-		const out = slicer.engine.audioContext.createBuffer(stretched.length, stretched[0].length, src.sampleRate);
+		const out = slicer.engine.audioContext.createBuffer(stretched.length, stretched[0].length, region.sampleRate);
 		for (let c = 0; c < stretched.length; c++) out.copyToChannel(stretched[c], c);
 		return out;
 	};
 
 	// Return a cached stretched buffer, or null (and kick an async build off the
 	// scheduler tick) on a miss.
-	const getStretched = (sliceIdx, factor) => {
-		const key = `${sliceIdx}:${factor}`;
+	const getStretched = (src, w, factor) => {
+		const key = `${src}:${w}:${factor}`;
 		const hit = cacheGet(key);
 		if (hit) return hit;
 		if (!stretchPending.has(key)) {
 			stretchPending.add(key);
 			setTimeout(() => {
 				try {
-					const buf = buildStretchedBuffer(sliceIdx, factor);
+					const buf = buildStretchedBuffer(src, w, factor);
 					if (buf) cacheSet(key, buf);
 				} catch (err) {
 					console.warn('time-stretch failed:', err);
@@ -595,35 +660,40 @@ function createSlicer(savedState = null) {
 		return null;
 	};
 
-	// Transport policy: resolve a step to a ready-to-play buffer + rate.
-	const getStepPlayback = (i, stepSecVal) => {
-		const step = seq.steps[i];
-		if (!step) return null;
-		const sliceIdx = step.slice;
-		const segs     = slicer.engine.getSegments();
-		const enabled  = slicer.engine.getEnabledSegments();
-		if (!(segs && sliceIdx >= 0 && sliceIdx < segs.length && enabled[sliceIdx])) {
-			return { sliceIdx, buffer: null, playbackRate: 1, effDur: stepSecVal, fill: false };
+	// Transport policy: resolve a tile to a ready-to-play buffer + rate.
+	// A width-w tile occupies `playDur = w * stepSec` and reads w units of source
+	// (`naturalDur = w * unitDur`). At the natural BPM stepSec == unitDur, so the
+	// region fills its slot raw (no stretch). The stretch factor is global
+	// (stepSec/unitDur × pitch) and only departs from 1 when BPM/pitch deviate.
+	const getTilePlayback = (tile, stepSecVal) => {
+		if (!tile) return null;
+		const playDur = (tile.w > 0 ? tile.w : 1) * stepSecVal;
+		if (tile.muted) {
+			return { buffer: null, playbackRate: 1, dur: playDur, fill: false };
 		}
-		const naturalDur  = segs[sliceIdx].duration;
-		const fillStretch = naturalDur > 0 ? stepSecVal / naturalDur : 1;
-		const eff         = clampPitch(masterPitch + (step.offset || 0));
+		const buf = slicer.engine.audioBuffer;
+		const U   = unitCount();
+		if (!buf || U <= 0) return { buffer: null, playbackRate: 1, dur: playDur, fill: false };
+
+		const unitDur     = ((selEndFrac - selStartFrac) * buf.duration) / U;
+		const naturalDur  = tile.w * unitDur;
+		const fillStretch = naturalDur > 0 ? playDur / naturalDur : 1;   // = stepSec/unitDur
+		const eff         = clampPitch(masterPitch + (tile.offset || 0));
 		const P           = Math.pow(2, eff / 12);
 		const rawFactor   = fillStretch * P;
 
-		// No stretch and no pitch shift → play the raw slice (today's behavior).
+		// No stretch and no pitch shift → play the raw region (natural tempo).
 		if (Math.abs(rawFactor - 1) < 0.01 && Math.abs(P - 1) < 1e-6) {
-			return { sliceIdx, buffer: segs[sliceIdx], playbackRate: 1, effDur: naturalDur, fill: false };
+			return { buffer: getRegionBuffer(tile.src, tile.w), playbackRate: 1, dur: playDur, fill: false };
 		}
 
-		const buffer = getStretched(sliceIdx, quantStretch(rawFactor));
+		const buffer = getStretched(tile.src, tile.w, quantStretch(rawFactor));
 		if (buffer) {
-			return { sliceIdx, buffer, playbackRate: P, effDur: stepSecVal, fill: true };
+			return { buffer, playbackRate: P, dur: playDur, fill: true };
 		}
-		// Cache miss: repitch-fill the raw slice for this one pass (today's fill —
-		// rate = naturalDur/stepSec fills the step), snaps to pitch-preserving once
-		// the async build lands.
-		return { sliceIdx, buffer: segs[sliceIdx], playbackRate: fillStretch > 0 ? 1 / fillStretch : 1, effDur: stepSecVal, fill: false };
+		// Cache miss: repitch-fill the raw region for this one pass (rate fills the
+		// slot), snaps to pitch-preserving once the async build lands.
+		return { buffer: getRegionBuffer(tile.src, tile.w), playbackRate: fillStretch > 0 ? 1 / fillStretch : 1, dur: playDur, fill: false };
 	};
 
 	// Re-slicing replaces segments[]; positional cache keys would go stale.
@@ -631,17 +701,21 @@ function createSlicer(savedState = null) {
 	// prepopulate the sequence with all slices in order — a useful default. Pure
 	// re-slices that keep the same count (slider drags, cut) leave the sequence
 	// alone. Restore is skipped (the saved sequence wins).
+	// Re-slicing changes the selection and/or unit resolution, so the cached region
+	// + stretched buffers go stale. When the resolution (U) changes we also reset to
+	// the default one-unit-per-tile layout (keeps Σ w === U). Pure re-slices that keep
+	// the same U (slider drags, cut) leave the tiles alone — their unit indices still
+	// address the new selection. Restore is skipped (the saved tiles win).
 	let lastSegCount = 0;
 	slicer.engine.addEventListener('segmentsliced', () => {
 		stretchCache.clear();
 		stretchPending.clear();
+		regionCache.clear();
 		const n = (slicer.engine.getSegments() || []).length;
 		if (n !== lastSegCount) {
 			lastSegCount = n;
 			if (restoreCount === 0 && n > 0) {
-				seq.steps  = Array.from({ length: n }, (_, i) => ({ slice: i, offset: 0 }));
-				seq.cursor = null;
-				updateSeqMode();
+				seq.tiles = defaultTiles(n);
 				renderSequencer();
 			}
 		}
@@ -670,10 +744,6 @@ function createSlicer(savedState = null) {
 		updateBpmResetBtn();
 	};
 
-	const updateSeqMode = () => {
-		slicer.sequencerMode = (seq.cursor !== null);
-	};
-
 	bpmInput.addEventListener('input', () => {
 		const v = parseFloat(bpmInput.value);
 		if (!isNaN(v) && v > 0) {
@@ -696,13 +766,9 @@ function createSlicer(savedState = null) {
 		scheduleSave();
 	});
 
-	// Drag-and-drop state lives outside of renderSequencer so it survives re-renders.
+	// Drag state for HTML5 reorder lives outside renderSequencer so it survives re-renders.
 	let dragFromIdx = null;
 
-	// The transport's visual loop owns the `.playing` highlight (renderSequencer no
-	// longer paints it). Toggling directly avoids a full DOM rebuild every step.
-	// Self-healing: if renderSequencer rebuilds the row mid-play, playingStepEl
-	// points at a detached node and the next frame swaps onto the fresh node.
 	const updatePitchBadge = (badge, offset) => {
 		if (offset) {
 			badge.textContent   = (offset > 0 ? '+' : '') + offset;
@@ -713,278 +779,279 @@ function createSlicer(savedState = null) {
 		}
 	};
 
-	let playingStepEl = null;
-	const setPlayingStep = (idx) => {
-		const child = (idx >= 0 && idx < seqStepsRow.children.length) ? seqStepsRow.children[idx] : null;
-		const target = (child && child.classList.contains('seq-step')) ? child : null;
-		if (target === playingStepEl) return;
-		if (playingStepEl) playingStepEl.classList.remove('playing');
+	// The transport's visual loop owns the `.playing` highlight (renderSequencer no
+	// longer paints it). Toggling directly avoids a full DOM rebuild every step.
+	let playingTileEl = null;
+	const setPlayingTile = (idx) => {
+		const child  = (idx >= 0 && idx < seqStepsRow.children.length) ? seqStepsRow.children[idx] : null;
+		const target = (child && child.classList.contains('seq-tile')) ? child : null;
+		if (target === playingTileEl) return;
+		if (playingTileEl) playingTileEl.classList.remove('playing');
 		if (target) target.classList.add('playing');
-		playingStepEl = target;
+		playingTileEl = target;
 	};
 
 	const clearDropMarkers = () => {
-		seqStepsRow.querySelectorAll('.drop-before, .drop-after, .drop-into, .drop-clone')
-			.forEach((el) => el.classList.remove('drop-before', 'drop-after', 'drop-into', 'drop-clone'));
+		seqStepsRow.querySelectorAll('.drop-before, .drop-after')
+			.forEach((el) => el.classList.remove('drop-before', 'drop-after'));
 	};
 
-	const moveStep = (from, to) => {
-		if (from < 0 || from >= seq.steps.length) return;
+	// --- Tile edits (all conserve Σ w === U, so the loop stays one bar) ---
+
+	// Reorder: pull tile `from` out and reinsert at `to` (carries its src/w/offset).
+	const moveTile = (from, to) => {
+		if (from < 0 || from >= seq.tiles.length) return;
 		if (to < 0) to = 0;
-		if (to > seq.steps.length) to = seq.steps.length;
-
-		const selectedIdx = seq.cursor !== null ? seq.cursor - 1 : null;
-		const item        = seq.steps[from];
-		seq.steps.splice(from, 1);
-		const insertAt    = (from < to) ? to - 1 : to;
-		seq.steps.splice(insertAt, 0, item);
-
-		if (selectedIdx !== null) {
-			let s;
-			if (selectedIdx === from) {
-				// The selected step itself was dragged — keep it selected.
-				s = insertAt;
-			} else {
-				s = selectedIdx;
-				if (from < s)        s--;        // removal shifted us left
-				if (insertAt <= s)   s++;        // insert shifted us right
-			}
-			seq.cursor = s + 1;
-		}
-
-		// Reflect the new ordering in playback if we're mid-play.
-		// (We don't try to track which "physical" step is playing — simpler to keep
-		//  advancing by index in the new array.)
+		if (to > seq.tiles.length) to = seq.tiles.length;
+		const item     = seq.tiles[from];
+		seq.tiles.splice(from, 1);
+		const insertAt = (from < to) ? to - 1 : to;
+		seq.tiles.splice(insertAt, 0, item);
 		renderSequencer();
 	};
 
-	// Option-drag: copy the source step to the drop position; source stays in place.
-	const cloneStep = (from, to) => {
-		if (from < 0 || from >= seq.steps.length) return;
-		if (to < 0) to = 0;
-		if (to > seq.steps.length) to = seq.steps.length;
+	// Resize: transfer `delta` units across the boundary between tile i and i+1.
+	// delta>0 grows tile i (eats forward into source), shrinks i+1; both stay ≥ 1.
+	const resizeBoundary = (i, delta) => {
+		const a = seq.tiles[i];
+		const b = seq.tiles[i + 1];
+		if (!a || !b) return false;
+		let d = delta;
+		if (d > 0) d = Math.min(d,  b.w - 1);
+		else       d = Math.max(d, -(a.w - 1));
+		if (d === 0) return false;
+		a.w += d;
+		b.w -= d;
+		return true;
+	};
 
-		// Deep-copy so the clone's pitch offset is independent of the source.
-		const item = { ...seq.steps[from] };
-		seq.steps.splice(to, 0, item);
-
-		// Anything at index >= `to` shifted right by 1 — including the selection.
-		if (seq.cursor !== null) {
-			const selectedIdx = seq.cursor - 1;
-			if (to <= selectedIdx) seq.cursor++;
+	// Merge tile i into its left neighbour (or the right one if it's the first),
+	// combining widths — the quick way down from 16 unit-tiles to a few wide slices.
+	const mergeTile = (i) => {
+		if (seq.tiles.length <= 1 || i < 0 || i >= seq.tiles.length) return;
+		if (i > 0) {
+			seq.tiles[i - 1].w += seq.tiles[i].w;   // left neighbour extends forward
+			seq.tiles.splice(i, 1);
+		} else {
+			seq.tiles[1].src = seq.tiles[0].src;     // absorb into the right neighbour
+			seq.tiles[1].w  += seq.tiles[0].w;
+			seq.tiles.splice(0, 1);
 		}
-
 		renderSequencer();
 	};
+
+	// Split tile i in half on the unit grid (needs w ≥ 2) — the way back up to more slices.
+	const splitTile = (i) => {
+		const t = seq.tiles[i];
+		if (!t || t.w < 2) return;
+		const left = Math.floor(t.w / 2);
+		seq.tiles.splice(i, 1,
+			{ src: t.src,        w: left,        offset: t.offset, muted: t.muted },
+			{ src: t.src + left, w: t.w - left,  offset: t.offset, muted: t.muted });
+		renderSequencer();
+	};
+
+	const TILE_TITLE = 'Drag: reorder · drag right edge: resize · dbl-click: split · shift-click: merge · scroll: pitch';
 
 	const renderSequencer = () => {
 		seqStepsRow.innerHTML = '';
+		const U    = unitCount() || 1;
+		const last = seq.tiles.length - 1;
 
-		// One column per slice: 2 slices → 2 columns/row, 16 slices → 16/row. Steps
-		// beyond the slice count wrap to the next row.
-		const cols = (slicer.engine.getSegments() || []).length || parseInt(subdivisionsSelect.value, 10) || 1;
-		seqStepsRow.style.setProperty('--seq-cols', cols);
+		for (let i = 0; i < seq.tiles.length; i++) {
+			const tile = seq.tiles[i];
+			const el   = document.createElement('div');
+			el.className        = 'seq-tile';
+			el.style.flexGrow   = String(tile.w);  // width ∝ unit span (Σ flexGrow = U)
+			el.style.flexBasis  = '0';
+			el.style.background  = PALETTE[tile.src % PALETTE.length];
+			el.title             = TILE_TITLE;
+			el.draggable         = !seq.isPlaying;
+			if (tile.muted) el.classList.add('muted');
 
-		for (let i = 0; i < seq.steps.length; i++) {
-			const step     = seq.steps[i];
-			const sliceIdx = step.slice;
-			const stepBox  = document.createElement('div');
-			stepBox.className   = 'seq-step';
-			stepBox.textContent = String(sliceIdx + 1);
-			stepBox.style.background = PALETTE[sliceIdx % PALETTE.length];
-			stepBox.title       = 'Click: cursor · Shift-click: delete · Drag: reorder · Scroll: pitch · Dbl-click: reset pitch';
-			// Structural edits are disabled during playback (see onStepVisual / setPlayingStep).
-			stepBox.draggable   = !seq.isPlaying;
-			if (seq.cursor === i + 1)      stepBox.classList.add('selected');
+			const label = document.createElement('span');
+			label.className   = 'seq-tile-label';
+			label.textContent = `${tile.src + 1}`;
+			el.appendChild(label);
 
-			// Pitch-offset badge (shown only when non-zero).
+			const widthChip = document.createElement('span');
+			widthChip.className   = 'seq-tile-width';
+			widthChip.textContent = `${tile.w}`;
+			el.appendChild(widthChip);
+
+			// Pitch-offset badge (shown only when non-zero); click it to reset.
 			const badge = document.createElement('span');
 			badge.className = 'seq-step-pitch';
-			updatePitchBadge(badge, step.offset || 0);
-			stepBox.appendChild(badge);
-
-			// Wheel over a step nudges its pitch offset (±5), independent of master.
-			stepBox.addEventListener('wheel', (ev) => {
-				ev.preventDefault();
-				const dir = ev.deltaY < 0 ? 1 : -1;
-				step.offset = Math.max(-5, Math.min(5, (step.offset || 0) + dir));
-				updatePitchBadge(badge, step.offset);
-				scheduleSave();
-			}, { passive: false });
-
-			// Double-click resets this step's pitch offset to 0 (follow master).
-			stepBox.addEventListener('dblclick', (ev) => {
-				ev.preventDefault();
-				step.offset = 0;
+			updatePitchBadge(badge, tile.offset || 0);
+			badge.addEventListener('click', (ev) => {
+				ev.stopPropagation();
+				tile.offset = 0;
 				updatePitchBadge(badge, 0);
 				scheduleSave();
 			});
+			el.appendChild(badge);
 
-			stepBox.addEventListener('click', (ev) => {
-				if (seq.isPlaying) return;
-				if (ev.shiftKey) {
-					removeStep(i);
-					return;
-				}
-				seq.cursor = (seq.cursor === i + 1) ? null : i + 1;
-				updateSeqMode();
+			// Mute dot.
+			const mute = document.createElement('span');
+			mute.className   = 'seq-tile-mute';
+			mute.textContent = tile.muted ? '✕' : '●';
+			mute.title       = tile.muted ? 'Unmute' : 'Mute';
+			mute.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+			mute.addEventListener('click', (ev) => {
+				ev.stopPropagation();
+				tile.muted = !tile.muted;
 				renderSequencer();
 			});
+			el.appendChild(mute);
 
-			// --- Drag source ---
-			stepBox.addEventListener('dragstart', (ev) => {
-				dragFromIdx = i;
-				// Allow either copy or move; the actual choice is decided by altKey at drop.
-				ev.dataTransfer.effectAllowed = 'copyMove';
-				ev.dataTransfer.setData('text/plain', String(i));
-				stepBox.classList.add('dragging');
+			// Wheel over a tile nudges its pitch offset (±5), independent of master.
+			el.addEventListener('wheel', (ev) => {
+				ev.preventDefault();
+				const dir = ev.deltaY < 0 ? 1 : -1;
+				tile.offset = Math.max(-5, Math.min(5, (tile.offset || 0) + dir));
+				updatePitchBadge(badge, tile.offset);
+				scheduleSave();
+			}, { passive: false });
+
+			// Double-click splits the tile in half.
+			el.addEventListener('dblclick', (ev) => {
+				if (seq.isPlaying) return;
+				ev.preventDefault();
+				splitTile(i);
 			});
-			stepBox.addEventListener('dragend', () => {
+
+			// Shift-click merges the tile into its neighbour.
+			el.addEventListener('click', (ev) => {
+				if (seq.isPlaying) return;
+				if (ev.shiftKey) { ev.preventDefault(); mergeTile(i); }
+			});
+
+			// --- Reorder (HTML5 drag) ---
+			el.addEventListener('dragstart', (ev) => {
+				dragFromIdx = i;
+				ev.dataTransfer.effectAllowed = 'move';
+				ev.dataTransfer.setData('text/plain', String(i));
+				el.classList.add('dragging');
+			});
+			el.addEventListener('dragend', () => {
 				dragFromIdx = null;
-				stepBox.classList.remove('dragging');
+				el.classList.remove('dragging');
 				clearDropMarkers();
 			});
-
-			// --- Drop target ---
-			stepBox.addEventListener('dragover', (ev) => {
+			el.addEventListener('dragover', (ev) => {
 				if (dragFromIdx === null) return;
 				ev.preventDefault();
-				ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
-				const rect  = stepBox.getBoundingClientRect();
+				ev.dataTransfer.dropEffect = 'move';
+				const rect  = el.getBoundingClientRect();
 				const after = (ev.clientX - rect.left) > rect.width / 2;
-				stepBox.classList.toggle('drop-after',  after);
-				stepBox.classList.toggle('drop-before', !after);
-				stepBox.classList.toggle('drop-clone',  ev.altKey);
+				el.classList.toggle('drop-after',  after);
+				el.classList.toggle('drop-before', !after);
 			});
-			stepBox.addEventListener('dragleave', () => {
-				stepBox.classList.remove('drop-before', 'drop-after', 'drop-clone');
-			});
-			stepBox.addEventListener('drop', (ev) => {
+			el.addEventListener('dragleave', () => el.classList.remove('drop-before', 'drop-after'));
+			el.addEventListener('drop', (ev) => {
 				if (dragFromIdx === null) return;
 				ev.preventDefault();
-				const rect  = stepBox.getBoundingClientRect();
+				const rect  = el.getBoundingClientRect();
 				const after = (ev.clientX - rect.left) > rect.width / 2;
 				const to    = i + (after ? 1 : 0);
 				const from  = dragFromIdx;
-				const clone = ev.altKey;
 				dragFromIdx = null;
 				clearDropMarkers();
-				if (clone) {
-					cloneStep(from, to);
-				} else {
-					moveStep(from, to);
-				}
+				moveTile(from, to);
 			});
 
-			seqStepsRow.appendChild(stepBox);
+			// --- Resize handle on the shared boundary (every tile but the last) ---
+			if (i < last && !seq.isPlaying) {
+				const handle = document.createElement('span');
+				handle.className = 'seq-tile-resize';
+				handle.title     = 'Drag to move this boundary by units';
+				handle.draggable = false;
+				handle.addEventListener('pointerdown', (ev) => {
+					ev.preventDefault();
+					ev.stopPropagation();
+					el.draggable = false;            // suppress the reorder drag while resizing
+					const rowRect  = seqStepsRow.getBoundingClientRect();
+					const pxPerU   = rowRect.width / U;
+					const startX   = ev.clientX;
+					const aw0      = seq.tiles[i].w;
+					const bw0      = seq.tiles[i + 1].w;
+					const elA      = seqStepsRow.children[i];
+					const elB      = seqStepsRow.children[i + 1];
+					const onMove = (e2) => {
+						let d = pxPerU > 0 ? Math.round((e2.clientX - startX) / pxPerU) : 0;
+						if (d > 0) d = Math.min(d,  bw0 - 1);
+						else       d = Math.max(d, -(aw0 - 1));
+						seq.tiles[i].w     = aw0 + d;
+						seq.tiles[i + 1].w = bw0 - d;
+						if (elA) elA.style.flexGrow = String(seq.tiles[i].w);
+						if (elB) elB.style.flexGrow = String(seq.tiles[i + 1].w);
+						const cA = elA && elA.querySelector('.seq-tile-width');
+						const cB = elB && elB.querySelector('.seq-tile-width');
+						if (cA) cA.textContent = String(seq.tiles[i].w);
+						if (cB) cB.textContent = String(seq.tiles[i + 1].w);
+					};
+					const onUp = () => {
+						window.removeEventListener('pointermove', onMove);
+						window.removeEventListener('pointerup',   onUp);
+						renderSequencer();
+						scheduleSave();
+					};
+					window.addEventListener('pointermove', onMove);
+					window.addEventListener('pointerup',   onUp);
+				});
+				el.appendChild(handle);
+			}
+
+			seqStepsRow.appendChild(el);
 		}
 
-		const addSlot = document.createElement('div');
-		addSlot.className   = 'seq-add-slot';
-		addSlot.textContent = '+';
-		addSlot.title       = 'Click to append after the last step. Drop here to move a step to the end.';
-		if (seq.cursor === seq.steps.length) addSlot.classList.add('selected');
-		addSlot.addEventListener('click', () => {
-			if (seq.isPlaying) return;
-			seq.cursor = (seq.cursor === seq.steps.length) ? null : seq.steps.length;
-			updateSeqMode();
-			renderSequencer();
-		});
-		addSlot.addEventListener('dragover', (ev) => {
-			if (dragFromIdx === null) return;
-			ev.preventDefault();
-			ev.dataTransfer.dropEffect = ev.altKey ? 'copy' : 'move';
-			addSlot.classList.add('drop-into');
-			addSlot.classList.toggle('drop-clone', ev.altKey);
-		});
-		addSlot.addEventListener('dragleave', () => {
-			addSlot.classList.remove('drop-into', 'drop-clone');
-		});
-		addSlot.addEventListener('drop', (ev) => {
-			if (dragFromIdx === null) return;
-			ev.preventDefault();
-			const from  = dragFromIdx;
-			const clone = ev.altKey;
-			dragFromIdx = null;
-			clearDropMarkers();
-			if (clone) {
-				cloneStep(from, seq.steps.length);
-			} else {
-				moveStep(from, seq.steps.length);
-			}
-		});
-		seqStepsRow.appendChild(addSlot);
-
 		if (seq.isPlaying) {
-			seqStatus.textContent = `Playing step ${seq.currentStep + 1} of ${seq.steps.length}`;
-		} else if (seq.cursor === null) {
-			seqStatus.textContent = seq.steps.length === 0
-				? 'Click + to start, then click slices to add.'
-				: 'Click a step (or +) to add new slices there.';
+			seqStatus.textContent = `Playing slice ${seq.currentTile + 1} of ${seq.tiles.length}`;
 		} else {
-			const pos = seq.cursor;
-			const where = pos === 0 ? 'before step 1'
-				: pos === seq.steps.length ? 'at end'
-				: `after step ${pos}`;
-			seqStatus.textContent = `Add mode — clicking a slice inserts ${where}.`;
+			seqStatus.textContent = `${seq.tiles.length} slices · ${totalUnits()}/${U} units`;
 		}
 
 		scheduleSave();
 	};
 
-	const removeStep = (i) => {
-		if (i < 0 || i >= seq.steps.length) return;
-		seq.steps.splice(i, 1);
-		if (seq.cursor !== null) {
-			if (seq.cursor > i) seq.cursor--;
-			if (seq.cursor > seq.steps.length) seq.cursor = seq.steps.length;
-		}
-		renderSequencer();
-	};
-
-	const addStepAtCursor = (sliceIdx) => {
-		if (seq.cursor === null) return;
-		seq.steps.splice(seq.cursor, 0, { slice: sliceIdx, offset: 0 });
-		seq.cursor += 1;
-		renderSequencer();
-	};
-
-	// Intercept segment clicks while in add mode and route them into the sequencer.
-	slicer.view.addEventListener('segmentclick', (e) => {
-		if (seq.cursor !== null) {
-			addStepAtCursor(e.detail.index);
-		}
-	});
-
-	// Re-render whenever subdivisions change — the labels we show (slice numbers)
-	// still refer to indices; out-of-range steps just no-op during playback.
-	subdivisionsSelect.addEventListener('change', () => renderSequencer());
-
 	// --- Sequencer playback (sample-accurate, via Transport on the audio clock) ---
+	// Map a tile's unit span [src, src+w) to the real-buffer region it sounds, so the
+	// waveform playhead can sweep across exactly that span.
+	const tileRegion = (src, w) => {
+		const U    = unitCount() || 1;
+		const span = selEndFrac - selStartFrac;
+		const u0   = Math.max(0, Math.min(U, src));
+		const u1   = Math.max(0, Math.min(U, src + w));
+		return {
+			start: selStartFrac + (u0 / U) * span,
+			end:   selStartFrac + (u1 / U) * span,
+		};
+	};
+
 	const transport = new Transport({
 		engine:          slicer.engine,
-		getSteps:        () => seq.steps,
+		getTiles:        () => seq.tiles,
 		getStepSec:      stepSec,
-		getStepPlayback: getStepPlayback,
+		getTilePlayback: getTilePlayback,
 		isLooping:       () => seq.loop,
-		onStepVisual: (step, sliceIdx, frac) => {
-			setPlayingStep(step);
-			if (seq.currentStep !== step) {
-				seq.currentStep = step;
-				seqStatus.textContent = `Playing step ${step + 1} of ${seq.steps.length}`;
+		onTileVisual: (tileIndex, src, w, frac) => {
+			setPlayingTile(tileIndex);
+			if (seq.currentTile !== tileIndex) {
+				seq.currentTile = tileIndex;
+				seqStatus.textContent = `Playing slice ${tileIndex + 1} of ${seq.tiles.length}`;
 			}
-			// All three are required for the playhead to draw (waveform-view.js).
-			slicer.view.setActiveSegment(sliceIdx);
+			const r = tileRegion(src, w);
+			slicer.view.setPlayingRegion(r.start, r.end);
 			slicer.view.setIsPlaying(true);
 			slicer.view.setPlayheadPosition(frac);
 		},
 		onStop: () => {
 			seq.isPlaying   = false;
-			seq.currentStep = -1;
+			seq.currentTile = -1;
 			slicer.sequencerPlaying = false;
-			setPlayingStep(-1);
+			setPlayingTile(-1);
 			slicer.view.setIsPlaying(false);
-			slicer.view.setActiveSegment(-1);
+			slicer.view.setPlayingRegion(null);
 			slicer.view.setPlayheadPosition(0);
 			renderSequencer();
 		},
@@ -992,17 +1059,13 @@ function createSlicer(savedState = null) {
 
 	const startSeqPlayback = async () => {
 		if (seq.isPlaying) return;
-		if (seq.steps.length === 0) return;
-
-		// Exit add mode while playing so the highlights aren't confusing.
-		seq.cursor = null;
-		updateSeqMode();
+		if (seq.tiles.length === 0) return;
 
 		seq.isPlaying   = true;
-		seq.currentStep = -1;
+		seq.currentTile = -1;
 		slicer.sequencerPlaying = true;
 		slicer.stop();        // cancel any free-run playback + its playhead animation
-		renderSequencer();    // reflect playing state (disables drag, clears cursor)
+		renderSequencer();    // reflect playing state (disables drag/resize)
 
 		await transport.start();
 	};
@@ -1019,11 +1082,10 @@ function createSlicer(savedState = null) {
 		seqLoopBtn.setAttribute('aria-pressed', String(seq.loop));
 		scheduleSave();
 	});
+	// "Reset" the tiles back to the default one-unit-per-tile layout (Σ w === U).
 	seqClearBtn.addEventListener('click', () => {
 		stopSeqPlayback();
-		seq.steps  = [];
-		seq.cursor = null;
-		updateSeqMode();
+		seq.tiles = defaultTiles(unitCount());
 		renderSequencer();
 	});
 
@@ -1044,7 +1106,7 @@ function createSlicer(savedState = null) {
 		pan:            panKnob.value,
 		masterPitch,
 		seq:            {
-			steps: seq.steps.map((s) => ({ slice: s.slice, offset: s.offset || 0 })),
+			tiles: seq.tiles.map((t) => ({ src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted })),
 			loop:  seq.loop,
 		},
 	});
@@ -1071,11 +1133,13 @@ function createSlicer(savedState = null) {
 		if (Number.isFinite(savedState.masterPitch)) { masterPitch = savedState.masterPitch; pitchKnob.setValue(masterPitch); }
 
 		if (savedState.seq) {
-			// Migrate v1 bare-number steps → { slice, offset }.
-			seq.steps = Array.isArray(savedState.seq.steps)
-				? savedState.seq.steps.map((s) => (typeof s === 'number'
-					? { slice: s, offset: 0 }
-					: { slice: s.slice, offset: s.offset || 0 }))
+			// v3 tiles. Pre-v3 saves used a different sequencing model (bare-number /
+			// {slice,offset} steps) — those don't map onto variable-width tiles, so we
+			// drop them and regenerate defaults after the audio re-slices.
+			seq.tiles = Array.isArray(savedState.seq.tiles)
+				? savedState.seq.tiles
+					.filter((t) => t && Number.isFinite(t.src) && Number.isFinite(t.w) && t.w >= 1)
+					.map((t) => ({ src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted }))
 				: [];
 			seq.loop  = !!savedState.seq.loop;
 			seqLoopBtn.classList.toggle('active', seq.loop);
@@ -1096,6 +1160,11 @@ function createSlicer(savedState = null) {
 					bpmInput.value = bpm.toFixed(2);
 					updateBpmResetBtn();
 					sliceBtn.disabled = false;
+					// Saved tiles win, but fall back to defaults if absent (pre-v3 save)
+					// or inconsistent with the restored unit resolution.
+					if (seq.tiles.length === 0 || totalUnits() !== unitCount()) {
+						seq.tiles = defaultTiles(unitCount());
+					}
 					renderSequencer();
 				} else {
 					console.warn(`No saved audio for slicer ${id} (${currentFileName || 'unknown'}) — restored silent.`);
