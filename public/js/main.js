@@ -476,6 +476,32 @@ function createSlicer(savedState = null) {
 	seqLoopBtn.className   = 'seq-loop-btn';
 	seqLoopBtn.setAttribute('aria-pressed', 'false');
 
+	// --- Randomize: shuffle tile order; the level sets how many tiles move ---
+	// randLevel is a 0–100% knob on the per-tile swap probability: 0 leaves the
+	// pattern untouched, 100 fully shuffles it. Restored from saved state below.
+	let randLevel = 50;
+	const randomizeBtn = document.createElement('button');
+	randomizeBtn.textContent = 'Randomize';
+	randomizeBtn.className   = 'seq-randomize-btn';
+	randomizeBtn.title       = 'Shuffle tile order — higher amount = more swaps / bigger change';
+
+	const randLevelInput = document.createElement('input');
+	randLevelInput.type  = 'range';
+	randLevelInput.min   = 0;
+	randLevelInput.max   = 100;
+	randLevelInput.step  = 1;
+	randLevelInput.value = randLevel;
+	randLevelInput.className = 'seq-rand-level';
+	const randLevelValue = document.createElement('span');
+	randLevelValue.className   = 'seq-rand-level-value';
+	randLevelValue.textContent = randLevel + '%';
+	const randLevelLabel = document.createElement('label');
+	randLevelLabel.className = 'seq-rand-level-label';
+	randLevelLabel.title     = 'Randomization amount: probability each tile is swapped';
+	randLevelLabel.appendChild(document.createTextNode('Amount '));
+	randLevelLabel.appendChild(randLevelInput);
+	randLevelLabel.appendChild(randLevelValue);
+
 	// --- Transport: BPM + step division ---
 	const bpmInput = document.createElement('input');
 	bpmInput.type  = 'number';
@@ -519,6 +545,8 @@ function createSlicer(savedState = null) {
 	seqToolbar.appendChild(seqStopBtn);
 	seqToolbar.appendChild(seqLoopBtn);
 	seqToolbar.appendChild(seqClearBtn);
+	seqToolbar.appendChild(randomizeBtn);
+	seqToolbar.appendChild(randLevelLabel);
 	seqToolbar.appendChild(bpmLabel);
 	seqToolbar.appendChild(bpmResetBtn);
 	seqToolbar.appendChild(divisionLabel);
@@ -563,6 +591,16 @@ function createSlicer(savedState = null) {
 	};
 	const totalUnits   = () => seq.tiles.reduce((sum, t) => sum + t.w, 0);
 	const tileColor    = (t) => PALETTE[t.colorIdx % PALETTE.length];
+
+	// Edge-resize snaps to 1/SUBSTEP of a unit (sub-step precision), so tile widths
+	// and src positions can be fractional. SUBSTEP is a power of two, keeping these
+	// values exact in binary floating point (no drift). MIN_W is the smallest a
+	// dragged tile may shrink to; donors still absorb all the way to 0.
+	const SUBSTEP = 4;
+	const MIN_W   = 1 / SUBSTEP;
+	const snapU   = (u) => Math.round(u * SUBSTEP) / SUBSTEP;
+	// Tidy display of a (possibly fractional) unit count: "2", "1.25", "1.5".
+	const fmtW    = (w) => String(snapU(w));
 
 	// --- Transport tempo state ---
 	// The sliced selection is treated as one bar (4 beats). On (re)slice we
@@ -776,10 +814,12 @@ function createSlicer(savedState = null) {
 		scheduleSave();
 	});
 
-	// Drag state for HTML5 reorder lives outside renderSequencer so it survives re-renders.
+	// Reorder is a pointer-driven HORIZONTAL drag (not native HTML5 DnD, which would
+	// let the tile ghost float vertically). State lives outside renderSequencer so it
+	// survives re-renders. dragFromIdx is the grabbed tile.
 	let dragFromIdx = null;
-	// True while an edge-resize pointer drag is active — suppresses the tile's
-	// native reorder drag (dragstart) so the two gestures never collide.
+	// True while an edge-resize pointer drag is active — suppresses a reorder drag so
+	// the two gestures never collide.
 	let resizing    = false;
 	// On touch devices there's no hover, so a tap reveals that slice's edge
 	// handles. Survives re-renders via this index (transient UI, not persisted).
@@ -811,6 +851,28 @@ function createSlicer(savedState = null) {
 	const clearDropMarkers = () => {
 		seqStepsRow.querySelectorAll('.drop-before, .drop-after')
 			.forEach((el) => el.classList.remove('drop-before', 'drop-after'));
+	};
+
+	// Build a translucent floating copy of a tile to follow the pointer during a
+	// reorder drag. cloneNode doesn't carry a canvas's pixels, so the waveform bitmap
+	// is blitted over manually. Pinned (position:fixed) to the tile's current spot;
+	// the drag only shifts it on X via transform, so it never moves vertically.
+	const makeDragGhost = (srcTile) => {
+		const rect = srcTile.getBoundingClientRect();
+		const g = srcTile.cloneNode(true);
+		g.classList.remove('dragging', 'playing', 'drop-before', 'drop-after', 'handles-visible');
+		g.classList.add('seq-tile-ghost');
+		g.style.left   = `${rect.left}px`;
+		g.style.top    = `${rect.top}px`;
+		g.style.width  = `${rect.width}px`;
+		g.style.height = `${rect.height}px`;
+		const oc = srcTile.querySelector('.seq-tile-wave');
+		const gc = g.querySelector('.seq-tile-wave');
+		if (oc && gc && oc.width && oc.height) {
+			gc.width = oc.width; gc.height = oc.height;
+			try { gc.getContext('2d').drawImage(oc, 0, 0); } catch (_) { /* tainted/empty */ }
+		}
+		return g;
 	};
 
 	// --- Tile edits ---
@@ -944,7 +1006,10 @@ function createSlicer(savedState = null) {
 			el.style.flexGrow   = String(tile.w);  // width ∝ unit span (Σ flexGrow = U)
 			el.style.flexBasis  = '0';
 			el.title             = TILE_TITLE;
-			el.draggable         = !seq.isPlaying;
+			// Editing is live: reorder/resize/split/merge all mutate seq.tiles, which the
+			// transport re-reads each scheduler tick, so they take effect without stopping
+			// playback. renderSequencer only rebuilds DOM (no audio calls), and the playing
+			// highlight re-attaches on the next visual frame.
 			if (tile.muted) el.classList.add('muted');
 			if (coarsePointer && handlesTileIdx === i) el.classList.add('handles-visible');
 
@@ -955,12 +1020,12 @@ function createSlicer(savedState = null) {
 
 			const label = document.createElement('span');
 			label.className   = 'seq-tile-label';
-			label.textContent = `${tile.src + 1}`;
+			label.textContent = fmtW(tile.src + 1);
 			el.appendChild(label);
 
 			const widthChip = document.createElement('span');
 			widthChip.className   = 'seq-tile-width';
-			widthChip.textContent = `${tile.w}`;
+			widthChip.textContent = fmtW(tile.w);
 			el.appendChild(widthChip);
 
 			// Pitch-offset badge (shown only when non-zero); click it to reset.
@@ -999,7 +1064,6 @@ function createSlicer(savedState = null) {
 
 			// Double-click splits the tile in half.
 			el.addEventListener('dblclick', (ev) => {
-				if (seq.isPlaying) return;
 				ev.preventDefault();
 				splitTile(i);
 			});
@@ -1007,7 +1071,6 @@ function createSlicer(savedState = null) {
 			// Shift-click merges the tile into its neighbour. On touch (no hover), a
 			// plain tap reveals this slice's edge handles (and hides the others').
 			el.addEventListener('click', (ev) => {
-				if (seq.isPlaying) return;
 				if (ev.shiftKey) { ev.preventDefault(); mergeTile(i); return; }
 				if (coarsePointer) {
 					handlesTileIdx = (handlesTileIdx === i) ? null : i;
@@ -1016,51 +1079,93 @@ function createSlicer(savedState = null) {
 				}
 			});
 
-			// --- Reorder (HTML5 drag) ---
-			el.addEventListener('dragstart', (ev) => {
-				// An edge resize is in progress — don't let the browser hijack it with DnD.
-				if (resizing) { ev.preventDefault(); return; }
-				dragFromIdx = i;
-				ev.dataTransfer.effectAllowed = 'move';
-				ev.dataTransfer.setData('text/plain', String(i));
-				el.classList.add('dragging');
-			});
-			el.addEventListener('dragend', () => {
-				dragFromIdx = null;
-				el.classList.remove('dragging');
-				clearDropMarkers();
-			});
-			el.addEventListener('dragover', (ev) => {
-				if (dragFromIdx === null) return;
-				ev.preventDefault();
-				ev.dataTransfer.dropEffect = 'move';
-				const rect  = el.getBoundingClientRect();
-				const after = (ev.clientX - rect.left) > rect.width / 2;
-				el.classList.toggle('drop-after',  after);
-				el.classList.toggle('drop-before', !after);
-			});
-			el.addEventListener('dragleave', () => el.classList.remove('drop-before', 'drop-after'));
-			el.addEventListener('drop', (ev) => {
-				if (dragFromIdx === null) return;
-				ev.preventDefault();
-				const rect  = el.getBoundingClientRect();
-				const after = (ev.clientX - rect.left) > rect.width / 2;
-				const to    = i + (after ? 1 : 0);
-				const from  = dragFromIdx;
-				dragFromIdx = null;
-				clearDropMarkers();
-				moveTile(from, to);
+			// --- Reorder (pointer-driven, HORIZONTAL only) ---
+			// We track the pointer ourselves instead of using native HTML5 DnD, whose
+			// drag image floats on both axes. The tile never moves vertically — only a
+			// drop marker slides along the row, and the drop target is derived purely
+			// from clientX. A small threshold keeps plain clicks (merge / handle toggle)
+			// working; vertical motion is simply ignored.
+			el.addEventListener('pointerdown', (ev) => {
+				if (resizing || ev.button !== 0) return;   // left button only; never mid-resize
+				const startX = ev.clientX;
+				let dragging  = false;
+				let ghost     = null;      // translucent copy that snaps to the target slot
+				let startRect = null;      // the dragged tile's position when the drag began
+
+				// Find the drop slot under an x coordinate: the tile it's over, and
+				// whether the pointer is past that tile's midpoint (→ insert after).
+				const dropTargetAt = (clientX) => {
+					let idx = 0;
+					for (const child of seqStepsRow.children) {
+						if (!child.classList.contains('seq-tile')) continue;
+						const rect = child.getBoundingClientRect();
+						if (clientX < rect.right || idx === seq.tiles.length - 1) {
+							return { idx, after: (clientX - rect.left) > rect.width / 2 };
+						}
+						idx++;
+					}
+					return { idx: seq.tiles.length - 1, after: true };
+				};
+
+				const onMove = (e2) => {
+					if (!dragging) {
+						if (Math.abs(e2.clientX - startX) < 4) return;   // horizontal threshold
+						dragging = true;
+						dragFromIdx = i;
+						startRect = el.getBoundingClientRect();
+						el.classList.add('dragging');
+						ghost = makeDragGhost(el);
+						document.body.appendChild(ghost);
+					}
+					clearDropMarkers();
+					const { idx, after } = dropTargetAt(e2.clientX);
+					const target = seqStepsRow.children[idx];
+					if (!target) return;
+					target.classList.toggle(after ? 'drop-after' : 'drop-before', true);
+					// Snap the ghost to the insertion boundary (X only), clamped to the row
+					// so it lands cleanly in the slot it'll occupy rather than trailing the
+					// raw cursor.
+					const trect   = target.getBoundingClientRect();
+					const rowRect = seqStepsRow.getBoundingClientRect();
+					let left = after ? trect.right : trect.left;   // insertion boundary
+					left = Math.max(rowRect.left, Math.min(left, rowRect.right - startRect.width));
+					ghost.style.transform = `translateX(${left - startRect.left}px)`;
+				};
+				const onUp = (e2) => {
+					window.removeEventListener('pointermove', onMove);
+					window.removeEventListener('pointerup',   onUp);
+					el.classList.remove('dragging');
+					clearDropMarkers();
+					if (ghost) { ghost.remove(); ghost = null; }
+					if (!dragging) return;
+					// A drag ending over a different tile fires `click` on the row, not on
+					// `el`, so swallow exactly the next click (capture phase) to stop the
+					// reorder from also triggering merge / handle-toggle. The timeout clears
+					// the trap if, in some path, no click is generated.
+					const swallow = (ce) => { ce.stopPropagation(); ce.preventDefault(); };
+					window.addEventListener('click', swallow, { capture: true, once: true });
+					setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 0);
+					const { idx, after } = dropTargetAt(e2.clientX);
+					const to   = idx + (after ? 1 : 0);
+					const from = dragFromIdx;
+					dragFromIdx = null;
+					moveTile(from, to);                 // renderSequencer() inside
+				};
+				window.addEventListener('pointermove', onMove);
+				window.addEventListener('pointerup',   onUp);
 			});
 
 			// --- Edge resize: green START (drag back) + red END (drag forward) ---
-			// Conserves Σ w: dragging a boundary transfers units to/from the
-			// play-order neighbour, so the overall sequence length never changes.
-			// The neighbour gives up / receives units from its TAIL, so its leading
-			// audio stays anchored and nothing jumps. Each handle exists only where
-			// there's a neighbour to trade with (start: i>0, end: i<last); the outer
-			// edges are pinned to the cut. Bounds: both slices keep w ≥ 1 and stay
-			// inside the cut [0, U].
-			if (!seq.isPlaying) {
+			// Conserves Σ w: dragging a boundary transfers units between tile i and the
+			// tiles on the drag side, CASCADING nearest-first. Donors shrink and, once
+			// emptied, are fully ABSORBED (w → 0, dropped on release) — so even a freshly
+			// sliced all-width-1 grid (where no tile has spare units to lend) can still
+			// grow a step by swallowing its neighbours. Donors give/receive from their
+			// TAIL (src anchored), so their leading audio never jumps, and every window
+			// stays inside the cut [0, U]. Each handle exists only where there's a region
+			// to trade with (start: i>0, end: i<last); the outer edges are pinned to the
+			// cut. Loop length is unchanged; the step count drops as steps are absorbed.
+			{
 				const addHandle = (edge) => {
 					const handle = document.createElement('span');
 					handle.className = `seq-tile-resize ${edge}`;
@@ -1071,54 +1176,114 @@ function createSlicer(savedState = null) {
 					handle.addEventListener('pointerdown', (ev) => {
 						ev.preventDefault();
 						ev.stopPropagation();
-						resizing = true;       // the dragstart guard suppresses reorder
-						const nIdx    = edge === 'end' ? i + 1 : i - 1;
-						const cur     = seqStepsRow.children[i];
-						const nbr     = seqStepsRow.children[nIdx];
+						resizing = true;       // suppresses the tile's reorder pointerdown
+						const lastIdx = seq.tiles.length - 1;
 						const rowRect = seqStepsRow.getBoundingClientRect();
 						const pxPerU  = rowRect.width / U;
 						const startX  = ev.clientX;
-						const ti0 = { src: seq.tiles[i].src, w: seq.tiles[i].w };
-						const tn0 = { src: seq.tiles[nIdx].src, w: seq.tiles[nIdx].w };
+						// Snapshot every tile so each move is a pure function of the drag
+						// distance — deterministic and reversible, with no drift as the
+						// pointer wanders back and forth.
+						const w0   = seq.tiles.map((t) => t.w);
+						const src0 = seq.tiles.map((t) => t.src);
+
+						// END drag: grow/shrink tile i's TAIL, trading units with the tiles
+						// after it. dU>0 extends forward, pulling from i+1, i+2, … — donors
+						// shrink and are fully ABSORBED (w → 0, dropped on release) once
+						// consumed, so even an all-width-1 grid has slack to give. dU<0
+						// retracts (hands units back to the following tiles' tails). Bounded
+						// so i's window and every donor stay inside the cut [0, U].
+						const cascadeEnd = (dU) => {
+							let want = dU > 0
+								? Math.min(dU, U - src0[i] - w0[i])   // i's tail can't pass the cut
+								: Math.max(dU, MIN_W - w0[i]);        // the dragged tile keeps w ≥ MIN_W
+							let moved = 0;
+							if (want > 0) {
+								let need = want;
+								for (let k = i + 1; k <= lastIdx && need > 0; k++) {
+									const give = Math.min(need, w0[k]);   // donor may vanish (w → 0)
+									seq.tiles[k].w = w0[k] - give;
+									need -= give;
+								}
+								moved = want - need;
+							} else if (want < 0) {
+								let surplus = -want;
+								for (let k = i + 1; k <= lastIdx && surplus > 0; k++) {
+									const recv = Math.min(surplus, U - src0[k] - w0[k]);
+									seq.tiles[k].w = w0[k] + recv;
+									surplus -= recv;
+								}
+								moved = -(-want - surplus);
+							}
+							seq.tiles[i].w = w0[i] + moved;        // i.src pinned (front anchored)
+						};
+
+						// START drag: pin tile i's END, move its FRONT, trading units with
+						// the tiles before it. dU<0 extends back, pulling from i-1, i-2, …
+						// (donors absorbed to w → 0); dU>0 retracts the front (hands units
+						// back to the preceding tiles' tails).
+						const cascadeStart = (dU) => {
+							let want = Math.min(Math.max(dU, -src0[i]), w0[i] - MIN_W);
+							let moved = 0;
+							if (want < 0) {
+								let need = -want;
+								for (let k = i - 1; k >= 0 && need > 0; k--) {
+									const give = Math.min(need, w0[k]);   // donor may vanish (w → 0)
+									seq.tiles[k].w = w0[k] - give;
+									need -= give;
+								}
+								moved = -(-want - need);
+							} else if (want > 0) {
+								let surplus = want;
+								for (let k = i - 1; k >= 0 && surplus > 0; k--) {
+									const recv = Math.min(surplus, U - src0[k] - w0[k]);
+									seq.tiles[k].w = w0[k] + recv;
+									surplus -= recv;
+								}
+								moved = want - surplus;
+							}
+							seq.tiles[i].src = src0[i] + moved;    // end pinned: src+w constant
+							seq.tiles[i].w   = w0[i]  - moved;
+						};
 
 						const onMove = (e2) => {
-							const t = seq.tiles[i], n = seq.tiles[nIdx];
-							if (!t || !n) return;
-							let dU = pxPerU > 0 ? Math.round((e2.clientX - startX) / pxPerU) : 0;
-							if (edge === 'end') {
-								// Grow t's tail by dU; neighbour gives dU from ITS tail.
-								// dU>0: t.w+=dU, n.w-=dU. Bounds: t end ≤ U, both w ≥ 1,
-								// and n's tail can't grow past U when dU<0.
-								const lo = Math.max(1 - ti0.w, (tn0.src + tn0.w) - U);
-								const hi = Math.min(U - ti0.src - ti0.w, tn0.w - 1);
-								dU = Math.max(lo, Math.min(dU, hi));
-								t.w = ti0.w + dU;
-								n.w = tn0.w - dU;          // n.src unchanged (tail trimmed)
-							} else {
-								// Grow t's front by -dU (drag left); neighbour gives from
-								// its tail. dU<0: t.src+=dU, t.w-=dU, n.w+=dU.
-								const lo = Math.max(-ti0.src, 1 - tn0.w);
-								const hi = Math.min(ti0.w - 1, U - tn0.src - tn0.w);
-								dU = Math.max(lo, Math.min(dU, hi));
-								t.src = ti0.src + dU;
-								t.w   = ti0.w   - dU;
-								n.w   = tn0.w   + dU;          // n.src unchanged (tail trimmed)
+							if (seq.tiles.length !== w0.length) return;   // layout changed under us
+							// Reset to the snapshot, then re-derive this move from scratch.
+							for (let k = 0; k < seq.tiles.length; k++) {
+								seq.tiles[k].w   = w0[k];
+								seq.tiles[k].src = src0[k];
 							}
-							// Re-weight both tiles, repaint all backdrops crisply, update chips.
-							if (cur) cur.style.flexGrow = String(t.w);
-							if (nbr) nbr.style.flexGrow = String(n.w);
+							const dU = pxPerU > 0 ? snapU((e2.clientX - startX) / pxPerU) : 0;
+							if (edge === 'end') cascadeEnd(dU); else cascadeStart(dU);
+							// Re-weight every tile, refresh chips/labels, repaint backdrops.
+							// Absorbed tiles (w === 0) are hidden outright — flexGrow:0 alone
+							// wouldn't collapse them past the tile's min-width.
+							let idx = 0;
+							for (const child of seqStepsRow.children) {
+								if (!child.classList.contains('seq-tile')) continue;
+								const t = seq.tiles[idx++];
+								if (!t) continue;
+								if (t.w <= 0) { child.style.display = 'none'; continue; }
+								child.style.display  = '';
+								child.style.flexGrow = String(t.w);
+								const wc = child.querySelector('.seq-tile-width');
+								const lb = child.querySelector('.seq-tile-label');
+								if (wc) wc.textContent = fmtW(t.w);
+								if (lb) lb.textContent = fmtW(t.src + 1);
+							}
 							redrawTileWaves();
-							const wc = cur && cur.querySelector('.seq-tile-width');
-							const wn = nbr && nbr.querySelector('.seq-tile-width');
-							if (wc) wc.textContent = String(t.w);
-							if (wn) wn.textContent = String(n.w);
 						};
 						const onUp = () => {
 							window.removeEventListener('pointermove', onMove);
 							window.removeEventListener('pointerup',   onUp);
 							resizing = false;
-							// DOM already reflects the final state (no rebuild → no flash).
-							scheduleSave();
+							// Commit: drop any tiles absorbed during the drag (w === 0). If the
+							// count changed, rebuild once so indices/DOM realign; otherwise the
+							// in-place edits already reflect the final state (no rebuild flash).
+							const before = seq.tiles.length;
+							seq.tiles = seq.tiles.filter((t) => t.w > 0);
+							if (seq.tiles.length !== before) renderSequencer();
+							else scheduleSave();
 						};
 						window.addEventListener('pointermove', onMove);
 						window.addEventListener('pointerup',   onUp);
@@ -1135,7 +1300,7 @@ function createSlicer(savedState = null) {
 		if (seq.isPlaying) {
 			seqStatus.textContent = `Playing slice ${seq.currentTile + 1} of ${seq.tiles.length}`;
 		} else {
-			seqStatus.textContent = `${seq.tiles.length} slices · ${totalUnits()} steps/loop · grid ${U}`;
+			seqStatus.textContent = `${seq.tiles.length} slices · ${fmtW(totalUnits())} steps/loop · grid ${U}`;
 		}
 
 		// Draw backdrops synchronously: reading clientWidth forces flex layout, so
@@ -1226,6 +1391,32 @@ function createSlicer(savedState = null) {
 		renderSequencer();
 	});
 
+	// Shuffle the play order. A Fisher-Yates pass where each position swaps with a
+	// random earlier one only with probability `level` (0..1): the amount knob thus
+	// controls how far the result drifts from the current pattern — 0 = no change,
+	// 1 = a full shuffle. Only order changes; each tile keeps its src/w/offset/mute,
+	// so Σ w (loop length) and the available audio are untouched. Safe mid-play: the
+	// transport re-reads seq.tiles each scheduler tick.
+	const randomizeTiles = () => {
+		const n = seq.tiles.length;
+		if (n < 2) return;
+		const level = Math.max(0, Math.min(1, randLevel / 100));
+		for (let i = n - 1; i > 0; i--) {
+			if (Math.random() >= level) continue;
+			const j = Math.floor(Math.random() * (i + 1));
+			const tmp = seq.tiles[i];
+			seq.tiles[i] = seq.tiles[j];
+			seq.tiles[j] = tmp;
+		}
+		renderSequencer();   // also schedules a save
+	};
+	randomizeBtn.addEventListener('click', randomizeTiles);
+	randLevelInput.addEventListener('input', () => {
+		randLevel = parseInt(randLevelInput.value, 10) || 0;
+		randLevelValue.textContent = randLevel + '%';
+		scheduleSave();
+	});
+
 	// --- Persistence: expose this slicer's serializable state + register it ---
 	const getState = () => ({
 		id,
@@ -1242,6 +1433,7 @@ function createSlicer(savedState = null) {
 		volume:         volumeKnob.value,
 		pan:            panKnob.value,
 		masterPitch,
+		randLevel,
 		seq:            {
 			tiles: seq.tiles.map((t) => ({ src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: t.colorIdx })),
 			loop:  seq.loop,
@@ -1268,6 +1460,11 @@ function createSlicer(savedState = null) {
 		if (Number.isFinite(savedState.volume)) { volumeKnob.setValue(savedState.volume); slicer.setVolume(savedState.volume); }
 		if (Number.isFinite(savedState.pan))    { panKnob.setValue(savedState.pan);       slicer.setPan(savedState.pan); }
 		if (Number.isFinite(savedState.masterPitch)) { masterPitch = savedState.masterPitch; pitchKnob.setValue(masterPitch); }
+		if (Number.isFinite(savedState.randLevel)) {
+			randLevel = Math.max(0, Math.min(100, savedState.randLevel));
+			randLevelInput.value       = randLevel;
+			randLevelValue.textContent = randLevel + '%';
+		}
 
 		if (savedState.seq) {
 			// v3 tiles. Pre-v3 saves used a different sequencing model (bare-number /
@@ -1275,7 +1472,7 @@ function createSlicer(savedState = null) {
 			// drop them and regenerate defaults after the audio re-slices.
 			seq.tiles = Array.isArray(savedState.seq.tiles)
 				? savedState.seq.tiles
-					.filter((t) => t && Number.isFinite(t.src) && Number.isFinite(t.w) && t.w >= 1)
+					.filter((t) => t && Number.isFinite(t.src) && Number.isFinite(t.w) && t.w > 0)
 					.map((t, i) => ({ src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: Number.isFinite(t.colorIdx) ? t.colorIdx : i }))
 				: [];
 			nextColorIdx = seq.tiles.reduce((m, t) => Math.max(m, t.colorIdx), -1) + 1;
@@ -1302,7 +1499,7 @@ function createSlicer(savedState = null) {
 					// or any tile falls outside the cut at the restored resolution.
 					const Ur = unitCount();
 					const valid = seq.tiles.length > 0 &&
-						seq.tiles.every((t) => t.w >= 1 && t.src >= 0 && t.src + t.w <= Ur);
+						seq.tiles.every((t) => t.w > 0 && t.src >= 0 && t.src + t.w <= Ur);
 					if (!valid) seq.tiles = defaultTiles(Ur);
 					renderSequencer();
 				} else {

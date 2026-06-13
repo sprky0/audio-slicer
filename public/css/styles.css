@@ -291,6 +291,25 @@ button:disabled {
 	cursor: pointer;
 }
 
+.seq-rand-level-label {
+	display: flex;
+	align-items: center;
+	gap: var(--space-xs);
+	color: var(--color-text-primary);
+	font-size: 13px;
+}
+
+.seq-rand-level {
+	width: 90px;
+}
+
+.seq-rand-level-value {
+	min-width: 32px;
+	text-align: right;
+	color: #aaa;
+	font-variant-numeric: tabular-nums;
+}
+
 .seq-status {
 	margin-left: var(--space-md);
 	color: #aaa;
@@ -464,6 +483,23 @@ button:disabled {
 	opacity: 0.4;
 	cursor: grabbing;
 }
+
+/* Translucent copy that trails the pointer (X only) during a reorder drag. */
+.seq-tile-ghost {
+	position: fixed;
+	z-index: 1000;
+	opacity: 0.6;
+	pointer-events: none;
+	margin: 0;
+	border: 2px solid rgba(255, 255, 255, 0.6);
+	border-radius: var(--radius-sm);
+	box-shadow: 0 8px 20px rgba(0, 0, 0, 0.55);
+	transition: transform 0.09s ease-out;   /* glide as it snaps between slots */
+	cursor: grabbing;
+}
+/* The ghost is a snapshot — no hover lift, and its edge handles stay hidden. */
+.seq-tile-ghost:hover { transform: none; }
+.seq-tile-ghost .seq-tile-resize { display: none; }
 
 .seq-tile.drop-before {
 	box-shadow: inset 4px 0 0 0 #ffffff;

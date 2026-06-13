@@ -9,6 +9,8 @@ Load an audio file, chop it into slices on a waveform, and sequence those slices
 - **Waveform slicing** — load a file, set start/end markers, and subdivide the selection into evenly spaced slices.
 - **Zoom & cut** — zoom into a selection and "cut" to make it the new working view.
 - **Step sequencer** — arrange slices into a per-slicer loop with adjustable BPM and sample-accurate scheduling.
+- **Tile editing** — drag tiles to reorder, drag their edges to resize (with sub-step precision), and double-click to split or shift-click to merge — all live while the loop plays.
+- **Randomize** — shuffle the tile order with an amount knob that controls how far the pattern drifts from the current one.
 - **Time-stretch & pitch-shift** — WSOLA time-stretching keeps pitch constant across tempos; slices can also be pitch-shifted.
 - **Color-coded slices** — each slice has a consistent color across the waveform and the sequencer.
 - **Multiple slicers** — add as many independent slicers as you like.
