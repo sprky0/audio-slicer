@@ -316,6 +316,45 @@ button:disabled {
 	font-size: 13px;
 }
 
+/* Global MIDI clock sync bar — sits above the slicers as a master tempo control. */
+.midi-bar {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--space-md);
+	max-width: 900px;
+	margin: var(--space-md) auto;
+	padding: var(--space-sm) var(--space-lg);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
+	background: var(--color-bg-secondary);
+}
+
+.midi-bar-title {
+	font-weight: bold;
+	color: var(--color-text-primary);
+}
+
+.midi-enable-label {
+	display: flex;
+	align-items: center;
+	gap: var(--space-xs);
+	color: var(--color-text-primary);
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.midi-device-select {
+	max-width: 240px;
+}
+
+.midi-status {
+	margin-left: auto;
+	color: #aaa;
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+}
+
 /* Tile row: one flex item per slice, width ∝ unit span. Laid edge-to-edge so the
    row reads as one continuous waveform that rearranges with the slices. */
 .seq-steps {

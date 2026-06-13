@@ -11,6 +11,7 @@ Load an audio file, chop it into slices on a waveform, and sequence those slices
 - **Step sequencer** — arrange slices into a per-slicer loop with adjustable BPM and sample-accurate scheduling.
 - **Tile editing** — drag tiles to reorder, drag their edges to resize (with sub-step precision), and double-click to split or shift-click to merge — all live while the loop plays.
 - **Randomize** — shuffle the tile order with an amount knob that controls how far the pattern drifts from the current one.
+- **MIDI clock sync** — sync to an external MIDI clock (Web MIDI): the incoming clock sets the master BPM for every slicer, and MIDI Start/Continue/Stop drive the sequencers.
 - **Time-stretch & pitch-shift** — WSOLA time-stretching keeps pitch constant across tempos; slices can also be pitch-shifted.
 - **Color-coded slices** — each slice has a consistent color across the waveform and the sequencer.
 - **Multiple slicers** — add as many independent slicers as you like.
@@ -39,6 +40,7 @@ public/
     audio-engine.js             audio loading, slicing, playback (no DOM)
     waveform-view.js            canvas drawing and interaction
     transport.js                lookahead sequencer scheduler
+    midi-clock.js               Web MIDI clock receiver → master tempo + transport
     timestretch.js              WSOLA time-stretch DSP
     knob.js                     custom rotary control
     palette.js                  shared slice colors

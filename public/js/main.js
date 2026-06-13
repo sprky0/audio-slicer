@@ -2,6 +2,7 @@ import AudioSlicerController from './audio-slicer-controller.js';
 import Transport from './transport.js';
 import Knob from './knob.js';
 import PALETTE from './palette.js';
+import midiClock from './midi-clock.js';
 import { timeStretch } from './timestretch.js';
 import {
 	saveStateRaw, loadStateRaw, clearStateRaw,
@@ -15,15 +16,20 @@ let slicerCount     = 0;
 
 // --- Persistence: registry of live slicers + debounced save ---
 let nextSlicerId  = 0;
-const slicers     = [];     // { id, getState }
+const slicers     = [];     // { id, getState, setMidiBpm, seqStart, seqStop, hasTiles }
 let restoreCount  = 0;      // > 0 while restoring — suppresses save thrash
 let saveTimer     = null;
+
+// Global MIDI clock sync preferences (whether sync is on + which input), persisted
+// alongside the slicers so a reload restores the connection.
+const midiSettings = { enabled: false, inputId: null };
 
 function saveState() {
 	saveStateRaw({
 		version:      3,
 		nextSlicerId,
 		slicers:      slicers.map((s) => s.getState()),
+		midi:         { enabled: midiSettings.enabled, inputId: midiSettings.inputId },
 	});
 }
 
@@ -613,7 +619,26 @@ function createSlicer(savedState = null) {
 	let divisionManual= false;
 	let masterPitch   = 0;             // semitones; per-step offsets stack on top
 
-	const stepSec = () => (60 / bpm) * (4 / divisionDenom);
+	// When an external MIDI clock is driving the tempo this holds its derived BPM
+	// (else null). It overrides the local `bpm` for scheduling without touching the
+	// stored value, so the slicer's own tempo returns intact when sync is released.
+	let midiBpm       = null;
+
+	const stepSec = () => (60 / (midiBpm != null ? midiBpm : bpm)) * (4 / divisionDenom);
+
+	// Called by the global MIDI clock controller. A number locks the displayed BPM to
+	// the incoming clock (input goes read-only); null releases it back to local tempo.
+	const setMidiBpm = (v) => {
+		if (v != null && isFinite(v) && v > 0) {
+			midiBpm = v;
+			bpmInput.value    = v.toFixed(2);
+			bpmInput.disabled = true;
+		} else {
+			midiBpm = null;
+			bpmInput.value    = bpm.toFixed(2);
+			bpmInput.disabled = false;
+		}
+	};
 
 	// --- Time-stretch / pitch cache ---
 	// Pre-rendered, pitch-preserving stretched buffers keyed by slice index + a
@@ -1439,7 +1464,16 @@ function createSlicer(savedState = null) {
 			loop:  seq.loop,
 		},
 	});
-	slicers.push({ id, getState });
+	// The MIDI clock controller drives every slicer through these hooks: setMidiBpm
+	// for tempo sync, and seqStart/seqStop/hasTiles for MIDI Start/Continue/Stop.
+	slicers.push({
+		id, getState, setMidiBpm,
+		seqStart: startSeqPlayback,
+		seqStop:  stopSeqPlayback,
+		hasTiles: () => seq.tiles.length > 0,
+	});
+	// A slicer added while sync is already live should adopt the current tempo at once.
+	if (midiClock.isEnabled() && midiClock.getBpm() != null) setMidiBpm(midiClock.getBpm());
 
 	if (savedState) {
 		// Settings that don't need the decoded audio buffer — apply synchronously.
@@ -1517,6 +1551,135 @@ function createSlicer(savedState = null) {
 	renderSequencer();
 }
 
+// --- Global MIDI clock sync bar ---
+// One external clock acts as the master tempo for every slicer. While sync is on,
+// the derived BPM is pushed to all slicers (overriding their manual BPM) and MIDI
+// Start/Continue/Stop drive their sequencers. See midi-clock.js for the signal.
+const midiBar = document.getElementById('midiBar');
+let midiEnableChk, midiDeviceSel, midiStatusEl;
+
+function updateMidiStatus(mode) {
+	if (!midiStatusEl) return;
+	if (mode === 'unavailable' || !midiClock.isSupported) {
+		midiStatusEl.textContent = midiClock.isSupported ? 'MIDI access denied' : 'Web MIDI not supported';
+		return;
+	}
+	if (!midiClock.isEnabled()) { midiStatusEl.textContent = 'off'; return; }
+	const bpm = midiClock.getBpm();
+	if (bpm == null) { midiStatusEl.textContent = 'waiting for clock…'; return; }
+	midiStatusEl.textContent = `${midiClock.isRunning() ? '▶' : '⏸'} ${bpm.toFixed(1)} BPM`;
+}
+
+function populateMidiDevices() {
+	if (!midiDeviceSel) return;
+	const inputs  = midiClock.getInputs();
+	const current = midiClock.getInputId();
+	midiDeviceSel.textContent = '';
+	if (inputs.length === 0) {
+		const opt = document.createElement('option');
+		opt.value = ''; opt.textContent = 'No MIDI inputs';
+		midiDeviceSel.appendChild(opt);
+		midiDeviceSel.disabled = true;
+		return;
+	}
+	for (const inp of inputs) {
+		const opt = document.createElement('option');
+		opt.value = inp.id; opt.textContent = inp.name;
+		midiDeviceSel.appendChild(opt);
+	}
+	midiDeviceSel.disabled = !midiClock.isEnabled();
+	if (current) midiDeviceSel.value = current;
+}
+
+async function onMidiEnableToggle() {
+	if (midiEnableChk.checked) {
+		const ok = await midiClock.init();
+		if (!ok) { midiEnableChk.checked = false; updateMidiStatus('unavailable'); return; }
+		midiClock.setEnabled(true);
+		populateMidiDevices();
+		// Prefer the saved device if it's still present, else the first input.
+		const inputs = midiClock.getInputs();
+		const wanted = midiSettings.inputId && inputs.some((i) => i.id === midiSettings.inputId)
+			? midiSettings.inputId
+			: (inputs[0] ? inputs[0].id : null);
+		midiClock.setInput(wanted);
+		if (wanted) midiDeviceSel.value = wanted;
+	} else {
+		midiClock.setEnabled(false);
+		for (const s of slicers) s.setMidiBpm && s.setMidiBpm(null);   // release tempo
+	}
+	midiSettings.enabled = midiEnableChk.checked;
+	midiSettings.inputId = midiClock.getInputId();
+	scheduleSave();
+	updateMidiStatus();
+}
+
+function buildMidiBar() {
+	if (!midiBar) return;
+	midiBar.className = 'midi-bar';
+
+	const title = document.createElement('span');
+	title.className   = 'midi-bar-title';
+	title.textContent = 'MIDI Clock';
+
+	midiEnableChk      = document.createElement('input');
+	midiEnableChk.type = 'checkbox';
+	midiEnableChk.id   = 'midiEnable';
+	const enableLabel  = document.createElement('label');
+	enableLabel.className = 'midi-enable-label';
+	enableLabel.appendChild(midiEnableChk);
+	enableLabel.appendChild(document.createTextNode(' Sync'));
+
+	midiDeviceSel = document.createElement('select');
+	midiDeviceSel.className = 'midi-device-select';
+	midiDeviceSel.disabled  = true;
+
+	midiStatusEl = document.createElement('span');
+	midiStatusEl.className = 'midi-status';
+
+	if (!midiClock.isSupported) {
+		midiEnableChk.disabled = true;
+		enableLabel.title      = 'This browser has no Web MIDI support';
+	}
+
+	midiBar.appendChild(title);
+	midiBar.appendChild(enableLabel);
+	midiBar.appendChild(midiDeviceSel);
+	midiBar.appendChild(midiStatusEl);
+
+	midiEnableChk.addEventListener('change', onMidiEnableToggle);
+	midiDeviceSel.addEventListener('change', () => {
+		midiClock.setInput(midiDeviceSel.value || null);
+		midiSettings.inputId = midiClock.getInputId();
+		scheduleSave();
+	});
+
+	updateMidiStatus();
+}
+
+// Derived tempo → every slicer follows the master clock.
+midiClock.onBpm((bpm) => {
+	if (!midiClock.isEnabled()) return;
+	for (const s of slicers) s.setMidiBpm && s.setMidiBpm(bpm);
+	updateMidiStatus();
+});
+// Transport: Start restarts from the top, Continue resumes, Stop halts — across all
+// slicers that have a sequence.
+midiClock.onTransport((ev) => {
+	if (!midiClock.isEnabled()) return;
+	for (const s of slicers) {
+		if (ev === 'stop') { s.seqStop && s.seqStop(); continue; }
+		if (!(s.hasTiles && s.hasTiles())) continue;
+		if (ev === 'start' && s.seqStop) s.seqStop();   // from the beginning
+		s.seqStart && s.seqStart();
+	}
+	updateMidiStatus();
+});
+// Device hot-plug / enable changes → refresh the dropdown and status line.
+midiClock.onState(() => { populateMidiDevices(); updateMidiStatus(); });
+
+buildMidiBar();
+
 addSlicerBtn.addEventListener('click', () => createSlicer());
 
 clearStateBtn.addEventListener('click', async () => {
@@ -1538,4 +1701,15 @@ if (savedAll && Array.isArray(savedAll.slicers) && savedAll.slicers.length) {
 	savedAll.slicers.forEach((st) => createSlicer(st));
 } else {
 	createSlicer();
+}
+
+// Restore the MIDI clock connection (best-effort: silently stays off if access is
+// denied or the saved input is gone). Remember the saved input even when sync was
+// off, so re-enabling reconnects to the same device.
+if (savedAll && savedAll.midi) {
+	midiSettings.inputId = savedAll.midi.inputId || null;
+	if (savedAll.midi.enabled && midiClock.isSupported && midiEnableChk) {
+		midiEnableChk.checked = true;
+		onMidiEnableToggle();
+	}
 }
