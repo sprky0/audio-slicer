@@ -1410,8 +1410,9 @@ function createSlicer(savedState = null) {
 		scheduleSave();
 	});
 	// "Reset" the tiles back to the default one-unit-per-tile layout (Σ w === U).
+	// Safe mid-play: the transport re-reads seq.tiles each scheduler tick, so swapping
+	// the array in place reshapes the loop without stopping playback.
 	seqClearBtn.addEventListener('click', () => {
-		stopSeqPlayback();
 		seq.tiles = defaultTiles(unitCount());
 		renderSequencer();
 	});
