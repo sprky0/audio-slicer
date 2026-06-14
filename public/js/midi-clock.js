@@ -35,6 +35,7 @@ class MidiClock {
 		this.enabled    = false;
 		this.running    = false;   // between a Start/Continue and the next Stop
 		this.bpm        = null;    // last derived tempo, or null until enough pulses
+		this._clocks    = 0;       // 0xF8 pulses since the last Start (24 per beat)
 		this._stamps    = [];      // recent pulse timestamps (ms) for averaging
 		this._onMessage = (e) => this._handle(e);
 		this._listeners = { bpm: new Set(), transport: new Set(), state: new Set() };
@@ -93,6 +94,14 @@ class MidiClock {
 	isRunning() { return this.running; }
 	getBpm()    { return this.bpm; }
 
+	// Beat position for the indicator: 24 clocks per beat, 4 beats per bar. `index`
+	// counts beats since the last Start (so index % 4 is the bar position); `phase`
+	// is 0..1 within the current beat. null until a clock is actually arriving.
+	getBeat() {
+		if (this.bpm == null) return null;
+		return { index: Math.floor(this._clocks / 24), phase: (this._clocks % 24) / 24, running: this.running };
+	}
+
 	onBpm(cb)       { return this._sub('bpm', cb); }
 	onTransport(cb) { return this._sub('transport', cb); }
 	onState(cb)     { return this._sub('state', cb); }
@@ -103,7 +112,7 @@ class MidiClock {
 	}
 	_emit(kind, arg) { this._listeners[kind].forEach((cb) => cb(arg)); }
 
-	_resetTiming() { this._stamps = []; this.bpm = null; }
+	_resetTiming() { this._stamps = []; this.bpm = null; this._clocks = 0; }
 
 	_handle(e) {
 		if (!this.enabled) return;
@@ -118,6 +127,7 @@ class MidiClock {
 	}
 
 	_onPulse(now) {
+		this._clocks++;
 		const stamps = this._stamps;
 		const last   = stamps[stamps.length - 1];
 		// A long silence means the previous window is stale (clock was paused).

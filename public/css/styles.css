@@ -349,10 +349,61 @@ button:disabled {
 }
 
 .midi-status {
-	margin-left: auto;
 	color: #aaa;
 	font-size: 13px;
 	font-variant-numeric: tabular-nums;
+}
+
+/* Clock indicator: source + master BPM + a 4-beat pulse, pinned to the right. */
+.clock-indicator {
+	display: flex;
+	align-items: center;
+	gap: var(--space-sm);
+	margin-left: auto;
+}
+
+.clock-label {
+	color: #888;
+	font-size: 12px;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+}
+
+.clock-source {
+	font-weight: bold;
+	color: var(--color-accent);
+	font-size: 13px;
+	min-width: 56px;
+}
+
+.clock-bpm {
+	color: var(--color-text-primary);
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+	min-width: 64px;
+}
+
+.clock-beats {
+	display: flex;
+	align-items: center;
+	gap: var(--space-xs);
+	margin-left: var(--space-xs);
+}
+
+.clock-beat-dot {
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+	background: var(--color-text-primary);
+	opacity: 0.18;
+	/* Beat 1 (the downbeat) gets a brighter resting tint so the bar start reads. */
+	transition: opacity 0.05s linear;
+}
+
+.clock-beat-dot:first-child { background: var(--color-accent); opacity: 0.3; }
+
+.clock-beat-dot.active {
+	background: var(--color-marker);
 }
 
 /* Tile row: one flex item per slice, width ∝ unit span. Laid edge-to-edge so the

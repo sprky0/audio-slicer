@@ -12,6 +12,7 @@ Load an audio file, chop it into slices on a waveform, and sequence those slices
 - **Tile editing** — drag tiles to reorder, drag their edges to resize (with sub-step precision), and double-click to split or shift-click to merge — all live while the loop plays.
 - **Randomize** — shuffle the tile order with an amount knob that controls how far the pattern drifts from the current one.
 - **MIDI clock sync** — sync to an external MIDI clock (Web MIDI): the incoming clock sets the master BPM for every slicer, and MIDI Start/Continue/Stop drive the sequencers.
+- **Clock indicator** — a top bar shows the active clock source (External when MIDI is driving, else Internal — the first slicer to start playing), the current master BPM, and a 4-beat pulse.
 - **Time-stretch & pitch-shift** — WSOLA time-stretching keeps pitch constant across tempos; slices can also be pitch-shifted.
 - **Color-coded slices** — each slice has a consistent color across the waveform and the sequencer.
 - **Multiple slicers** — add as many independent slicers as you like.

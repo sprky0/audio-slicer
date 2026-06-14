@@ -24,6 +24,12 @@ let saveTimer     = null;
 // alongside the slicers so a reload restores the connection.
 const midiSettings = { enabled: false, inputId: null };
 
+// Monotonic wall-clock order stamped on each slicer when its sequencer starts. With
+// no external MIDI clock, the lowest-stamped slicer still playing is the internal
+// clock source ("first played"). Audio-clock times aren't comparable across slicers
+// (each has its own AudioContext), so this separate counter decides precedence.
+let playSeqCounter = 0;
+
 function saveState() {
 	saveStateRaw({
 		version:      3,
@@ -1375,6 +1381,7 @@ function createSlicer(savedState = null) {
 		onStop: () => {
 			seq.isPlaying   = false;
 			seq.currentTile = -1;
+			playOrder       = -1;
 			slicer.sequencerPlaying = false;
 			setPlayingTile(-1);
 			slicer.view.setIsPlaying(false);
@@ -1384,10 +1391,15 @@ function createSlicer(savedState = null) {
 		},
 	});
 
+	// Stamped when this slicer's sequencer starts, so the clock indicator can pick the
+	// "first played" slicer as the internal clock source. -1 while stopped.
+	let playOrder = -1;
+
 	const startSeqPlayback = async () => {
 		if (seq.isPlaying) return;
 		if (seq.tiles.length === 0) return;
 
+		playOrder       = playSeqCounter++;
 		seq.isPlaying   = true;
 		seq.currentTile = -1;
 		slicer.sequencerPlaying = true;
@@ -1467,8 +1479,21 @@ function createSlicer(savedState = null) {
 	});
 	// The MIDI clock controller drives every slicer through these hooks: setMidiBpm
 	// for tempo sync, and seqStart/seqStop/hasTiles for MIDI Start/Continue/Stop.
+	// Clock readout for the global indicator: effective tempo, play order, and the
+	// audio-clock times needed to compute the beat phase (ctxTime − startTime).
+	const getClockInfo = () => {
+		const ctx = slicer.engine && slicer.engine.audioContext;
+		return {
+			playing:   seq.isPlaying,
+			order:     playOrder,
+			bpm:       (midiBpm != null ? midiBpm : bpm),
+			ctxTime:   ctx ? ctx.currentTime : 0,
+			startTime: transport.startTime,
+		};
+	};
+
 	slicers.push({
-		id, getState, setMidiBpm,
+		id, getState, setMidiBpm, getClockInfo,
 		seqStart: startSeqPlayback,
 		seqStop:  stopSeqPlayback,
 		hasTiles: () => seq.tiles.length > 0,
@@ -1558,7 +1583,11 @@ function createSlicer(savedState = null) {
 // Start/Continue/Stop drive their sequencers. See midi-clock.js for the signal.
 const midiBar = document.getElementById('midiBar');
 let midiEnableChk, midiDeviceSel, midiStatusEl;
+// Clock indicator (right side): source, master BPM, 4-beat pulse.
+let clockSourceEl, clockBpmEl, beatDots = [];
 
+// MIDI connection feedback only — the live tempo/source/beat are shown by the clock
+// indicator (updateClockIndicator), which covers the internal source too.
 function updateMidiStatus(mode) {
 	if (!midiStatusEl) return;
 	if (mode === 'unavailable' || !midiClock.isSupported) {
@@ -1566,9 +1595,7 @@ function updateMidiStatus(mode) {
 		return;
 	}
 	if (!midiClock.isEnabled()) { midiStatusEl.textContent = 'off'; return; }
-	const bpm = midiClock.getBpm();
-	if (bpm == null) { midiStatusEl.textContent = 'waiting for clock…'; return; }
-	midiStatusEl.textContent = `${midiClock.isRunning() ? '▶' : '⏸'} ${bpm.toFixed(1)} BPM`;
+	midiStatusEl.textContent = midiClock.getBpm() == null ? 'waiting for clock…' : 'receiving';
 }
 
 function populateMidiDevices() {
@@ -1643,10 +1670,35 @@ function buildMidiBar() {
 		enableLabel.title      = 'This browser has no Web MIDI support';
 	}
 
+	// Clock indicator: source (Internal / External / —), master BPM, beat dots.
+	const clockBox = document.createElement('div');
+	clockBox.className = 'clock-indicator';
+	const clockLabel = document.createElement('span');
+	clockLabel.className   = 'clock-label';
+	clockLabel.textContent = 'Clock';
+	clockSourceEl = document.createElement('span');
+	clockSourceEl.className = 'clock-source';
+	clockBpmEl = document.createElement('span');
+	clockBpmEl.className = 'clock-bpm';
+	const beatsBox = document.createElement('div');
+	beatsBox.className = 'clock-beats';
+	beatDots = [];
+	for (let b = 0; b < 4; b++) {
+		const dot = document.createElement('span');
+		dot.className = 'clock-beat-dot';
+		beatsBox.appendChild(dot);
+		beatDots.push(dot);
+	}
+	clockBox.appendChild(clockLabel);
+	clockBox.appendChild(clockSourceEl);
+	clockBox.appendChild(clockBpmEl);
+	clockBox.appendChild(beatsBox);
+
 	midiBar.appendChild(title);
 	midiBar.appendChild(enableLabel);
 	midiBar.appendChild(midiDeviceSel);
 	midiBar.appendChild(midiStatusEl);
+	midiBar.appendChild(clockBox);
 
 	midiEnableChk.addEventListener('change', onMidiEnableToggle);
 	midiDeviceSel.addEventListener('change', () => {
@@ -1656,6 +1708,64 @@ function buildMidiBar() {
 	});
 
 	updateMidiStatus();
+	requestAnimationFrame(updateClockIndicator);
+}
+
+// Resolve the active clock each frame and paint the indicator. The external MIDI
+// clock wins when it's actually delivering pulses; otherwise the lowest-ordered
+// slicer still playing is the internal source (the "first played" one). Beat phase
+// drives a 4-dot bar pulse — from MIDI clock counts externally, from elapsed audio
+// time (ctxTime − startTime, at the source's BPM) internally.
+function updateClockIndicator() {
+	let source = '—', bpm = null, beatIndex = -1, phase = 0;
+
+	// External is "present" once it's delivering pulses (bpm derived) or actively
+	// running between a Start and Stop; otherwise an enabled-but-idle sync falls back
+	// to the internal source.
+	if (midiClock.isEnabled() && (midiClock.getBpm() != null || midiClock.isRunning())) {
+		source = 'External';
+		bpm    = midiClock.getBpm();
+		const beat = midiClock.getBeat();
+		if (beat) { beatIndex = beat.index; phase = beat.phase; }
+	} else {
+		// Internal: first-played slicer that's still playing.
+		let src = null;
+		for (const s of slicers) {
+			if (!s.getClockInfo) continue;
+			const info = s.getClockInfo();
+			if (info.playing && (!src || info.order < src.order)) src = info;
+		}
+		if (src && src.bpm > 0) {
+			source = 'Internal';
+			bpm    = src.bpm;
+			const beatSec = 60 / src.bpm;
+			const elapsed = Math.max(0, src.ctxTime - src.startTime);
+			beatIndex = Math.floor(elapsed / beatSec);
+			phase     = (elapsed / beatSec) % 1;
+		}
+	}
+
+	if (clockSourceEl) clockSourceEl.textContent = source;
+	if (clockBpmEl)    clockBpmEl.textContent    = bpm != null ? `${bpm.toFixed(1)} BPM` : '— BPM';
+
+	// Light the current beat (index % 4) and flash it: brightest at the downbeat,
+	// fading across the beat. Nothing lit when no clock is running.
+	const active = beatIndex >= 0 ? beatIndex % 4 : -1;
+	for (let b = 0; b < beatDots.length; b++) {
+		const dot = beatDots[b];
+		if (b === active) {
+			const intensity = 1 - Math.min(1, phase);   // 1 → 0 across the beat
+			dot.classList.add('active');
+			dot.style.opacity   = String(0.4 + 0.6 * intensity);
+			dot.style.transform = `scale(${1 + 0.5 * intensity})`;
+		} else {
+			dot.classList.remove('active');
+			dot.style.opacity   = '';
+			dot.style.transform = '';
+		}
+	}
+
+	requestAnimationFrame(updateClockIndicator);
 }
 
 // Derived tempo → every slicer follows the master clock.

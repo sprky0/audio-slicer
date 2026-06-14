@@ -44,6 +44,7 @@ class Transport {
 
 		this.isPlaying        = false;
 		this.nextStepTime     = 0;
+		this.startTime        = 0;      // audio-clock time the current run began (for the beat clock)
 		this.tileIndex        = 0;
 		this.noteQueue        = [];
 		this.schedulerTimerId = null;
@@ -65,6 +66,9 @@ class Transport {
 		this._noMoreTiles = false;
 		// Small offset so the first tile isn't scheduled in the past.
 		this.nextStepTime = this.engine.audioContext.currentTime + 0.05;
+		// Anchor the beat clock to the first scheduled step so the indicator's beats
+		// line up with the bar (a loop is one bar of 4 beats).
+		this.startTime    = this.nextStepTime;
 
 		this._scheduler();
 		this._visualLoop();
