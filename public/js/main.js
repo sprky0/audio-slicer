@@ -14,6 +14,25 @@ const addSlicerBtn  = document.getElementById('addSlicerBtn');
 const clearStateBtn = document.getElementById('clearStateBtn');
 let slicerCount     = 0;
 
+// Assign a toolbar cell's grid footprint: how many columns (and optionally rows)
+// of the fluid auto-fit grid it occupies. Drives the --col-span / --row-span
+// custom properties the CSS reads. cols === 'full' makes the cell span the row.
+function setSpan(el, cols, rows = 1) {
+	if (cols === 'full') { el.classList.add('span-full'); }
+	else { el.style.setProperty('--col-span', cols); }
+	if (rows !== 1) el.style.setProperty('--row-span', rows);
+	return el;
+}
+
+// Section-label chip (grey plate, bold orange text). A grid citizen like any
+// control — title a region with it, e.g. makeLabel('Source').
+function makeLabel(text) {
+	const el = document.createElement('span');
+	el.className   = 'ui-label';
+	el.textContent = text;
+	return el;
+}
+
 // --- Persistence: registry of live slicers + debounced save ---
 let nextSlicerId  = 0;
 const slicers     = [];     // { id, getState, setMidiBpm, seqStart, seqStop, hasTiles }
@@ -77,9 +96,21 @@ function createSlicer(savedState = null) {
 	removeBtn.textContent = 'Remove';
 	removeBtn.className = 'slicer-remove-btn';
 
+	// Native file input is kept for the OS picker but hidden; a real button
+	// triggers it so the control matches the rest of the toolbar.
 	const fileInput = document.createElement('input');
 	fileInput.type  = 'file';
 	fileInput.accept= 'audio/wav,audio/mp3';
+	fileInput.hidden = true;
+
+	const selectFileBtn = document.createElement('button');
+	selectFileBtn.textContent = 'Select File';
+	selectFileBtn.className   = 'slicer-file-btn';
+	selectFileBtn.addEventListener('click', () => fileInput.click());
+
+	// File-details readout: filename + duration + sample rate (or a placeholder).
+	const fileInfo = document.createElement('div');
+	fileInfo.className = 'file-info';
 
 	const sliceBtn = document.createElement('button');
 	sliceBtn.textContent = 'Slice';
@@ -135,17 +166,30 @@ function createSlicer(savedState = null) {
 	detailsBtn.className   = 'slicer-details-btn';
 	detailsBtn.setAttribute('aria-expanded', 'false');
 
-	controls.appendChild(document.createTextNode('File: '));
-	controls.appendChild(fileInput);
-	controls.appendChild(document.createTextNode(' Units: '));
-	controls.appendChild(subdivisionsSelect);
-	controls.appendChild(sliceBtn);
-	controls.appendChild(cutBtn);
-	controls.appendChild(playPauseBtn);
-	controls.appendChild(stopBtn);
-	controls.appendChild(resetBtn);
-	controls.appendChild(detailsBtn);
-	controls.appendChild(removeBtn);
+	// Interface controls live in a fluid auto-fit grid (the "cluster"); the knob
+	// rack is assembled separately and sits beside it (see end of this section).
+	const cluster = document.createElement('div');
+	cluster.className = 'toolbar-cluster';
+
+	// Units pairs a caption with its select as one grid cell.
+	const unitsField = document.createElement('label');
+	unitsField.className = 'toolbar-field';
+	unitsField.appendChild(document.createTextNode('Units'));
+	unitsField.appendChild(subdivisionsSelect);
+
+	// Per-item grid footprint (columns). Tweak these to retune the toolbar.
+	cluster.appendChild(setSpan(makeLabel('Source'), 1));   // titles the source/transport row
+	cluster.appendChild(fileInput);                          // hidden; no grid cell
+	cluster.appendChild(setSpan(selectFileBtn, 1));
+	cluster.appendChild(setSpan(fileInfo, 3));               // room for name + details
+	cluster.appendChild(setSpan(unitsField, 1));
+	cluster.appendChild(setSpan(sliceBtn, 1));
+	cluster.appendChild(setSpan(cutBtn, 1));
+	cluster.appendChild(setSpan(playPauseBtn, 1));
+	cluster.appendChild(setSpan(stopBtn, 1));
+	cluster.appendChild(setSpan(resetBtn, 1));
+	cluster.appendChild(setSpan(detailsBtn, 2));  // "Show/Hide details"
+	cluster.appendChild(setSpan(removeBtn, 1));
 
 	// --- Collapsible details panel: Start/End number inputs + range sliders ---
 	const detailsPanel = document.createElement('div');
@@ -187,7 +231,7 @@ function createSlicer(savedState = null) {
 
 	detailsPanel.appendChild(numRow);
 	detailsPanel.appendChild(sliderRow);
-	controls.appendChild(detailsPanel);
+	cluster.appendChild(setSpan(detailsPanel, 'full'));
 
 	detailsBtn.addEventListener('click', () => {
 		const showing = !detailsPanel.hidden;
@@ -225,15 +269,48 @@ function createSlicer(savedState = null) {
 		detent: 0,
 		signed: true,
 	});
-	controls.appendChild(volumeKnob.getElement());
-	controls.appendChild(panKnob.getElement());
-	controls.appendChild(pitchKnob.getElement());
+	// Knobs are grid cells too — one column wide, two rows tall (a display
+	// control claiming more vertical units), assignable like any other item.
+	// Inserted before the full-row details panel so they sit with the buttons.
+	cluster.insertBefore(setSpan(volumeKnob.getElement(), 1, 2), detailsPanel);
+	cluster.insertBefore(setSpan(panKnob.getElement(),    1, 2), detailsPanel);
+	cluster.insertBefore(setSpan(pitchKnob.getElement(),  1, 2), detailsPanel);
+
+	controls.appendChild(cluster);
 
 	container.appendChild(controls);
 	slicersDiv.appendChild(container);
 
 	// Slicer instance — width is responsive (driven by the slicer container).
 	const slicer = new AudioSlicerController(container, { height: 200 });
+
+	// Render the file-details readout: name (truncating) + duration + sample rate,
+	// or a muted placeholder when empty. Pulls live specs from the decoded buffer.
+	function renderFileInfo() {
+		fileInfo.textContent = '';
+		if (!currentFileName) {
+			fileInfo.classList.remove('has-file');
+			fileInfo.textContent = 'No file loaded';
+			return;
+		}
+		fileInfo.classList.add('has-file');
+		const name = document.createElement('span');
+		name.className   = 'file-info-name';
+		name.textContent = currentFileName;
+		name.title       = currentFileName;
+		fileInfo.appendChild(name);
+
+		const buf = slicer.engine && slicer.engine.audioBuffer;
+		if (buf) {
+			const secs = buf.duration;
+			const mmss = `${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, '0')}`;
+			const meta = document.createElement('span');
+			meta.className   = 'file-info-meta';
+			meta.textContent = `${mmss} · ${(buf.sampleRate / 1000).toFixed(1)} kHz`;
+			fileInfo.appendChild(meta);
+		}
+	}
+	renderFileInfo();
 
 	// --- Play/Pause Button Logic ---
 	let isPlaying = false;
@@ -346,6 +423,7 @@ function createSlicer(savedState = null) {
 			endSlider.value   = 1;
 			applyRange(0, 1, { autoPlay: false, keepPlayhead: false });
 			currentFileName = file.name;
+			renderFileInfo();
 			await putAudio('audio-' + id, file);
 			scheduleSave();
 		}
@@ -467,9 +545,7 @@ function createSlicer(savedState = null) {
 	const seqToolbar = document.createElement('div');
 	seqToolbar.className = 'seq-toolbar';
 
-	const seqLabel = document.createElement('span');
-	seqLabel.className   = 'seq-label';
-	seqLabel.textContent = 'Sequencer';
+	const seqLabel = makeLabel('Sequencer');
 
 	const seqPlayBtn = document.createElement('button');
 	seqPlayBtn.textContent = 'Play Seq';
@@ -552,17 +628,18 @@ function createSlicer(savedState = null) {
 	const seqStatus = document.createElement('span');
 	seqStatus.className = 'seq-status';
 
-	seqToolbar.appendChild(seqLabel);
-	seqToolbar.appendChild(seqPlayBtn);
-	seqToolbar.appendChild(seqStopBtn);
-	seqToolbar.appendChild(seqLoopBtn);
-	seqToolbar.appendChild(seqClearBtn);
-	seqToolbar.appendChild(randomizeBtn);
-	seqToolbar.appendChild(randLevelLabel);
-	seqToolbar.appendChild(bpmLabel);
-	seqToolbar.appendChild(bpmResetBtn);
-	seqToolbar.appendChild(divisionLabel);
-	seqToolbar.appendChild(seqStatus);
+	// Per-item grid footprint (columns) for the sequencer toolbar.
+	seqToolbar.appendChild(setSpan(seqLabel, 1));
+	seqToolbar.appendChild(setSpan(seqPlayBtn, 1));
+	seqToolbar.appendChild(setSpan(seqStopBtn, 1));
+	seqToolbar.appendChild(setSpan(seqLoopBtn, 1));
+	seqToolbar.appendChild(setSpan(seqClearBtn, 1));
+	seqToolbar.appendChild(setSpan(randomizeBtn, 1));
+	seqToolbar.appendChild(setSpan(randLevelLabel, 2));  // Amount slider
+	seqToolbar.appendChild(setSpan(bpmLabel, 2));        // BPM field
+	seqToolbar.appendChild(setSpan(bpmResetBtn, 1));
+	seqToolbar.appendChild(setSpan(divisionLabel, 1));   // Step
+	seqToolbar.appendChild(setSpan(seqStatus, 'full'));
 
 	const seqStepsRow = document.createElement('div');
 	seqStepsRow.className = 'seq-steps';
@@ -1548,6 +1625,7 @@ function createSlicer(savedState = null) {
 				const blob = await getAudio('audio-' + id);
 				if (blob) {
 					await slicer.loadFile(blob);
+					renderFileInfo();
 					slicer.setView(virtualStart, virtualEnd);
 					// Re-slice with the saved window/subdivisions. applyRange →
 					// deriveTransport recomputes originalBPM and respects bpmManual.

@@ -28,9 +28,50 @@
 
 	/* Transition */
 	--transition-fast: 0.2s;
+	--transition-press: 0.08s;
 
 	/* Opacity */
 	--opacity-disabled: 0.5;
+
+	/* Semantic action colors + per-state shades.
+	   Neutral = blue (default), positive = green (play / on), danger = red
+	   (stop / destructive). Each action gets a resting, hover and pressed shade
+	   so every control reads the same way: hover lightens, press darkens. */
+	--color-accent-hover:    #4aa9e6;
+	--color-accent-active:   #2c80b8;
+	--color-positive:        #2ecc40;
+	--color-positive-hover:  #43d957;
+	--color-positive-active: #25a833;
+	--color-on-positive:     #0d2912;   /* dark text on green for contrast */
+	--color-danger:          #e74c3c;
+	--color-danger-hover:    #ef6253;
+	--color-danger-active:   #c0392b;
+
+	/* Input/select surface (a touch lighter than the container so fields read). */
+	--color-input-bg:        #23272f;
+	--color-border-hover:    #5a5f68;
+
+	/* Section-label chip: neutral grey plate with bold orange title text. */
+	--color-label-bg:        #3a3f4a;
+	--color-label-text:      #f5a623;
+
+	/* Shared focus ring + raised-button shadow. */
+	--focus-ring:    0 0 0 3px rgba(255, 255, 255, 0.30);
+	--focus-ring-accent: 0 0 0 3px rgba(52, 152, 219, 0.30);
+	--shadow-btn:    0 1px 0 rgba(0, 0, 0, 0.35);
+
+	/* --- Layout grid ---------------------------------------------------------
+	   A single relative base unit drives every height, gap and column width, so
+	   the whole UI scales with the root font size (and never hard-codes layout
+	   pixels). Bump --ui-scale for a roomier mode or a user "size" preference and
+	   the toolbars, control heights, gaps and knobs all grow together. */
+	--ui-scale:    1;
+	--grid-unit:   calc(0.5rem * var(--ui-scale));  /* base rhythm  (~8px @ 1)  */
+	--gap:         var(--grid-unit);                /* gap between cells        */
+	--control-h:   calc(var(--grid-unit) * 4);      /* one interface row (~32px)*/
+	--col-min:     calc(var(--grid-unit) * 12);     /* min column width (~96px) */
+	--knob-size:   calc(var(--grid-unit) * 6);      /* dial diameter (~48px)    */
+	--tile-h:      calc(var(--grid-unit) * 11);     /* sequencer tile row (~88px)*/
 }
 
 /* Basic reset and layout */
@@ -52,6 +93,13 @@ body {
 	align-items: center;
 }
 
+/* Footer actions (Add Slicer / Clear Saved) sit outside any grid — give them
+   back the breathing room the old per-button margin used to provide. */
+#addSlicerBtn,
+#clearStateBtn {
+	margin: var(--grid-unit) auto 0;
+}
+
 /* Dropzone */
 #dropzone {
 	width: 300px;
@@ -65,6 +113,9 @@ body {
 	cursor: pointer;
 	transition: background-color var(--transition-fast);
 }
+#dropzone:hover {
+	background-color: rgba(52, 152, 219, 0.06);
+}
 #dropzone.drag-over {
 	background-color: rgba(52, 152, 219, 0.1); /* Could be var(--color-accent) with alpha, but CSS vars don't support alpha directly */
 }
@@ -77,18 +128,194 @@ label[for="subdivisions"] {
 	margin-right: var(--space-xl);
 }
 
-/* Button styling */
+/* Button styling.
+   Five states for every button: resting (inactive), hover, active (pressed),
+   focus-visible (keyboard ring) and disabled. Neutral is the blue default;
+   intent variants below recolour resting/hover/active. The `:not(:disabled)`
+   guards keep hover/press effects from firing on a dimmed, dead button. */
 button {
 	background-color: var(--color-accent);
 	color: var(--color-text-primary);
 	border: none;
 	border-radius: var(--radius-sm);
-	padding: var(--space-xs) var(--space-md);
-	margin: var(--space-xs);
+	box-sizing: border-box;
+	min-height: var(--control-h);
+	padding: 0 var(--space-md);
 	cursor: pointer;
 	font-size: var(--font-size-base);
+	/* Center the label so every button shares one baseline regardless of width. */
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	box-shadow: var(--shadow-btn);
+	transition: background-color var(--transition-fast),
+	            box-shadow       var(--transition-fast),
+	            transform        var(--transition-press) ease;
+}
+button:hover:not(:disabled) {
+	background-color: var(--color-accent-hover);
+}
+button:active:not(:disabled) {
+	background-color: var(--color-accent-active);
+	transform: translateY(1px);
+	box-shadow: none;
+}
+button:focus-visible {
+	outline: none;
+	box-shadow: var(--focus-ring);
 }
 button:disabled {
+	opacity: var(--opacity-disabled);
+	cursor: not-allowed;
+	box-shadow: none;
+}
+/* display:inline-flex above would otherwise defeat the [hidden] attribute. */
+button[hidden] {
+	display: none;
+}
+
+/* Intent: primary / "go" (green) — Play, Play Seq. Dark text for contrast. */
+.slicer-playpause-btn,
+.seq-play-btn {
+	background-color: var(--color-positive);
+	color: var(--color-on-positive);
+}
+.slicer-playpause-btn:hover:not(:disabled),
+.seq-play-btn:hover:not(:disabled) {
+	background-color: var(--color-positive-hover);
+}
+.slicer-playpause-btn:active:not(:disabled),
+.seq-play-btn:active:not(:disabled) {
+	background-color: var(--color-positive-active);
+}
+
+/* Intent: stop / destructive (red) — Stop, Stop Seq, Remove, Clear Saved. */
+.slicer-stop-btn,
+.seq-stop-btn,
+.slicer-remove-btn,
+#clearStateBtn {
+	background-color: var(--color-danger);
+}
+.slicer-stop-btn:hover:not(:disabled),
+.seq-stop-btn:hover:not(:disabled),
+.slicer-remove-btn:hover:not(:disabled),
+#clearStateBtn:hover:not(:disabled) {
+	background-color: var(--color-danger-hover);
+}
+.slicer-stop-btn:active:not(:disabled),
+.seq-stop-btn:active:not(:disabled),
+.slicer-remove-btn:active:not(:disabled),
+#clearStateBtn:active:not(:disabled) {
+	background-color: var(--color-danger-active);
+}
+
+/* Section-label chip — a reusable title plate (e.g. "Source", "Sequencer").
+   Neutral grey, bold orange text, and a full grid citizen: it takes --control-h
+   height and whatever column span setSpan() gives it, so it scales with the rest
+   of the system. */
+.ui-label {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	min-height: var(--control-h);
+	padding: 0 var(--space-md);
+	border-radius: var(--radius-sm);
+	background: var(--color-label-bg);
+	color: var(--color-label-text);
+	font-size: 13px;
+	font-weight: bold;
+	letter-spacing: 0.02em;
+	white-space: nowrap;
+	user-select: none;
+}
+
+/* --- Form controls: selects, text/number inputs, file picker, checkbox ---
+   Same five-state language as buttons: a resting field surface, a brighter
+   border on hover, an accent border + ring on focus, and a dim/no-cursor
+   disabled look. */
+select,
+input[type="number"],
+input[type="text"] {
+	background-color: var(--color-input-bg);
+	color: var(--color-text-primary);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	box-sizing: border-box;
+	min-height: var(--control-h);
+	padding: 0 var(--space-sm);
+	font-family: inherit;
+	font-size: 13px;
+	transition: border-color var(--transition-fast),
+	            box-shadow   var(--transition-fast);
+}
+select {
+	cursor: pointer;
+}
+select:hover:not(:disabled),
+input[type="number"]:hover:not(:disabled),
+input[type="text"]:hover:not(:disabled) {
+	border-color: var(--color-border-hover);
+}
+select:focus-visible,
+input[type="number"]:focus-visible,
+input[type="text"]:focus-visible {
+	outline: none;
+	border-color: var(--color-accent);
+	box-shadow: var(--focus-ring-accent);
+}
+select:disabled,
+input[type="number"]:disabled,
+input[type="text"]:disabled {
+	opacity: var(--opacity-disabled);
+	cursor: not-allowed;
+}
+
+/* File picker: style its embedded button as a neutral button with states. */
+input[type="file"] {
+	color: var(--color-text-primary);
+	font-size: 13px;
+}
+input[type="file"]::file-selector-button {
+	background-color: var(--color-accent);
+	color: var(--color-text-primary);
+	border: none;
+	border-radius: var(--radius-sm);
+	min-height: calc(var(--control-h) - 2px);
+	padding: 0 var(--space-md);
+	margin-right: var(--space-sm);
+	cursor: pointer;
+	font-size: 13px;
+	box-shadow: var(--shadow-btn);
+	transition: background-color var(--transition-fast);
+}
+input[type="file"]::file-selector-button:hover {
+	background-color: var(--color-accent-hover);
+}
+input[type="file"]:focus-visible {
+	outline: none;
+}
+input[type="file"]:focus-visible::file-selector-button {
+	box-shadow: var(--focus-ring);
+}
+
+/* Checkbox: tint with the accent, add a hover affordance and a focus ring. */
+input[type="checkbox"] {
+	accent-color: var(--color-accent);
+	width: 15px;
+	height: 15px;
+	cursor: pointer;
+	transition: filter var(--transition-fast);
+}
+input[type="checkbox"]:hover:not(:disabled) {
+	filter: brightness(1.2);
+}
+input[type="checkbox"]:focus-visible {
+	outline: none;
+	border-radius: 3px;
+	box-shadow: var(--focus-ring);
+}
+input[type="checkbox"]:disabled {
 	opacity: var(--opacity-disabled);
 	cursor: not-allowed;
 }
@@ -152,11 +379,104 @@ button:disabled {
 	display: block;
 	width: 100%;
 }
+/* --- Control toolbars: a fluid, relative-unit grid -----------------------
+   .slicer-controls splits into the interface cluster (flexible) + the knob rack
+   (intrinsic). The cluster is an auto-fit grid: it makes as many --col-min
+   columns as the width allows and collapses the empty ones, so the row fills
+   and reflows on any screen with no breakpoints. Every cell is --control-h tall;
+   wider controls span 2 columns (.span-2), full-width ones span the row. */
 .slicer-controls {
 	margin-bottom: var(--space-lg);
 }
+
+.toolbar-cluster {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(var(--col-min), 1fr));
+	grid-auto-rows: var(--control-h);
+	align-items: stretch;
+	gap: var(--gap);
+}
+
+/* Controls fill their grid cell so a row of buttons reads as even columns;
+   keep labels on one line so a narrow cell never wraps the text. */
+.toolbar-cluster > button,
+.seq-toolbar > button {
+	width: 100%;
+	margin: 0;
+	white-space: nowrap;
+}
+
+/* Per-item grid sizing. Every cell spans --col-span columns and --row-span rows
+   (default 1×1). Assign per control either inline — el.style.setProperty(
+   '--col-span', 3) — or with the .span-N / .row-N / .span-full helpers below.
+   This is the single knob for "how many grid units does this item take". */
+.toolbar-cluster > *,
+.seq-toolbar > * {
+	grid-column: span var(--col-span, 1);
+	grid-row:    span var(--row-span, 1);
+}
+.span-2 { --col-span: 2; }
+.span-3 { --col-span: 3; }
+.span-4 { --col-span: 4; }
+.row-2  { --row-span: 2; }
+.row-3  { --row-span: 3; }
+/* Full-width cell (scoped so it outranks the generic span rule above). */
+.toolbar-cluster > .span-full,
+.seq-toolbar     > .span-full { grid-column: 1 / -1; }
+
+/* A label+control field (File, Units) behaves as one cell. */
+.toolbar-field {
+	display: flex;
+	align-items: center;
+	gap: var(--space-xs);
+	min-height: var(--control-h);
+	color: var(--color-text-primary);
+	font-size: 13px;
+	white-space: nowrap;
+}
+.toolbar-field select,
+.toolbar-field input { flex: 1; min-width: 0; }
+
+/* File-details readout: a quiet field-surface cell listing the loaded file's
+   name (truncating) and its specs. A grid citizen at --control-h like the rest. */
+.file-info {
+	display: flex;
+	align-items: center;
+	gap: var(--space-sm);
+	box-sizing: border-box;
+	min-width: 0;                /* allow the name to ellipsis inside the cell */
+	min-height: var(--control-h);
+	padding: 0 var(--space-sm);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	background: var(--color-input-bg);
+	color: #888;                 /* muted when empty ("No file loaded") */
+	font-size: 12px;
+}
+.file-info.has-file {
+	color: var(--color-text-primary);
+}
+.file-info-name {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: 600;
+}
+.file-info-meta {
+	flex: 0 0 auto;
+	color: #888;
+	font-variant-numeric: tabular-nums;
+}
+
+/* Knobs are full grid citizens: each takes a column and spans rows for its
+   height (a display control claiming more vertical units), assigned per item
+   with setSpan(knob, cols, rows) — same criteria as every other cell. The dial
+   itself sizes to the cell height (see .knob-container --knob-size below). */
+
 .input-width-60 {
-	width: 60px;
+	width: calc(var(--grid-unit) * 7.5);   /* ~60px, scales with the grid */
 }
 
 /* --- Collapsible details panel (Start/End numerics + sliders) --- */
@@ -187,8 +507,11 @@ button:disabled {
 }
 
 .slicer-details-btn.active {
-	background: #2ecc40;
-	color: #111;
+	background: var(--color-positive);
+	color: var(--color-on-positive);
+}
+.slicer-details-btn.active:hover:not(:disabled) {
+	background: var(--color-positive-hover);
 }
 
 /* --- Start/End slider row --- */
@@ -207,8 +530,8 @@ button:disabled {
 	font-size: var(--font-size-base);
 }
 
-.slicer-range-slider {
-	flex: 1;
+.slicer-range-slider,
+.seq-rand-level {
 	-webkit-appearance: none;
 	appearance: none;
 	height: 6px;
@@ -217,9 +540,32 @@ button:disabled {
 	border: 1px solid var(--color-border);
 	outline: none;
 	cursor: pointer;
+	transition: border-color var(--transition-fast),
+	            box-shadow   var(--transition-fast);
+}
+.slicer-range-slider {
+	flex: 1;
 }
 
-.slicer-range-slider::-webkit-slider-thumb {
+/* Range states (covers start/end + Amount): brighten the track border on
+   hover, ring on focus, dim when disabled. */
+.slicer-range-slider:hover:not(:disabled),
+.seq-rand-level:hover:not(:disabled) {
+	border-color: var(--color-border-hover);
+}
+.slicer-range-slider:focus-visible,
+.seq-rand-level:focus-visible {
+	border-color: var(--color-accent);
+	box-shadow: var(--focus-ring-accent);
+}
+.slicer-range-slider:disabled,
+.seq-rand-level:disabled {
+	opacity: var(--opacity-disabled);
+	cursor: not-allowed;
+}
+
+.slicer-range-slider::-webkit-slider-thumb,
+.seq-rand-level::-webkit-slider-thumb {
 	-webkit-appearance: none;
 	appearance: none;
 	width: 16px;
@@ -231,12 +577,18 @@ button:disabled {
 	transition: transform var(--transition-fast);
 }
 
-.slicer-range-slider::-webkit-slider-thumb:active {
+.slicer-range-slider:hover::-webkit-slider-thumb,
+.seq-rand-level:hover::-webkit-slider-thumb {
+	transform: scale(1.1);
+}
+.slicer-range-slider::-webkit-slider-thumb:active,
+.seq-rand-level::-webkit-slider-thumb:active {
 	cursor: grabbing;
 	transform: scale(1.15);
 }
 
-.slicer-range-slider::-moz-range-thumb {
+.slicer-range-slider::-moz-range-thumb,
+.seq-rand-level::-moz-range-thumb {
 	width: 14px;
 	height: 14px;
 	border-radius: 50%;
@@ -263,18 +615,19 @@ button:disabled {
 }
 
 .seq-toolbar {
-	display: flex;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(var(--col-min), 1fr));
+	grid-auto-rows: var(--control-h);
 	align-items: center;
-	flex-wrap: wrap;
-	gap: var(--space-sm);
+	gap: var(--gap);
 	margin-bottom: var(--space-md);
 }
+/* Spans for these are assigned per item in main.js (--col-span / .span-full);
+   here we just let their inner control fill the wider cell. */
+.seq-bpm-label .seq-bpm-input,
+.seq-division-label .seq-division-select { flex: 1; min-width: 0; }
+.seq-status { margin-left: 0; }
 
-.seq-label {
-	font-weight: bold;
-	margin-right: var(--space-xs);
-	color: var(--color-text-primary);
-}
 
 .seq-bpm-label,
 .seq-division-label {
@@ -412,7 +765,7 @@ button:disabled {
 	display: flex;
 	align-items: stretch;
 	gap: 0;
-	min-height: 84px;
+	min-height: var(--tile-h);
 	border-radius: var(--radius-sm);
 	overflow: hidden;
 }
@@ -421,7 +774,7 @@ button:disabled {
 	position: relative;
 	flex: 1 1 0;            /* flex-grow set inline to the tile's unit width */
 	min-width: 14px;
-	height: 84px;
+	height: var(--tile-h);
 	background: #161616;   /* dark so the waveform backdrop pops */
 	color: var(--color-text-primary);
 	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
@@ -602,30 +955,45 @@ button:disabled {
 	position: relative;
 }
 .seq-loop-btn.active {
-	background: #2ecc40;
-	color: #111;
+	background: var(--color-positive);
+	color: var(--color-on-positive);
 	box-shadow: 0 0 0 2px rgba(46, 204, 64, 0.35);
+}
+.seq-loop-btn.active:hover:not(:disabled) {
+	background: var(--color-positive-hover);
 }
 
 /* --- Knob Styles --- */
 .knob-container {
-	display: inline-flex;
+	display: flex;
 	flex-direction: column;
 	align-items: center;
-	margin: var(--space-lg);
+	justify-content: center;
+	height: 100%;               /* fill the (row-spanned) grid cell */
+	min-height: 0;
+	margin: 0;
+	gap: calc(var(--grid-unit) * 0.5);
+	/* Dial diameter tracks the cell height: the rows this knob spans, minus the
+	   caption line beneath it. So it scales with --row-span and --ui-scale and
+	   always respects the grid height of its container. */
+	--knob-size: calc(
+		  var(--row-span, 2) * var(--control-h)
+		+ (var(--row-span, 2) - 1) * var(--gap)
+		- var(--grid-unit) * 2.25
+	);
 }
 
 .knob {
 	position: relative;
-	width: 48px;
-	height: 48px;
+	flex: 0 0 auto;
+	width: var(--knob-size);
+	height: var(--knob-size);
 	border-radius: 50%;
 	background: var(--color-bg-primary);
 	border: 1px solid var(--color-border);
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	margin-bottom: var(--space-xs);
 	cursor: ns-resize;          /* signals vertical drag */
 	touch-action: none;         /* don't scroll the page while dragging on touch */
 	user-select: none;
@@ -661,6 +1029,10 @@ button:disabled {
 	pointer-events: none;
 }
 
+.knob:hover {
+	border-color: var(--color-border-hover);
+}
+
 .knob:focus-visible {
 	box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.25);
 }
@@ -684,7 +1056,7 @@ button:disabled {
 }
 
 .knob-label {
-	margin-top: var(--space-xs);
+	margin-top: 0;
 	color: var(--color-text-primary);
 	font-size: 12px;
 	text-align: center;
@@ -695,8 +1067,9 @@ button:disabled {
 	position: absolute;
 	left: 50%;
 	top: 50%;
-	width: 3px;
-	height: 18px;
+	/* Pointer scales with the dial so its proportions hold at any knob size. */
+	width: calc(var(--knob-size) * 0.0625);
+	height: calc(var(--knob-size) * 0.375);
 	background: var(--color-text-primary);
 	border-radius: 2px;
 	transform: translate(-50%, -90%) rotate(var(--knob-rotation, -135deg));
