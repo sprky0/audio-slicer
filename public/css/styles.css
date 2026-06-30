@@ -683,6 +683,63 @@ input[type="checkbox"]:disabled {
 	background: var(--color-bg-secondary);
 }
 
+/* Positioned host wrapping the waveform canvas so overlays (background-task band,
+   etc.) can float over it without affecting layout. */
+.wave-wrap {
+	position: relative;
+	width: 100%;
+}
+
+/* Background-task overlay: a non-interactive band across the bottom 1/8 of the
+   waveform, shown while a clip is being processed (time-stretch). Translucent
+   blue plate, a translucent highlight progress fill that blends with the
+   waveform (invert-ish via mix-blend), and a light label. Fades in/out gently;
+   absolutely positioned so it never shifts layout. */
+.wave-task {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 12.5%;                 /* 1/8 of the waveform box */
+	display: flex;
+	align-items: center;
+	overflow: hidden;
+	background: rgba(52, 152, 219, 0.22);   /* translucent blue */
+	pointer-events: none;          /* no mouse events on this element */
+	opacity: 0;
+	/* Asymmetric fade: this (no .is-active) is the fade-OUT — quick. */
+	transition: opacity 320ms ease;
+	z-index: 5;
+}
+.wave-task.is-active {
+	opacity: 1;
+	/* Fade-IN — substantially faster (snaps in as work starts). */
+	transition: opacity 110ms ease-out;
+}
+/* Progress fill — translucent highlight that grows left→right with the percent,
+   inverting the waveform beneath it. No width transition: the fill width is set
+   to the exact same rounded percent as the label, so bar and number stay in
+   lockstep (parity) rather than the bar sliding behind the text. */
+.wave-task-fill {
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	width: 0;
+	background: rgba(120, 200, 255, 0.6);
+	mix-blend-mode: difference;    /* invert-style overlay; tune/remove later */
+}
+.wave-task-label {
+	position: relative;            /* above the fill */
+	z-index: 1;
+	padding: 0 var(--space-sm);
+	color: #f0f0f0;                /* light grey / white */
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
 .midi-bar-title {
 	font-weight: bold;
 	color: var(--color-text-primary);

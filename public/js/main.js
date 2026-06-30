@@ -3,7 +3,7 @@ import Transport from './transport.js';
 import Knob from './knob.js';
 import PALETTE from './palette.js';
 import midiClock from './midi-clock.js';
-import { timeStretch } from './timestretch.js';
+import { createTimeStretcher } from './timestretch.js';
 import {
 	saveStateRaw, loadStateRaw, clearStateRaw,
 	putAudio, getAudio, deleteAudio, clearAudio,
@@ -31,6 +31,76 @@ function makeLabel(text) {
 	el.className   = 'ui-label';
 	el.textContent = text;
 	return el;
+}
+
+// --- Background-task overlay ---------------------------------------------------
+// A non-interactive status band overlaid on a slicer's waveform, showing deferred
+// clip processing (today: WSOLA time-stretch builds kicked off on a cache miss).
+// Absolutely positioned, so it never shifts layout; per-slicer, so each clip shows
+// its own work. Each build is atomic → progress is task-count based (done/total
+// within the current burst). It fades in/out gently and resets between bursts.
+// hostEl must be position:relative (the .wave-wrap around the canvas).
+function createWaveTaskTracker(hostEl) {
+	const overlay = document.createElement('div');
+	overlay.className = 'wave-task';
+	const fill = document.createElement('div');
+	fill.className = 'wave-task-fill';
+	const label = document.createElement('span');
+	label.className = 'wave-task-label';
+	overlay.appendChild(fill);
+	overlay.appendChild(label);
+	hostEl.appendChild(overlay);
+
+	// Progress is sample-accurate: across all jobs in the current burst, track the
+	// total output samples to produce vs samples produced so far. fraction =
+	// doneSamples / totalSamples (0..1) drives the fill width; activeJobs hitting 0
+	// ends the burst.
+	// Brief dwell at 100% before fading out, so an instant burst still registers
+	// and the fade-out reads as "done" rather than a flicker. A new job during the
+	// hold cancels the fade-out and continues the same running total.
+	const HOLD_MS = 350;
+	let totalSamples = 0, doneSamples = 0, activeJobs = 0, name = 'Working…', holdTimer = null;
+	function paint(frac) {
+		const pct = Math.round(Math.max(0, Math.min(1, frac)) * 100);
+		fill.style.width  = pct + '%';
+		label.textContent = `${name} — ${pct}%`;
+	}
+	function render() {
+		if (activeJobs <= 0) {                   // burst drained — show 100%, then fade out
+			if (totalSamples > 0) paint(1);
+			if (!holdTimer) {
+				holdTimer = setTimeout(() => {
+					holdTimer = null;
+					totalSamples = 0; doneSamples = 0;
+					overlay.classList.remove('is-active');
+				}, HOLD_MS);
+			}
+			return;
+		}
+		overlay.classList.add('is-active');      // fade in
+		paint(totalSamples > 0 ? doneSamples / totalSamples : 0);
+	}
+	return {
+		// Register a job by its total output-sample count. A job arriving while the
+		// bar is in its post-completion hold is part of the SAME ongoing effort —
+		// cancel the fade-out and keep accumulating into the same running total, so
+		// the percentage stays relative to all work in flight, not per slice. The
+		// counters only reset after a genuine idle gap (the hold elapsing).
+		begin(taskLabel, jobSamples) {
+			if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+			// A fresh burst (totalSamples back to 0) repaints to 0% via render()
+			// below; with no width transition that lands instantly from the left,
+			// so the previous burst's leftover 100% never animates down.
+			if (taskLabel) name = taskLabel;
+			totalSamples += Math.max(0, jobSamples || 0);
+			activeJobs++;
+			render();
+		},
+		// Report samples produced since the last call (any job in flight).
+		advance(deltaSamples) { doneSamples += Math.max(0, deltaSamples || 0); render(); },
+		// A job finished.
+		end() { activeJobs = Math.max(0, activeJobs - 1); render(); },
+	};
 }
 
 // --- Persistence: registry of live slicers + debounced save ---
@@ -85,7 +155,7 @@ function createSlicer(savedState = null) {
 	stopBtn.className = 'slicer-stop-btn';
 
 	const cutBtn = document.createElement('button');
-	cutBtn.textContent = 'Cut';
+	cutBtn.textContent = 'Trim';
 	cutBtn.className   = 'slicer-cut-btn';
 
 	const resetBtn = document.createElement('button');
@@ -178,15 +248,17 @@ function createSlicer(savedState = null) {
 	unitsField.appendChild(subdivisionsSelect);
 
 	// Per-item grid footprint (columns). Tweak these to retune the toolbar.
+	// Transport (Play/Stop) sits next to the section label, matching the
+	// sequencer toolbar's layout.
 	cluster.appendChild(setSpan(makeLabel('Source'), 1));   // titles the source/transport row
+	cluster.appendChild(setSpan(playPauseBtn, 1));
+	cluster.appendChild(setSpan(stopBtn, 1));
 	cluster.appendChild(fileInput);                          // hidden; no grid cell
 	cluster.appendChild(setSpan(selectFileBtn, 1));
 	cluster.appendChild(setSpan(fileInfo, 3));               // room for name + details
 	cluster.appendChild(setSpan(unitsField, 1));
 	cluster.appendChild(setSpan(sliceBtn, 1));
-	cluster.appendChild(setSpan(cutBtn, 1));
-	cluster.appendChild(setSpan(playPauseBtn, 1));
-	cluster.appendChild(setSpan(stopBtn, 1));
+	cluster.appendChild(setSpan(cutBtn, 1));                 // "Trim"
 	cluster.appendChild(setSpan(resetBtn, 1));
 	cluster.appendChild(setSpan(detailsBtn, 2));  // "Show/Hide details"
 	cluster.appendChild(setSpan(removeBtn, 1));
@@ -312,6 +384,16 @@ function createSlicer(savedState = null) {
 	}
 	renderFileInfo();
 
+	// Wrap the waveform canvas in a positioned host and attach the background-task
+	// overlay (time-stretch progress) so it floats over the waveform without ever
+	// reflowing the layout.
+	const waveCanvas = container.querySelector('.slicer-waveform-canvas');
+	const waveWrap   = document.createElement('div');
+	waveWrap.className = 'wave-wrap';
+	waveCanvas.parentNode.insertBefore(waveWrap, waveCanvas);
+	waveWrap.appendChild(waveCanvas);
+	const slicerTasks = createWaveTaskTracker(waveWrap);
+
 	// --- Play/Pause Button Logic ---
 	let isPlaying = false;
 	playPauseBtn.addEventListener('click', () => {
@@ -403,6 +485,7 @@ function createSlicer(savedState = null) {
 	});
 	pitchKnob.addEventListener('change', (e) => {
 		masterPitch = e.detail;
+		schedulePrescan();
 		scheduleSave();
 	});
 
@@ -548,11 +631,11 @@ function createSlicer(savedState = null) {
 	const seqLabel = makeLabel('Sequencer');
 
 	const seqPlayBtn = document.createElement('button');
-	seqPlayBtn.textContent = 'Play Seq';
+	seqPlayBtn.textContent = 'Play';
 	seqPlayBtn.className   = 'seq-play-btn';
 
 	const seqStopBtn = document.createElement('button');
-	seqStopBtn.textContent = 'Stop Seq';
+	seqStopBtn.textContent = 'Stop';
 	seqStopBtn.className   = 'seq-stop-btn';
 
 	const seqClearBtn = document.createElement('button');
@@ -721,6 +804,7 @@ function createSlicer(savedState = null) {
 			bpmInput.value    = bpm.toFixed(2);
 			bpmInput.disabled = false;
 		}
+		schedulePrescan();
 	};
 
 	// --- Time-stretch / pitch cache ---
@@ -731,6 +815,7 @@ function createSlicer(savedState = null) {
 	const STRETCH_CACHE_MAX = 128;
 	const stretchCache = new Map();          // key -> AudioBuffer
 	const stretchPending = new Set();        // keys with an async build in flight
+	let   sliceGen = 0;                       // bumped on re-slice; aborts stale chunked builds
 	const clampPitch = (s) => Math.max(-12, Math.min(12, s));
 	const quantStretch = (f) => Math.round(f * 50) / 50;
 
@@ -783,18 +868,55 @@ function createSlicer(savedState = null) {
 		return out;
 	};
 
-	const buildStretchedBuffer = (src, w, factor) => {
+	// Build a stretched buffer incrementally across event-loop ticks, reporting
+	// sample-accurate progress to the overlay. Aborts if the slice generation
+	// changes mid-build (the region/cache it targets went stale).
+	const runStretchBuild = (src, w, factor, key) => {
 		const region = getRegionBuffer(src, w);
-		if (!region) return null;
+		if (!region) { stretchPending.delete(key); return; }
 		const channels = [];
 		for (let c = 0; c < region.numberOfChannels; c++) channels.push(region.getChannelData(c));
-		const stretched = timeStretch(channels, factor);
-		const out = slicer.engine.audioContext.createBuffer(stretched.length, stretched[0].length, region.sampleRate);
-		for (let c = 0; c < stretched.length; c++) out.copyToChannel(stretched[c], c);
-		return out;
+
+		const stretcher = createTimeStretcher(channels, factor);
+		const gen   = sliceGen;
+		// ~24 visual steps per job (floor keeps tiny jobs from over-ticking).
+		const CHUNK = Math.max(2048, Math.ceil(stretcher.outputLen / 24));
+		slicerTasks.begin('Time-stretching (pitch-correct)', stretcher.outputLen);
+
+		const step = () => {
+			if (gen !== sliceGen) {              // re-sliced — abandon this build
+				stretchPending.delete(key);
+				slicerTasks.end();
+				return;
+			}
+			let advanced = 0;
+			try { advanced = stretcher.process(CHUNK); }
+			catch (err) {
+				console.warn('time-stretch failed:', err);
+				stretchPending.delete(key);
+				slicerTasks.end();
+				return;
+			}
+			slicerTasks.advance(advanced);
+			if (!stretcher.done) { setTimeout(step, 0); return; }
+
+			try {
+				const stretched = stretcher.result();
+				const out = slicer.engine.audioContext.createBuffer(
+					stretched.length, stretched[0].length, region.sampleRate);
+				for (let c = 0; c < stretched.length; c++) out.copyToChannel(stretched[c], c);
+				if (gen === sliceGen) cacheSet(key, out);
+			} catch (err) {
+				console.warn('time-stretch finalize failed:', err);
+			} finally {
+				stretchPending.delete(key);
+				slicerTasks.end();
+			}
+		};
+		setTimeout(step, 0);
 	};
 
-	// Return a cached stretched buffer, or null (and kick an async build off the
+	// Return a cached stretched buffer, or null (and kick a chunked build off the
 	// scheduler tick) on a miss.
 	const getStretched = (src, w, factor) => {
 		const key = `${src}:${w}:${factor}`;
@@ -802,16 +924,7 @@ function createSlicer(savedState = null) {
 		if (hit) return hit;
 		if (!stretchPending.has(key)) {
 			stretchPending.add(key);
-			setTimeout(() => {
-				try {
-					const buf = buildStretchedBuffer(src, w, factor);
-					if (buf) cacheSet(key, buf);
-				} catch (err) {
-					console.warn('time-stretch failed:', err);
-				} finally {
-					stretchPending.delete(key);
-				}
-			}, 0);
+			runStretchBuild(src, w, factor, key);
 		}
 		return null;
 	};
@@ -852,6 +965,22 @@ function createSlicer(savedState = null) {
 		return { buffer: getRegionBuffer(tile.src, tile.w), playbackRate: fillStretch > 0 ? 1 / fillStretch : 1, dur: playDur, fill: false };
 	};
 
+	// Eagerly enumerate every tile's stretch need at the current tempo/pitch so all
+	// builds are enqueued up front — the overlay's total is then known immediately
+	// and the bar fills monotonically 0→100% instead of bouncing as the scheduler
+	// discovers misses one tile at a time. Reuses getTilePlayback for the exact
+	// factor math (the side effect is the enqueue; the return value is ignored).
+	// Debounced so a knob drag / BPM type doesn't enqueue intermediate factors.
+	let prescanTimer = null;
+	const prescanStretches = () => {
+		const ss = stepSec();
+		for (const tile of seq.tiles) getTilePlayback(tile, ss);
+	};
+	const schedulePrescan = () => {
+		clearTimeout(prescanTimer);
+		prescanTimer = setTimeout(prescanStretches, 120);
+	};
+
 	// Re-slicing replaces segments[]; positional cache keys would go stale.
 	// When the slice COUNT changes (new file, or subdivisions changed) we also
 	// prepopulate the sequence with all slices in order — a useful default. Pure
@@ -864,6 +993,7 @@ function createSlicer(savedState = null) {
 	// address the new selection. Restore is skipped (the saved tiles win).
 	let lastSegCount = 0;
 	slicer.engine.addEventListener('segmentsliced', () => {
+		sliceGen++;                 // abort any in-flight chunked stretch builds
 		stretchCache.clear();
 		stretchPending.clear();
 		regionCache.clear();
@@ -906,6 +1036,7 @@ function createSlicer(savedState = null) {
 			bpm = v;
 			bpmManual = true;
 			updateBpmResetBtn();
+			schedulePrescan();
 			scheduleSave();
 		}
 	});
@@ -914,11 +1045,13 @@ function createSlicer(savedState = null) {
 		bpmManual = false;
 		bpmInput.value = bpm.toFixed(2);
 		updateBpmResetBtn();
+		schedulePrescan();
 		scheduleSave();
 	});
 	divisionSelect.addEventListener('change', () => {
 		divisionDenom  = parseInt(divisionSelect.value, 10);
 		divisionManual = true;
+		schedulePrescan();
 		scheduleSave();
 	});
 
@@ -1167,6 +1300,7 @@ function createSlicer(savedState = null) {
 				const dir = ev.deltaY < 0 ? 1 : -1;
 				tile.offset = Math.max(-5, Math.min(5, (tile.offset || 0) + dir));
 				updatePitchBadge(badge, tile.offset);
+				schedulePrescan();
 				scheduleSave();
 			}, { passive: false });
 
@@ -1483,6 +1617,7 @@ function createSlicer(savedState = null) {
 		slicer.stop();        // cancel any free-run playback + its playhead animation
 		renderSequencer();    // reflect playing state (disables drag/resize)
 
+		prescanStretches();   // enqueue all needed stretch builds up front (one smooth bar)
 		await transport.start();
 	};
 
