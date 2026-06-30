@@ -400,7 +400,8 @@ input[type="checkbox"]:disabled {
 /* Controls fill their grid cell so a row of buttons reads as even columns;
    keep labels on one line so a narrow cell never wraps the text. */
 .toolbar-cluster > button,
-.seq-toolbar > button {
+.seq-toolbar > button,
+.midi-bar > button {
 	width: 100%;
 	margin: 0;
 	white-space: nowrap;
@@ -411,7 +412,8 @@ input[type="checkbox"]:disabled {
    '--col-span', 3) — or with the .span-N / .row-N / .span-full helpers below.
    This is the single knob for "how many grid units does this item take". */
 .toolbar-cluster > *,
-.seq-toolbar > * {
+.seq-toolbar > *,
+.midi-bar > * {
 	grid-column: span var(--col-span, 1);
 	grid-row:    span var(--row-span, 1);
 }
@@ -422,7 +424,8 @@ input[type="checkbox"]:disabled {
 .row-3  { --row-span: 3; }
 /* Full-width cell (scoped so it outranks the generic span rule above). */
 .toolbar-cluster > .span-full,
-.seq-toolbar     > .span-full { grid-column: 1 / -1; }
+.seq-toolbar     > .span-full,
+.midi-bar        > .span-full { grid-column: 1 / -1; }
 
 /* A label+control field (File, Units) behaves as one cell. */
 .toolbar-field {
@@ -671,11 +674,14 @@ input[type="checkbox"]:disabled {
 
 /* Global MIDI clock sync bar — sits above the slicers as a master tempo control. */
 .midi-bar {
-	display: flex;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(var(--col-min), 1fr));
+	grid-auto-rows: var(--control-h);
 	align-items: center;
-	flex-wrap: wrap;
-	gap: var(--space-md);
-	max-width: 900px;
+	gap: var(--gap);
+	/* Full width, matching the slicer panels (same fluid grid as the toolbars). */
+	width: min(95vw, 1600px);
+	box-sizing: border-box;
 	margin: var(--space-md) auto;
 	padding: var(--space-sm) var(--space-lg);
 	border: 1px solid var(--color-border);
@@ -769,7 +775,7 @@ input[type="checkbox"]:disabled {
 	display: flex;
 	align-items: center;
 	gap: var(--space-sm);
-	margin-left: auto;
+	/* In the grid the indicator is a normal cell (no flex auto-margin push). */
 }
 
 .clock-label {

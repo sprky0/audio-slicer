@@ -125,6 +125,7 @@ function saveState() {
 		nextSlicerId,
 		slicers:      slicers.map((s) => s.getState()),
 		midi:         { enabled: midiSettings.enabled, inputId: midiSettings.inputId },
+		master:       { bpm: masterClock.bpm, userSet: masterClock.userSet },
 	});
 }
 
@@ -248,11 +249,9 @@ function createSlicer(savedState = null) {
 	unitsField.appendChild(subdivisionsSelect);
 
 	// Per-item grid footprint (columns). Tweak these to retune the toolbar.
-	// Transport (Play/Stop) sits next to the section label, matching the
-	// sequencer toolbar's layout.
-	cluster.appendChild(setSpan(makeLabel('Source'), 1));   // titles the source/transport row
-	cluster.appendChild(setSpan(playPauseBtn, 1));
-	cluster.appendChild(setSpan(stopBtn, 1));
+	// Transport is master-only (Play All / Stop All in the top bar), so the
+	// per-slicer audition Play/Stop are not shown.
+	cluster.appendChild(setSpan(makeLabel('Source'), 1));   // titles the source row
 	cluster.appendChild(fileInput);                          // hidden; no grid cell
 	cluster.appendChild(setSpan(selectFileBtn, 1));
 	cluster.appendChild(setSpan(fileInfo, 3));               // room for name + details
@@ -711,10 +710,9 @@ function createSlicer(savedState = null) {
 	const seqStatus = document.createElement('span');
 	seqStatus.className = 'seq-status';
 
-	// Per-item grid footprint (columns) for the sequencer toolbar.
+	// Per-item grid footprint (columns) for the sequencer toolbar. Transport is
+	// master-only, so the per-slicer Play/Stop are not shown here.
 	seqToolbar.appendChild(setSpan(seqLabel, 1));
-	seqToolbar.appendChild(setSpan(seqPlayBtn, 1));
-	seqToolbar.appendChild(setSpan(seqStopBtn, 1));
 	seqToolbar.appendChild(setSpan(seqLoopBtn, 1));
 	seqToolbar.appendChild(setSpan(seqClearBtn, 1));
 	seqToolbar.appendChild(setSpan(randomizeBtn, 1));
@@ -1028,6 +1026,14 @@ function createSlicer(savedState = null) {
 			divisionSelect.value = String(n);
 		}
 		updateBpmResetBtn();
+
+		// Master sync: the first loaded clip sets the master tempo (until the user
+		// overrides it); thereafter every clip locks to the master so all loops stay
+		// bar-aligned. (No-op while an external MIDI clock owns the tempo.)
+		if (masterDriving()) {
+			if (masterClock.bpm == null && !masterClock.userSet) setMasterBpm(originalBPM, false);
+			if (masterClock.bpm != null) setMidiBpm(masterClock.bpm);
+		}
 	};
 
 	bpmInput.addEventListener('input', () => {
@@ -1710,8 +1716,10 @@ function createSlicer(savedState = null) {
 		seqStop:  stopSeqPlayback,
 		hasTiles: () => seq.tiles.length > 0,
 	});
-	// A slicer added while sync is already live should adopt the current tempo at once.
+	// A slicer added while sync is already live adopts the current tempo at once —
+	// the external MIDI clock if it's driving, otherwise the internal master.
 	if (midiClock.isEnabled() && midiClock.getBpm() != null) setMidiBpm(midiClock.getBpm());
+	else if (masterClock.bpm != null) setMidiBpm(masterClock.bpm);
 
 	if (savedState) {
 		// Settings that don't need the decoded audio buffer — apply synchronously.
@@ -1790,10 +1798,62 @@ function createSlicer(savedState = null) {
 	renderSequencer();
 }
 
-// --- Global MIDI clock sync bar ---
-// One external clock acts as the master tempo for every slicer. While sync is on,
-// the derived BPM is pushed to all slicers (overriding their manual BPM) and MIDI
-// Start/Continue/Stop drive their sequencers. See midi-clock.js for the signal.
+// --- Internal master clock (groovebox transport) ---
+// One master tempo drives every slicer. Each slicer treats its selection as one
+// bar, so at a shared BPM all loops phase-align as bar multiples/subdivisions
+// (a clip whose loop spans 2 bars repeats every 2 master bars, etc.). Master
+// Play All / Stop All start/stop every sequencer together (restarted from the top
+// so they're aligned). The external MIDI clock, when enabled, overrides the master.
+const masterClock = { bpm: null, running: false, userSet: false };
+let masterBpmInput, masterPlayBtn, masterStopBtn;
+
+// True when the internal master owns the tempo (no external MIDI clock engaged).
+function masterDriving() { return !midiClock.isEnabled(); }
+
+// Push the master tempo to every slicer (locks each slicer's BPM to it).
+function applyMasterTempo() {
+	if (!masterDriving() || masterClock.bpm == null) return;
+	for (const s of slicers) s.setMidiBpm && s.setMidiBpm(masterClock.bpm);
+}
+
+// Set the master tempo. `user` marks an explicit edit (persisted; stops the
+// first-clip auto-adopt from overriding it later).
+function setMasterBpm(v, user) {
+	if (!(v > 0)) return;
+	masterClock.bpm = v;
+	if (user) masterClock.userSet = true;
+	if (masterBpmInput && document.activeElement !== masterBpmInput) {
+		masterBpmInput.value = v.toFixed(2);
+	}
+	applyMasterTempo();
+	if (user) scheduleSave();
+}
+
+function masterPlayAll() {
+	if (!masterDriving()) return;
+	masterClock.running = true;
+	for (const s of slicers) {
+		if (!(s.hasTiles && s.hasTiles())) continue;
+		s.seqStop  && s.seqStop();    // restart from the top → all aligned
+		s.seqStart && s.seqStart();
+	}
+}
+function masterStopAll() {
+	masterClock.running = false;
+	for (const s of slicers) s.seqStop && s.seqStop();
+}
+
+// Master controls yield to the external MIDI clock while it's enabled.
+function updateMasterControlsEnabled() {
+	const ext = midiClock.isEnabled();
+	if (masterBpmInput) masterBpmInput.disabled = ext;
+	if (masterPlayBtn)  masterPlayBtn.disabled  = ext;
+	if (masterStopBtn)  masterStopBtn.disabled  = ext;
+}
+
+// --- Global transport bar (master clock + MIDI sync + clock indicator) ---
+// While MIDI sync is on, the derived BPM is pushed to all slicers (overriding the
+// master) and MIDI Start/Continue/Stop drive their sequencers. See midi-clock.js.
 const midiBar = document.getElementById('midiBar');
 let midiEnableChk, midiDeviceSel, midiStatusEl;
 // Clock indicator (right side): source, master BPM, 4-beat pulse.
@@ -1847,8 +1907,10 @@ async function onMidiEnableToggle() {
 		if (wanted) midiDeviceSel.value = wanted;
 	} else {
 		midiClock.setEnabled(false);
-		for (const s of slicers) s.setMidiBpm && s.setMidiBpm(null);   // release tempo
+		// Hand tempo back to the internal master (re-locks every slicer to it).
+		applyMasterTempo();
 	}
+	updateMasterControlsEnabled();
 	midiSettings.enabled = midiEnableChk.checked;
 	midiSettings.inputId = midiClock.getInputId();
 	scheduleSave();
@@ -1858,6 +1920,35 @@ async function onMidiEnableToggle() {
 function buildMidiBar() {
 	if (!midiBar) return;
 	midiBar.className = 'midi-bar';
+
+	// Master transport: tempo + Play All / Stop All for the whole rack.
+	const masterLabel = makeLabel('Master');
+	masterBpmInput = document.createElement('input');
+	masterBpmInput.type  = 'number';
+	masterBpmInput.min   = 20;
+	masterBpmInput.max   = 400;
+	masterBpmInput.step  = 0.01;
+	masterBpmInput.className = 'master-bpm-input input-width-60';
+	masterBpmInput.title = 'Master tempo (BPM) — drives every track';
+	if (masterClock.bpm != null) masterBpmInput.value = masterClock.bpm.toFixed(2);
+	const masterBpmLabel = document.createElement('label');
+	masterBpmLabel.className = 'midi-enable-label';
+	masterBpmLabel.appendChild(document.createTextNode('BPM '));
+	masterBpmLabel.appendChild(masterBpmInput);
+
+	masterPlayBtn = document.createElement('button');
+	masterPlayBtn.textContent = 'Play All';
+	masterPlayBtn.className    = 'seq-play-btn';    // green / primary
+	masterStopBtn = document.createElement('button');
+	masterStopBtn.textContent = 'Stop All';
+	masterStopBtn.className    = 'seq-stop-btn';     // red / stop
+
+	masterBpmInput.addEventListener('input', () => {
+		const v = parseFloat(masterBpmInput.value);
+		if (v > 0) setMasterBpm(v, true);
+	});
+	masterPlayBtn.addEventListener('click', masterPlayAll);
+	masterStopBtn.addEventListener('click', masterStopAll);
 
 	const title = document.createElement('span');
 	title.className   = 'midi-bar-title';
@@ -1907,11 +1998,16 @@ function buildMidiBar() {
 	clockBox.appendChild(clockBpmEl);
 	clockBox.appendChild(beatsBox);
 
-	midiBar.appendChild(title);
-	midiBar.appendChild(enableLabel);
-	midiBar.appendChild(midiDeviceSel);
-	midiBar.appendChild(midiStatusEl);
-	midiBar.appendChild(clockBox);
+	// Per-item grid footprint (columns), same rules as the slicer toolbars.
+	midiBar.appendChild(setSpan(masterLabel, 1));
+	midiBar.appendChild(setSpan(masterBpmLabel, 2));   // "BPM" + field
+	midiBar.appendChild(setSpan(masterPlayBtn, 1));
+	midiBar.appendChild(setSpan(masterStopBtn, 1));
+	midiBar.appendChild(setSpan(title, 1));
+	midiBar.appendChild(setSpan(enableLabel, 1));
+	midiBar.appendChild(setSpan(midiDeviceSel, 2));    // device names need room
+	midiBar.appendChild(setSpan(midiStatusEl, 1));
+	midiBar.appendChild(setSpan(clockBox, 2));         // source + BPM + beat dots
 
 	midiEnableChk.addEventListener('change', onMidiEnableToggle);
 	midiDeviceSel.addEventListener('change', () => {
@@ -1920,6 +2016,7 @@ function buildMidiBar() {
 		scheduleSave();
 	});
 
+	updateMasterControlsEnabled();
 	updateMidiStatus();
 	requestAnimationFrame(updateClockIndicator);
 }
@@ -1940,8 +2037,11 @@ function updateClockIndicator() {
 		bpm    = midiClock.getBpm();
 		const beat = midiClock.getBeat();
 		if (beat) { beatIndex = beat.index; phase = beat.phase; }
-	} else {
-		// Internal: first-played slicer that's still playing.
+	} else if (masterClock.bpm != null) {
+		// Internal master: always show the master tempo; take the beat phase from
+		// the first-played slicer that's still running (if any).
+		source = 'Master';
+		bpm    = masterClock.bpm;
 		let src = null;
 		for (const s of slicers) {
 			if (!s.getClockInfo) continue;
@@ -1949,8 +2049,6 @@ function updateClockIndicator() {
 			if (info.playing && (!src || info.order < src.order)) src = info;
 		}
 		if (src && src.bpm > 0) {
-			source = 'Internal';
-			bpm    = src.bpm;
 			const beatSec = 60 / src.bpm;
 			const elapsed = Math.max(0, src.ctxTime - src.startTime);
 			beatIndex = Math.floor(elapsed / beatSec);
@@ -2019,6 +2117,12 @@ window.addEventListener('beforeunload', saveState);
 
 // Restore saved slicers if any, otherwise start with one empty slicer.
 const savedAll = loadStateRaw();
+// Restore the master tempo before creating slicers so they adopt it on load.
+if (savedAll && savedAll.master && Number.isFinite(savedAll.master.bpm)) {
+	masterClock.bpm     = savedAll.master.bpm;
+	masterClock.userSet = !!savedAll.master.userSet;
+	if (masterBpmInput) masterBpmInput.value = masterClock.bpm.toFixed(2);
+}
 if (savedAll && Array.isArray(savedAll.slicers) && savedAll.slicers.length) {
 	const maxId  = savedAll.slicers.reduce((m, st) => Math.max(m, Number.isFinite(st.id) ? st.id : -1), -1);
 	nextSlicerId = Number.isFinite(savedAll.nextSlicerId) ? Math.max(savedAll.nextSlicerId, maxId + 1) : maxId + 1;
