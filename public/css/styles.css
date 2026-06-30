@@ -1026,6 +1026,76 @@ input[type="checkbox"]:disabled {
 	background: var(--color-positive-hover);
 }
 
+/* --- DragControl: unified knob/slider/dropdown replacement -----------------
+   Button-shaped grid cell with a translucent fill from the origin to the value,
+   a bright vertical leading-edge marker, and a centered "Label value" readout.
+   Drag horizontally to change (ew-resize cursor). */
+.drag-control {
+	position: relative;
+	box-sizing: border-box;
+	width: 100%;
+	min-height: var(--control-h);
+	padding: 0 var(--space-md);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	background: var(--color-input-bg);
+	color: var(--color-text-primary);
+	font-size: 13px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	overflow: hidden;
+	cursor: grab;                  /* drag in any direction (H or V) to change */
+	user-select: none;
+	touch-action: none;            /* dragging shouldn't scroll on touch */
+	box-shadow: var(--shadow-btn);
+	transition: border-color var(--transition-fast),
+	            box-shadow   var(--transition-fast);
+}
+.drag-control:hover:not(.disabled)  { border-color: var(--color-border-hover); }
+.drag-control:focus-visible         { outline: none; box-shadow: var(--focus-ring-accent); }
+.drag-control.dragging              { border-color: var(--color-accent); cursor: grabbing; }
+.drag-control.disabled {
+	opacity: var(--opacity-disabled);
+	cursor: not-allowed;
+}
+
+/* Translucent fill from origin → value. */
+.drag-fill {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	background: rgba(52, 152, 219, 0.28);
+	pointer-events: none;
+	z-index: 0;
+}
+/* Bright vertical leading edge at the exact value position. */
+.drag-edge {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 2px;
+	background: var(--color-accent);
+	pointer-events: none;
+	z-index: 1;
+}
+.drag-label {
+	position: relative;
+	z-index: 2;
+	pointer-events: none;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+/* A wrapped native input/select stays in the DOM (for value + events) but hidden. */
+.drag-native-hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+	pointer-events: none;
+}
+
 /* --- Knob Styles --- */
 .knob-container {
 	display: flex;

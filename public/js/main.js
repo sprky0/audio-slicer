@@ -1,6 +1,6 @@
 import AudioSlicerController from './audio-slicer-controller.js';
 import Transport from './transport.js';
-import Knob from './knob.js';
+import DragControl from './drag-control.js';
 import PALETTE from './palette.js';
 import midiClock from './midi-clock.js';
 import { createTimeStretcher } from './timestretch.js';
@@ -242,11 +242,9 @@ function createSlicer(savedState = null) {
 	const cluster = document.createElement('div');
 	cluster.className = 'toolbar-cluster';
 
-	// Units pairs a caption with its select as one grid cell.
-	const unitsField = document.createElement('label');
-	unitsField.className = 'toolbar-field';
-	unitsField.appendChild(document.createTextNode('Units'));
-	unitsField.appendChild(subdivisionsSelect);
+	// Units: a stepped drag-control wrapping the resolution <select> (existing
+	// readers/handlers of the select keep working — the control just drives it).
+	const unitsControl = new DragControl({ el: subdivisionsSelect, label: 'Units' });
 
 	// Per-item grid footprint (columns). Tweak these to retune the toolbar.
 	// Transport is master-only (Play All / Stop All in the top bar), so the
@@ -255,7 +253,7 @@ function createSlicer(savedState = null) {
 	cluster.appendChild(fileInput);                          // hidden; no grid cell
 	cluster.appendChild(setSpan(selectFileBtn, 1));
 	cluster.appendChild(setSpan(fileInfo, 3));               // room for name + details
-	cluster.appendChild(setSpan(unitsField, 1));
+	cluster.appendChild(setSpan(unitsControl.getElement(), 1));
 	cluster.appendChild(setSpan(sliceBtn, 1));
 	cluster.appendChild(setSpan(cutBtn, 1));                 // "Trim"
 	cluster.appendChild(setSpan(resetBtn, 1));
@@ -312,40 +310,30 @@ function createSlicer(savedState = null) {
 		detailsBtn.classList.toggle('active', !showing);
 	});
 
-	// --- Volume and Pan Knobs ---
-	const volumeKnob = new Knob({
-		label: 'Volume',
-		min: 0,
-		max: 1,
-		step: 0.01,
-		value: 1,
+	// --- Volume / Pan / Pitch: unified drag-controls (button-shaped grid cells).
+	// onChange is wired after the slicer exists (see "--- control wiring" below).
+	const volumeKnob = new DragControl({
+		label: 'Vol',
+		min: 0, max: 1, step: 0.01, value: 1,
 		format: (v) => `${Math.round(v * 100)}%`,
 	});
-	const panKnob = new Knob({
+	const panKnob = new DragControl({
 		label: 'Pan',
-		min: -1,
-		max: 1,
-		step: 0.01,
-		value: 0,
+		min: -1, max: 1, step: 0.01, value: 0, detent: 0,
 		format: (v) => (Math.abs(v) < 0.005 ? 'C' : (v < 0 ? `L${Math.round(-v * 100)}` : `R${Math.round(v * 100)}`)),
 	});
 	// Master pitch (semitones) — shifts every sequencer step; per-step offsets stack
 	// on top. Center detent at 0, double-click to reset.
-	const pitchKnob = new Knob({
+	const pitchKnob = new DragControl({
 		label: 'Pitch',
-		min: -5,
-		max: 5,
-		step: 1,
-		value: 0,
-		detent: 0,
-		signed: true,
+		min: -5, max: 5, step: 1, value: 0, detent: 0,
+		format: (v) => (v > 0 ? `+${v}` : `${v}`),
 	});
-	// Knobs are grid cells too — one column wide, two rows tall (a display
-	// control claiming more vertical units), assignable like any other item.
-	// Inserted before the full-row details panel so they sit with the buttons.
-	cluster.insertBefore(setSpan(volumeKnob.getElement(), 1, 2), detailsPanel);
-	cluster.insertBefore(setSpan(panKnob.getElement(),    1, 2), detailsPanel);
-	cluster.insertBefore(setSpan(pitchKnob.getElement(),  1, 2), detailsPanel);
+	// One column wide, one row tall — same footprint as a button now (no longer a
+	// taller dial), inserted before the full-row details panel.
+	cluster.insertBefore(setSpan(volumeKnob.getElement(), 1), detailsPanel);
+	cluster.insertBefore(setSpan(panKnob.getElement(),    1), detailsPanel);
+	cluster.insertBefore(setSpan(pitchKnob.getElement(),  1), detailsPanel);
 
 	controls.appendChild(cluster);
 
@@ -447,6 +435,7 @@ function createSlicer(savedState = null) {
 		startSlider.value = 0;
 		endSlider.value   = 1;
 		subdivisionsSelect.value = 16;
+		unitsControl.syncFromEl();
 
 		// Stop playback, re-slice the full buffer at the default resolution
 		// (segmentsliced → default tiles), and restore the auto-derived tempo.
@@ -473,20 +462,10 @@ function createSlicer(savedState = null) {
 		scheduleSave();
 	});
 
-	// --- Knob event wiring ---
-	volumeKnob.addEventListener('change', (e) => {
-		slicer.setVolume(e.detail);
-		scheduleSave();
-	});
-	panKnob.addEventListener('change', (e) => {
-		slicer.setPan(e.detail);
-		scheduleSave();
-	});
-	pitchKnob.addEventListener('change', (e) => {
-		masterPitch = e.detail;
-		schedulePrescan();
-		scheduleSave();
-	});
+	// --- Control wiring (drag-controls fire onChange as you drag) ---
+	volumeKnob.onChange = (v) => { slicer.setVolume(v); scheduleSave(); };
+	panKnob.onChange    = (v) => { slicer.setPan(v);    scheduleSave(); };
+	pitchKnob.onChange  = (v) => { masterPitch = v; schedulePrescan(); scheduleSave(); };
 
 	// File loading
 	fileInput.addEventListener('change', async (e) => {
@@ -662,15 +641,11 @@ function createSlicer(savedState = null) {
 	randLevelInput.step  = 1;
 	randLevelInput.value = randLevel;
 	randLevelInput.className = 'seq-rand-level';
-	const randLevelValue = document.createElement('span');
-	randLevelValue.className   = 'seq-rand-level-value';
-	randLevelValue.textContent = randLevel + '%';
-	const randLevelLabel = document.createElement('label');
-	randLevelLabel.className = 'seq-rand-level-label';
-	randLevelLabel.title     = 'Randomization amount: probability each tile is swapped';
-	randLevelLabel.appendChild(document.createTextNode('Amount '));
-	randLevelLabel.appendChild(randLevelInput);
-	randLevelLabel.appendChild(randLevelValue);
+	// Amount: drag-control wrapping the range input (its 'input' event still drives
+	// the randLevel update below).
+	const amountControl = new DragControl({
+		el: randLevelInput, label: 'Amt', format: (v) => `${Math.round(v)}%`,
+	});
 
 	// --- Transport: BPM + step division ---
 	const bpmInput = document.createElement('input');
@@ -702,10 +677,8 @@ function createSlicer(savedState = null) {
 		divisionSelect.appendChild(opt);
 	});
 	divisionSelect.value = 16;
-	const divisionLabel = document.createElement('label');
-	divisionLabel.className = 'seq-division-label';
-	divisionLabel.appendChild(document.createTextNode('Step '));
-	divisionLabel.appendChild(divisionSelect);
+	// Step: stepped drag-control wrapping the division <select>.
+	const stepControl = new DragControl({ el: divisionSelect, label: 'Step' });
 
 	const seqStatus = document.createElement('span');
 	seqStatus.className = 'seq-status';
@@ -716,10 +689,10 @@ function createSlicer(savedState = null) {
 	seqToolbar.appendChild(setSpan(seqLoopBtn, 1));
 	seqToolbar.appendChild(setSpan(seqClearBtn, 1));
 	seqToolbar.appendChild(setSpan(randomizeBtn, 1));
-	seqToolbar.appendChild(setSpan(randLevelLabel, 2));  // Amount slider
-	seqToolbar.appendChild(setSpan(bpmLabel, 2));        // BPM field
-	seqToolbar.appendChild(setSpan(bpmResetBtn, 1));
-	seqToolbar.appendChild(setSpan(divisionLabel, 1));   // Step
+	seqToolbar.appendChild(setSpan(amountControl.getElement(), 2));  // Amount
+	// Per-track BPM is hidden: the master clock governs tempo (bpmInput/bpmResetBtn
+	// stay in memory so setMidiBpm's value/lock writes are harmless).
+	seqToolbar.appendChild(setSpan(stepControl.getElement(), 1));    // Step
 	seqToolbar.appendChild(setSpan(seqStatus, 'full'));
 
 	const seqStepsRow = document.createElement('div');
@@ -1024,6 +997,7 @@ function createSlicer(savedState = null) {
 		if (!divisionManual && [2, 4, 8, 16, 32].includes(n)) {
 			divisionDenom = n;             // each step == one slice
 			divisionSelect.value = String(n);
+			stepControl.syncFromEl();
 		}
 		updateBpmResetBtn();
 
@@ -1669,7 +1643,6 @@ function createSlicer(savedState = null) {
 	randomizeBtn.addEventListener('click', randomizeTiles);
 	randLevelInput.addEventListener('input', () => {
 		randLevel = parseInt(randLevelInput.value, 10) || 0;
-		randLevelValue.textContent = randLevel + '%';
 		scheduleSave();
 	});
 
@@ -1723,7 +1696,7 @@ function createSlicer(savedState = null) {
 
 	if (savedState) {
 		// Settings that don't need the decoded audio buffer — apply synchronously.
-		if (Number.isFinite(savedState.subdivisions)) subdivisionsSelect.value = String(savedState.subdivisions);
+		if (Number.isFinite(savedState.subdivisions)) { subdivisionsSelect.value = String(savedState.subdivisions); unitsControl.syncFromEl(); }
 		if (Number.isFinite(savedState.start))        startInput.value = savedState.start;
 		if (Number.isFinite(savedState.end))          endInput.value   = savedState.end;
 		startSlider.value = startInput.value;
@@ -1732,7 +1705,7 @@ function createSlicer(savedState = null) {
 		if (Number.isFinite(savedState.virtualEnd))   virtualEnd   = savedState.virtualEnd;
 
 		if (Number.isFinite(savedState.bpm))           { bpm = savedState.bpm; bpmInput.value = bpm.toFixed(2); }
-		if (Number.isFinite(savedState.divisionDenom)) { divisionDenom = savedState.divisionDenom; divisionSelect.value = String(divisionDenom); }
+		if (Number.isFinite(savedState.divisionDenom)) { divisionDenom = savedState.divisionDenom; divisionSelect.value = String(divisionDenom); stepControl.syncFromEl(); }
 		bpmManual      = !!savedState.bpmManual;
 		divisionManual = !!savedState.divisionManual;
 		updateBpmResetBtn();
@@ -1742,8 +1715,8 @@ function createSlicer(savedState = null) {
 		if (Number.isFinite(savedState.masterPitch)) { masterPitch = savedState.masterPitch; pitchKnob.setValue(masterPitch); }
 		if (Number.isFinite(savedState.randLevel)) {
 			randLevel = Math.max(0, Math.min(100, savedState.randLevel));
-			randLevelInput.value       = randLevel;
-			randLevelValue.textContent = randLevel + '%';
+			randLevelInput.value = randLevel;
+			amountControl.syncFromEl();
 		}
 
 		if (savedState.seq) {
@@ -1805,7 +1778,7 @@ function createSlicer(savedState = null) {
 // Play All / Stop All start/stop every sequencer together (restarted from the top
 // so they're aligned). The external MIDI clock, when enabled, overrides the master.
 const masterClock = { bpm: null, running: false, userSet: false };
-let masterBpmInput, masterPlayBtn, masterStopBtn;
+let masterBpmControl, masterPlayBtn, masterStopBtn;
 
 // True when the internal master owns the tempo (no external MIDI clock engaged).
 function masterDriving() { return !midiClock.isEnabled(); }
@@ -1822,9 +1795,7 @@ function setMasterBpm(v, user) {
 	if (!(v > 0)) return;
 	masterClock.bpm = v;
 	if (user) masterClock.userSet = true;
-	if (masterBpmInput && document.activeElement !== masterBpmInput) {
-		masterBpmInput.value = v.toFixed(2);
-	}
+	if (masterBpmControl) masterBpmControl.setValue(v);   // no-op mid-drag (guarded)
 	applyMasterTempo();
 	if (user) scheduleSave();
 }
@@ -1846,7 +1817,7 @@ function masterStopAll() {
 // Master controls yield to the external MIDI clock while it's enabled.
 function updateMasterControlsEnabled() {
 	const ext = midiClock.isEnabled();
-	if (masterBpmInput) masterBpmInput.disabled = ext;
+	if (masterBpmControl) masterBpmControl.setDisabled(ext);
 	if (masterPlayBtn)  masterPlayBtn.disabled  = ext;
 	if (masterStopBtn)  masterStopBtn.disabled  = ext;
 }
@@ -1923,18 +1894,13 @@ function buildMidiBar() {
 
 	// Master transport: tempo + Play All / Stop All for the whole rack.
 	const masterLabel = makeLabel('Master');
-	masterBpmInput = document.createElement('input');
-	masterBpmInput.type  = 'number';
-	masterBpmInput.min   = 20;
-	masterBpmInput.max   = 400;
-	masterBpmInput.step  = 0.01;
-	masterBpmInput.className = 'master-bpm-input input-width-60';
-	masterBpmInput.title = 'Master tempo (BPM) — drives every track';
-	if (masterClock.bpm != null) masterBpmInput.value = masterClock.bpm.toFixed(2);
-	const masterBpmLabel = document.createElement('label');
-	masterBpmLabel.className = 'midi-enable-label';
-	masterBpmLabel.appendChild(document.createTextNode('BPM '));
-	masterBpmLabel.appendChild(masterBpmInput);
+	masterBpmControl = new DragControl({
+		label: 'BPM',
+		min: 20, max: 400, step: 1,
+		value: masterClock.bpm != null ? masterClock.bpm : 120,
+		format: (v) => `${Math.round(v)}`,
+		onChange: (v) => setMasterBpm(v, true),
+	});
 
 	masterPlayBtn = document.createElement('button');
 	masterPlayBtn.textContent = 'Play All';
@@ -1943,10 +1909,6 @@ function buildMidiBar() {
 	masterStopBtn.textContent = 'Stop All';
 	masterStopBtn.className    = 'seq-stop-btn';     // red / stop
 
-	masterBpmInput.addEventListener('input', () => {
-		const v = parseFloat(masterBpmInput.value);
-		if (v > 0) setMasterBpm(v, true);
-	});
 	masterPlayBtn.addEventListener('click', masterPlayAll);
 	masterStopBtn.addEventListener('click', masterStopAll);
 
@@ -2000,7 +1962,7 @@ function buildMidiBar() {
 
 	// Per-item grid footprint (columns), same rules as the slicer toolbars.
 	midiBar.appendChild(setSpan(masterLabel, 1));
-	midiBar.appendChild(setSpan(masterBpmLabel, 2));   // "BPM" + field
+	midiBar.appendChild(setSpan(masterBpmControl.getElement(), 2));   // BPM drag-control
 	midiBar.appendChild(setSpan(masterPlayBtn, 1));
 	midiBar.appendChild(setSpan(masterStopBtn, 1));
 	midiBar.appendChild(setSpan(title, 1));
@@ -2121,7 +2083,7 @@ const savedAll = loadStateRaw();
 if (savedAll && savedAll.master && Number.isFinite(savedAll.master.bpm)) {
 	masterClock.bpm     = savedAll.master.bpm;
 	masterClock.userSet = !!savedAll.master.userSet;
-	if (masterBpmInput) masterBpmInput.value = masterClock.bpm.toFixed(2);
+	if (masterBpmControl) masterBpmControl.setValue(masterClock.bpm);
 }
 if (savedAll && Array.isArray(savedAll.slicers) && savedAll.slicers.length) {
 	const maxId  = savedAll.slicers.reduce((m, st) => Math.max(m, Number.isFinite(st.id) ? st.id : -1), -1);
