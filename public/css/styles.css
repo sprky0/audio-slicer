@@ -741,6 +741,49 @@ input[type="checkbox"]:disabled {
 	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
+/* Preview transport: small floating Play/Pause + Stop over the waveform. Shown
+   only while a click-to-audition preview runs (.visible); absolutely positioned
+   so it never shifts layout. Container ignores pointer events (clicks fall
+   through to the waveform for re-positioning); only the buttons are clickable. */
+.wave-transport {
+	position: absolute;
+	top: var(--space-sm);
+	left: 50%;
+	transform: translateX(-50%);
+	display: flex;
+	gap: var(--space-xs);
+	padding: 4px;
+	border-radius: var(--radius-md);
+	background: rgba(0, 0, 0, 0.55);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 150ms ease;
+	z-index: 6;
+}
+.wave-transport.visible {
+	opacity: 1;
+	pointer-events: auto;
+}
+.wave-transport-btn {
+	width: 28px;
+	height: 28px;
+	min-height: 0;                 /* override the base button --control-h */
+	padding: 0;
+	border-radius: var(--radius-sm);
+	background: rgba(255, 255, 255, 0.14);
+	color: #fff;
+	font-size: 13px;
+	line-height: 1;
+	box-shadow: none;
+}
+.wave-transport-btn:hover:not(:disabled) {
+	background: rgba(255, 255, 255, 0.26);
+}
+.wave-transport-btn:active:not(:disabled) {
+	transform: translateY(1px);
+}
+
 .midi-bar-title {
 	font-weight: bold;
 	color: var(--color-text-primary);

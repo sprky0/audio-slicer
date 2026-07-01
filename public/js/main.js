@@ -381,39 +381,49 @@ function createSlicer(savedState = null) {
 	waveWrap.appendChild(waveCanvas);
 	const slicerTasks = createWaveTaskTracker(waveWrap);
 
-	// --- Play/Pause Button Logic ---
+	// Preview transport: a small floating Play/Pause + Stop over the waveform,
+	// shown only while a click-to-audition preview is active. Absolutely positioned
+	// (no layout shift); Stop ends the preview and dismisses the overlay.
+	const waveTransport = document.createElement('div');
+	waveTransport.className = 'wave-transport';
+	const previewPlayPause = document.createElement('button');
+	previewPlayPause.className = 'wave-transport-btn';
+	previewPlayPause.textContent = '▶';
+	previewPlayPause.title = 'Play / pause preview';
+	const previewStop = document.createElement('button');
+	previewStop.className = 'wave-transport-btn';
+	previewStop.textContent = '⏹';
+	previewStop.title = 'Stop preview';
+	waveTransport.appendChild(previewPlayPause);
+	waveTransport.appendChild(previewStop);
+	waveWrap.appendChild(waveTransport);
+
+	// --- Preview transport wiring ---
+	// A click-to-audition preview (waveform click) plays free-run and loops; the
+	// floating transport shows while it's active. Only previews emit
+	// 'playstatechange' — the sequencer schedules directly and doesn't — so the
+	// overlay never appears during master playback. Play All calls slicer.stop()
+	// (fires 'stopped'), which dismisses it.
 	let isPlaying = false;
-	playPauseBtn.addEventListener('click', () => {
+	previewPlayPause.addEventListener('click', () => {
 		if (isPlaying) {
 			slicer.pause();
-			// UI will update via playstatechange event
+		} else if (slicer.isPaused && slicer.pausedSegment !== null) {
+			slicer.resume();
 		} else {
-			if (slicer.isPaused && slicer.pausedSegment !== null) {
-				slicer.resume();
-			} else {
-				slicer.playSegment(0);
-			}
-			// UI will update via playstatechange event
+			slicer.playSegment(0);
 		}
+		// state reflected via the playstatechange handler below
 	});
+	previewStop.addEventListener('click', () => slicer.stop());   // 'stopped' hides it
 
-	// --- Sync Play/Pause Button with Slicer State ---
 	container.addEventListener('playstatechange', (e) => {
 		const state = e.detail.state;
-		if (state === 'playing') {
-			playPauseBtn.textContent = 'Pause';
-			isPlaying = true;
-		} else if (state === 'paused' || state === 'stopped') {
-			playPauseBtn.textContent = 'Play';
-			isPlaying = false;
-		}
-	});
-
-	// --- Stop Button Logic ---
-	stopBtn.addEventListener('click', () => {
-		slicer.stop();
-		playPauseBtn.textContent = 'Play';
-		isPlaying = false;
+		isPlaying = (state === 'playing');
+		previewPlayPause.textContent = isPlaying ? '⏸' : '▶';
+		if (state === 'playing')      waveTransport.classList.add('visible');
+		else if (state === 'stopped') waveTransport.classList.remove('visible');
+		// 'paused' keeps the overlay visible (showing ▶ to resume).
 	});
 
 	// --- Reset Button Logic ---

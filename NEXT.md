@@ -29,6 +29,12 @@ Working notes for jsloop. Updated 2026-06-30, branch
 - **Toggle-button style** — clear OFF (muted/recessed + hollow pip) vs ON (lit
   green + glow + filled pip), via a reusable `.toggle-btn` class. Applied to
   Loop, Show/Hide details, and the MIDI **Sync** control (was a checkbox).
+- **Preview transport overlay** — clicking the waveform auditions (free-run,
+  loops); a small floating Play/Pause + Stop fades in over the waveform (no
+  layout shift). Stop ends the preview and dismisses it. Only previews show it
+  (the sequencer doesn't emit playstatechange); Play All stops any preview. Edge:
+  if a preview ends on its own (segments disabled) the controller doesn't emit
+  'stopped', so the overlay would linger — minor follow-up.
 
 ## Next steps
 
