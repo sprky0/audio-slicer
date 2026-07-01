@@ -509,13 +509,8 @@ input[type="checkbox"]:disabled {
 	color: var(--color-text-primary);
 }
 
-.slicer-details-btn.active {
-	background: var(--color-positive);
-	color: var(--color-on-positive);
-}
-.slicer-details-btn.active:hover:not(:disabled) {
-	background: var(--color-positive-hover);
-}
+/* Toggle styling for .slicer-details-btn lives with .seq-loop-btn (search
+   "Toggle buttons"). */
 
 /* --- Start/End slider row --- */
 .slicer-slider-row {
@@ -1014,16 +1009,63 @@ input[type="checkbox"]:disabled {
 	box-shadow: inset -4px 0 0 0 #ffffff;
 }
 
-.seq-loop-btn {
+/* --- Toggle buttons (Loop, Show/Hide details) --------------------------------
+   Strong OFF vs ON distinction: OFF is a muted, recessed (inset) surface with a
+   hollow pip — clearly "not engaged"; ON is a lit green fill with an outer glow
+   and a filled pip. The pip (a leading dot that goes hollow→solid) makes the
+   state readable at a glance even before you register the colour. */
+.toggle-btn,
+.seq-loop-btn,
+.slicer-details-btn {
 	position: relative;
+	gap: var(--space-xs);
+	background-color: var(--color-input-bg);   /* OFF: recessed, not action-blue */
+	color: #9aa0a8;                            /* dimmed label when off */
+	box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45);
 }
-.seq-loop-btn.active {
-	background: var(--color-positive);
+/* Leading indicator pip: hollow ring when off. */
+.toggle-btn::before,
+.seq-loop-btn::before,
+.slicer-details-btn::before {
+	content: '';
+	flex: 0 0 auto;
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	border: 1.5px solid currentColor;
+	background: transparent;
+	transition: background-color var(--transition-fast);
+}
+.toggle-btn:hover:not(:disabled),
+.seq-loop-btn:hover:not(:disabled),
+.slicer-details-btn:hover:not(:disabled) {
+	background-color: #2b3038;
+	color: var(--color-text-primary);
+}
+.toggle-btn:active:not(:disabled),
+.seq-loop-btn:active:not(:disabled),
+.slicer-details-btn:active:not(:disabled) {
+	background-color: var(--color-input-bg);
+	transform: none;                            /* stay recessed, don't lift */
+}
+/* ON: lit green fill + outer glow, filled pip. */
+.toggle-btn.active,
+.seq-loop-btn.active,
+.slicer-details-btn.active {
+	background-color: var(--color-positive);
 	color: var(--color-on-positive);
-	box-shadow: 0 0 0 2px rgba(46, 204, 64, 0.35);
+	box-shadow: 0 0 0 2px rgba(46, 204, 64, 0.45),
+	            0 0 12px rgba(46, 204, 64, 0.45);
 }
-.seq-loop-btn.active:hover:not(:disabled) {
-	background: var(--color-positive-hover);
+.toggle-btn.active::before,
+.seq-loop-btn.active::before,
+.slicer-details-btn.active::before {
+	background: currentColor;                   /* filled pip when on */
+}
+.toggle-btn.active:hover:not(:disabled),
+.seq-loop-btn.active:hover:not(:disabled),
+.slicer-details-btn.active:hover:not(:disabled) {
+	background-color: var(--color-positive-hover);
 }
 
 /* --- DragControl: unified knob/slider/dropdown replacement -----------------

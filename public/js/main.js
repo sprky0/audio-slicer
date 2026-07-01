@@ -1826,7 +1826,13 @@ function updateMasterControlsEnabled() {
 // While MIDI sync is on, the derived BPM is pushed to all slicers (overriding the
 // master) and MIDI Start/Continue/Stop drive their sequencers. See midi-clock.js.
 const midiBar = document.getElementById('midiBar');
-let midiEnableChk, midiDeviceSel, midiStatusEl;
+let syncBtn, midiDeviceSel, midiStatusEl;
+// Reflect the Sync toggle-button's on/off state.
+function setSyncActive(on) {
+	if (!syncBtn) return;
+	syncBtn.classList.toggle('active', !!on);
+	syncBtn.setAttribute('aria-pressed', String(!!on));
+}
 // Clock indicator (right side): source, master BPM, 4-beat pulse.
 let clockSourceEl, clockBpmEl, beatDots = [];
 
@@ -1864,9 +1870,9 @@ function populateMidiDevices() {
 }
 
 async function onMidiEnableToggle() {
-	if (midiEnableChk.checked) {
+	if (syncBtn.classList.contains('active')) {
 		const ok = await midiClock.init();
-		if (!ok) { midiEnableChk.checked = false; updateMidiStatus('unavailable'); return; }
+		if (!ok) { setSyncActive(false); updateMidiStatus('unavailable'); return; }
 		midiClock.setEnabled(true);
 		populateMidiDevices();
 		// Prefer the saved device if it's still present, else the first input.
@@ -1882,7 +1888,7 @@ async function onMidiEnableToggle() {
 		applyMasterTempo();
 	}
 	updateMasterControlsEnabled();
-	midiSettings.enabled = midiEnableChk.checked;
+	midiSettings.enabled = syncBtn.classList.contains('active');
 	midiSettings.inputId = midiClock.getInputId();
 	scheduleSave();
 	updateMidiStatus();
@@ -1916,13 +1922,15 @@ function buildMidiBar() {
 	title.className   = 'midi-bar-title';
 	title.textContent = 'MIDI Clock';
 
-	midiEnableChk      = document.createElement('input');
-	midiEnableChk.type = 'checkbox';
-	midiEnableChk.id   = 'midiEnable';
-	const enableLabel  = document.createElement('label');
-	enableLabel.className = 'midi-enable-label';
-	enableLabel.appendChild(midiEnableChk);
-	enableLabel.appendChild(document.createTextNode(' Sync'));
+	// Sync: a toggle-button (same on/off component as Loop / Show details).
+	syncBtn = document.createElement('button');
+	syncBtn.className = 'toggle-btn';
+	syncBtn.textContent = 'Sync';
+	syncBtn.setAttribute('aria-pressed', 'false');
+	syncBtn.addEventListener('click', () => {
+		setSyncActive(!syncBtn.classList.contains('active'));
+		onMidiEnableToggle();
+	});
 
 	midiDeviceSel = document.createElement('select');
 	midiDeviceSel.className = 'midi-device-select';
@@ -1932,8 +1940,8 @@ function buildMidiBar() {
 	midiStatusEl.className = 'midi-status';
 
 	if (!midiClock.isSupported) {
-		midiEnableChk.disabled = true;
-		enableLabel.title      = 'This browser has no Web MIDI support';
+		syncBtn.disabled = true;
+		syncBtn.title    = 'This browser has no Web MIDI support';
 	}
 
 	// Clock indicator: source (Internal / External / —), master BPM, beat dots.
@@ -1966,12 +1974,11 @@ function buildMidiBar() {
 	midiBar.appendChild(setSpan(masterPlayBtn, 1));
 	midiBar.appendChild(setSpan(masterStopBtn, 1));
 	midiBar.appendChild(setSpan(title, 1));
-	midiBar.appendChild(setSpan(enableLabel, 1));
+	midiBar.appendChild(setSpan(syncBtn, 1));
 	midiBar.appendChild(setSpan(midiDeviceSel, 2));    // device names need room
 	midiBar.appendChild(setSpan(midiStatusEl, 1));
 	midiBar.appendChild(setSpan(clockBox, 2));         // source + BPM + beat dots
 
-	midiEnableChk.addEventListener('change', onMidiEnableToggle);
 	midiDeviceSel.addEventListener('change', () => {
 		midiClock.setInput(midiDeviceSel.value || null);
 		midiSettings.inputId = midiClock.getInputId();
@@ -2098,8 +2105,8 @@ if (savedAll && Array.isArray(savedAll.slicers) && savedAll.slicers.length) {
 // off, so re-enabling reconnects to the same device.
 if (savedAll && savedAll.midi) {
 	midiSettings.inputId = savedAll.midi.inputId || null;
-	if (savedAll.midi.enabled && midiClock.isSupported && midiEnableChk) {
-		midiEnableChk.checked = true;
+	if (savedAll.midi.enabled && midiClock.isSupported && syncBtn) {
+		setSyncActive(true);
 		onMidiEnableToggle();
 	}
 }

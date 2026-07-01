@@ -22,6 +22,7 @@
 
 const SENS_PX = 150;   // drag distance (px) for the full continuous range
 const STEP_PX = 20;    // drag distance (px) per discrete step
+const DRAG_PX = 4;     // movement under this on release = a click (jump), not a drag
 
 export default class DragControl {
 	constructor(opts = {}) {
@@ -143,11 +144,39 @@ export default class DragControl {
 		this._commit(this._clampSnap(this.value + dir * inc));
 	}
 
+	// Jump to the absolute position of a click (x within the control's width).
+	_jumpTo(clientX) {
+		const rect = this.root.getBoundingClientRect();
+		if (!rect.width) return;
+		const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+		if (this.stepped) {
+			const n = this.options.length;
+			const i = Math.max(0, Math.min(n - 1, Math.round(frac * (n - 1))));
+			if (i !== this._idx) {
+				this._idx = i;
+				const opt = this.options[i];
+				if (this.el) { this.el.value = String(opt.value); this.el.dispatchEvent(new Event('change', { bubbles: true })); }
+				this.onChange(opt.value);
+			}
+			this._render();
+		} else {
+			this._commit(this._clampSnap(this.min + frac * (this.max - this.min)));
+		}
+	}
+
 	_bind() {
 		const root = this.root;
-		let lastX = 0, lastY = 0, accum = 0;
+		let lastX = 0, lastY = 0, accum = 0, downX = 0, downY = 0, moved = false;
 
 		const onMove = (e) => {
+			// Stay a (potential) click until the pointer moves past the threshold;
+			// then it's a drag and we start adjusting from that point.
+			if (!moved) {
+				if (Math.abs(e.clientX - downX) < DRAG_PX && Math.abs(e.clientY - downY) < DRAG_PX) return;
+				moved = true;
+				lastX = e.clientX;
+				lastY = e.clientY;
+			}
 			// Up or right increases; down or left decreases. Combining the axes means
 			// a vertical drag behaves like a horizontal one, so either gesture works.
 			const move = (e.clientX - lastX) - (e.clientY - lastY);
@@ -163,18 +192,21 @@ export default class DragControl {
 			}
 		};
 		const onUp = (e) => {
-			this._dragging = false;
-			root.classList.remove('dragging');
 			window.removeEventListener('pointermove', onMove);
 			window.removeEventListener('pointerup',   onUp);
 			try { root.releasePointerCapture(e.pointerId); } catch (_) {}
+			// No real drag → treat as a click: jump to the clicked position.
+			if (!moved) this._jumpTo(downX);
+			this._dragging = false;
+			root.classList.remove('dragging');
 		};
 		root.addEventListener('pointerdown', (e) => {
 			if (this.disabled) return;
 			this._dragging = true;
-			lastX = e.clientX;
-			lastY = e.clientY;
+			downX = e.clientX; downY = e.clientY;
+			lastX = e.clientX; lastY = e.clientY;
 			accum = 0;
+			moved = false;
 			root.classList.add('dragging');
 			try { root.setPointerCapture(e.pointerId); } catch (_) {}
 			window.addEventListener('pointermove', onMove);

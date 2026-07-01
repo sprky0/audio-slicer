@@ -24,6 +24,11 @@ Working notes for jsloop. Updated 2026-06-30, branch
   Drag any direction; smooth (with detent) or stepped. Wraps a number/range
   input or a `<select>`, or runs standalone. Converted: Volume/Pan/Pitch, Master
   BPM, Amount, Units, Step.
+- **DragControl click-to-jump** — a click (movement < 4px) jumps to the absolute
+  clicked position; click-and-drag stays relative.
+- **Toggle-button style** — clear OFF (muted/recessed + hollow pip) vs ON (lit
+  green + glow + filled pip), via a reusable `.toggle-btn` class. Applied to
+  Loop, Show/Hide details, and the MIDI **Sync** control (was a checkbox).
 
 ## Next steps
 
