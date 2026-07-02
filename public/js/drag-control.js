@@ -61,7 +61,10 @@ export default class DragControl {
 
 	getElement() { return this.root; }
 
-	getValue() { return this.stepped ? this.options[this._idx].value : this.value; }
+	getValue() {
+		if (this.stepped) return this.options.length ? this.options[this._idx].value : null;
+		return this.value;
+	}
 
 	// Programmatic set (no onChange); mirrors to a wrapped element without dispatching.
 	setValue(v) {
@@ -79,6 +82,17 @@ export default class DragControl {
 	setDisabled(on) {
 		this.disabled = !!on;
 		this.root.classList.toggle('disabled', this.disabled);
+	}
+
+	// Re-read the option list from a wrapped <select> whose <option>s changed at
+	// runtime (e.g. MIDI devices hot-plugging). Keeps the current selection if it
+	// still exists, else falls back to the first option.
+	refreshOptions() {
+		if (!this.el || this.el.tagName !== 'SELECT') return;
+		this.options = Array.from(this.el.options).map((o) => ({ value: o.value, label: o.textContent }));
+		const i = this.options.findIndex((o) => o.value === this.el.value);
+		this._idx = i >= 0 ? i : 0;
+		this._render();
 	}
 
 	// Re-read from a wrapped element that changed externally (e.g. a tempo lock).

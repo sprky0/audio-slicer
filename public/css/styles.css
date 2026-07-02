@@ -70,7 +70,6 @@
 	--gap:         var(--grid-unit);                /* gap between cells        */
 	--control-h:   calc(var(--grid-unit) * 4);      /* one interface row (~32px)*/
 	--col-min:     calc(var(--grid-unit) * 12);     /* min column width (~96px) */
-	--knob-size:   calc(var(--grid-unit) * 6);      /* dial diameter (~48px)    */
 	--tile-h:      calc(var(--grid-unit) * 11);     /* sequencer tile row (~88px)*/
 }
 
@@ -368,7 +367,6 @@ input[type="checkbox"]:disabled {
 .slicer-container {
 	margin: var(--space-xxxl) auto;
 	padding: var(--space-xl);
-	border: 1px solid var(--color-border-light);
 	border-radius: var(--radius-lg);
 	background: var(--color-bg-secondary);
 	position: relative;
@@ -392,7 +390,10 @@ input[type="checkbox"]:disabled {
 .toolbar-cluster {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(var(--col-min), 1fr));
-	grid-auto-rows: var(--control-h);
+	/* Rows are one control tall by default, but grow to fit taller full-width
+	   content (the Show-details panel stacks two control-height region sliders,
+	   which a fixed --control-h row would clip onto the waveform below). */
+	grid-auto-rows: minmax(var(--control-h), auto);
 	align-items: stretch;
 	gap: var(--gap);
 }
@@ -472,11 +473,6 @@ input[type="checkbox"]:disabled {
 	color: #888;
 	font-variant-numeric: tabular-nums;
 }
-
-/* Knobs are full grid citizens: each takes a column and spans rows for its
-   height (a display control claiming more vertical units), assigned per item
-   with setSpan(knob, cols, rows) — same criteria as every other cell. The dial
-   itself sizes to the cell height (see .knob-container --knob-size below). */
 
 .input-width-60 {
 	width: calc(var(--grid-unit) * 7.5);   /* ~60px, scales with the grid */
@@ -606,8 +602,7 @@ input[type="checkbox"]:disabled {
 /* --- Sequencer --- */
 .sequencer {
 	margin-top: var(--space-xl);
-	padding: var(--space-md);
-	border: 1px solid var(--color-border);
+	padding: var(--space-md) 0 0;
 	border-radius: var(--radius-md);
 	background: rgba(0, 0, 0, 0.25);
 }
@@ -891,6 +886,22 @@ input[type="checkbox"]:disabled {
 	            opacity       var(--transition-fast);
 }
 
+/* Leave-gaps mode: a silent slot in the bar. Passive (no handles/drag), rendered
+   as an inset dashed well so the empty time reads clearly against the tiles. */
+.seq-gap {
+	position: relative;
+	flex: 1 1 0;            /* flex-grow set inline to the gap's unit width */
+	min-width: 6px;
+	height: var(--tile-h);
+	border: 1px dashed var(--color-border);
+	border-radius: var(--radius-sm);
+	background: repeating-linear-gradient(
+		-45deg,
+		rgba(255, 255, 255, 0.03) 0, rgba(255, 255, 255, 0.03) 6px,
+		transparent 6px, transparent 12px);
+	box-sizing: border-box;
+}
+
 /* This slice's audio, filling the tile behind the chrome. */
 .seq-tile-wave {
 	position: absolute;
@@ -1169,6 +1180,11 @@ input[type="checkbox"]:disabled {
 	z-index: 2;
 	pointer-events: none;
 	white-space: nowrap;
+	/* Long readouts (e.g. a MIDI device name) truncate with an ellipsis instead
+	   of overflowing the fixed-height cell. Short values are unaffected. */
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	font-variant-numeric: tabular-nums;
 	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
@@ -1179,120 +1195,4 @@ input[type="checkbox"]:disabled {
 	height: 1px;
 	opacity: 0;
 	pointer-events: none;
-}
-
-/* --- Knob Styles --- */
-.knob-container {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	height: 100%;               /* fill the (row-spanned) grid cell */
-	min-height: 0;
-	margin: 0;
-	gap: calc(var(--grid-unit) * 0.5);
-	/* Dial diameter tracks the cell height: the rows this knob spans, minus the
-	   caption line beneath it. So it scales with --row-span and --ui-scale and
-	   always respects the grid height of its container. */
-	--knob-size: calc(
-		  var(--row-span, 2) * var(--control-h)
-		+ (var(--row-span, 2) - 1) * var(--gap)
-		- var(--grid-unit) * 2.25
-	);
-}
-
-.knob {
-	position: relative;
-	flex: 0 0 auto;
-	width: var(--knob-size);
-	height: var(--knob-size);
-	border-radius: 50%;
-	background: var(--color-bg-primary);
-	border: 1px solid var(--color-border);
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	cursor: ns-resize;          /* signals vertical drag */
-	touch-action: none;         /* don't scroll the page while dragging on touch */
-	user-select: none;
-	outline: none;
-	transition: border-color var(--transition-fast),
-	            box-shadow   var(--transition-fast);
-}
-
-/* Defensive: the rewritten knob has no range input, but a stale-cached old
-   knob.js may still inject one. Keep it hidden (and harmless) so it never shows
-   through the dial. Inert once the new knob.js loads. */
-.knob-input {
-	position: absolute;
-	inset: 0;
-	opacity: 0;
-	z-index: 2;
-	cursor: ns-resize;
-}
-
-/* Value arc: a 270° ring filled to the current value (set via --knob-fraction). */
-.knob::before {
-	content: '';
-	position: absolute;
-	inset: -3px;
-	border-radius: 50%;
-	background: conic-gradient(from -135deg,
-		var(--color-accent) calc(var(--knob-fraction, 0) * 270deg),
-		rgba(255, 255, 255, 0.12) 0 270deg,
-		transparent 270deg);
-	-webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
-	        mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
-	z-index: 0;
-	pointer-events: none;
-}
-
-.knob:hover {
-	border-color: var(--color-border-hover);
-}
-
-.knob:focus-visible {
-	box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.25);
-}
-
-.knob.dragging {
-	border-color: #ffffff;
-	box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.3);
-}
-
-.knob-value {
-	position: absolute;
-	bottom: 4px;
-	left: 50%;
-	transform: translateX(-50%);
-	color: var(--color-text-primary);
-	font-size: 11px;
-	font-weight: bold;
-	line-height: 1;
-	pointer-events: none;
-	z-index: 3;
-}
-
-.knob-label {
-	margin-top: 0;
-	color: var(--color-text-primary);
-	font-size: 12px;
-	text-align: center;
-}
-
-.knob::after {
-	content: '';
-	position: absolute;
-	left: 50%;
-	top: 50%;
-	/* Pointer scales with the dial so its proportions hold at any knob size. */
-	width: calc(var(--knob-size) * 0.0625);
-	height: calc(var(--knob-size) * 0.375);
-	background: var(--color-text-primary);
-	border-radius: 2px;
-	transform: translate(-50%, -90%) rotate(var(--knob-rotation, -135deg));
-	transform-origin: 50% 90%;
-	/* No transition — the indicator tracks the pointer 1:1 (the old transition
-	   made the knob feel laggy/unresponsive). */
-	z-index: 1;
 }

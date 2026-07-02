@@ -52,7 +52,14 @@ class Transport {
 		this._noMoreTiles     = false;  // set when looping is off and we're past the end
 	}
 
-	async start() {
+	/**
+	 * Start playback. `atTime` (optional): an absolute time on the shared
+	 * AudioContext clock to anchor the first step to. The master transport passes
+	 * ONE such value to every track so they all begin on the same instant and stay
+	 * sample-locked (Tier 1c). Omitted (individual play) → self-anchor just ahead
+	 * of now. A stale `atTime` already in the past is ignored (falls back to now).
+	 */
+	async start(atTime) {
 		if (this.isPlaying) return;
 		const tiles = this.getTiles();
 		if (!tiles || tiles.length === 0) return;
@@ -64,8 +71,10 @@ class Transport {
 		this.tileIndex    = 0;
 		this.noteQueue    = [];
 		this._noMoreTiles = false;
-		// Small offset so the first tile isn't scheduled in the past.
-		this.nextStepTime = this.engine.audioContext.currentTime + 0.05;
+		// Anchor to the shared master time when given (all tracks share it → aligned);
+		// otherwise a small offset so the first tile isn't scheduled in the past.
+		const now = this.engine.audioContext.currentTime;
+		this.nextStepTime = (typeof atTime === 'number' && atTime > now) ? atTime : now + 0.05;
 		// Anchor the beat clock to the first scheduled step so the indicator's beats
 		// line up with the bar (a loop is one bar of 4 beats).
 		this.startTime    = this.nextStepTime;

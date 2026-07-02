@@ -3,6 +3,7 @@ import Transport from './transport.js';
 import DragControl from './drag-control.js';
 import PALETTE from './palette.js';
 import midiClock from './midi-clock.js';
+import { getAudioContext } from './audio-context.js';
 import { createTimeStretcher } from './timestretch.js';
 import {
 	saveStateRaw, loadStateRaw, clearStateRaw,
@@ -113,6 +114,18 @@ let saveTimer     = null;
 // alongside the slicers so a reload restores the connection.
 const midiSettings = { enabled: false, inputId: null };
 
+// Sequencer tile-edit mode (global — applies to every track's tile row):
+//   'pack' — classic length-conserving behavior: reorder repacks the row and edge
+//            resize trades units with the play-order neighbour, so there are never
+//            gaps (Σ w of clips always fills the bar).
+//   'gaps' — free placement: moving a clip leaves a silent gap where it was and
+//            overwrites whatever it lands on; edge resize leaves a gap when
+//            shrinking and overwrites the neighbour when growing.
+// Gaps are just silent tiles ({ gap:true, w }) in the shared list, so Σ w still
+// equals the bar (U) in both modes and pack-mode resize can still absorb them.
+let seqEditMode = 'pack';
+let onSeqEditModeChange = () => {};   // buildMidiBar wires this to refresh the toggle
+
 // Monotonic wall-clock order stamped on each slicer when its sequencer starts. With
 // no external MIDI clock, the lowest-stamped slicer still playing is the internal
 // clock source ("first played"). Audio-clock times aren't comparable across slicers
@@ -126,6 +139,7 @@ function saveState() {
 		slicers:      slicers.map((s) => s.getState()),
 		midi:         { enabled: midiSettings.enabled, inputId: midiSettings.inputId },
 		master:       { bpm: masterClock.bpm, userSet: masterClock.userSet },
+		seqEditMode,
 	});
 }
 
@@ -220,6 +234,15 @@ function createSlicer(savedState = null) {
 	endSlider.value = 1;
 	endSlider.className = 'slicer-range-slider slicer-range-end';
 
+	// Wrap the region sliders in the unified DragControl (design-system control).
+	// Each mirrors its value to the range input and dispatches input/change, so the
+	// existing setStart/setEnd listeners below keep driving the region + re-slice.
+	// The sliders are also set PROGRAMMATICALLY (syncControls, reset, marker drags);
+	// every such set is followed by ctrl.syncFromEl() to refresh the display without
+	// a change-loop (syncFromEl dispatches nothing).
+	const startSliderCtrl = new DragControl({ el: startSlider, label: 'Start', format: (v) => (+v).toFixed(2) });
+	const endSliderCtrl   = new DragControl({ el: endSlider,   label: 'End',   format: (v) => (+v).toFixed(2) });
+
 	// Unit resolution U: the selection (one bar) is split into this many equal
 	// units — the finest step grid. Tiles are contiguous runs of these units.
 	const subdivisionsSelect = document.createElement('select');
@@ -285,18 +308,10 @@ function createSlicer(savedState = null) {
 	const sliderRow = document.createElement('div');
 	sliderRow.className = 'slicer-slider-row';
 
-	const startSliderLabel = document.createElement('label');
-	startSliderLabel.className = 'slicer-slider-label';
-	startSliderLabel.textContent = 'Start';
-	startSliderLabel.appendChild(startSlider);
-
-	const endSliderLabel = document.createElement('label');
-	endSliderLabel.className = 'slicer-slider-label';
-	endSliderLabel.textContent = 'End';
-	endSliderLabel.appendChild(endSlider);
-
-	sliderRow.appendChild(startSliderLabel);
-	sliderRow.appendChild(endSliderLabel);
+	// The drag-controls carry their own "Start"/"End" label + value readout, so no
+	// separate text labels are needed; they stack full-width in the column row.
+	sliderRow.appendChild(startSliderCtrl.getElement());
+	sliderRow.appendChild(endSliderCtrl.getElement());
 
 	detailsPanel.appendChild(numRow);
 	detailsPanel.appendChild(sliderRow);
@@ -444,6 +459,8 @@ function createSlicer(savedState = null) {
 		endInput.value    = 1;
 		startSlider.value = 0;
 		endSlider.value   = 1;
+		startSliderCtrl.syncFromEl();
+		endSliderCtrl.syncFromEl();
 		subdivisionsSelect.value = 16;
 		unitsControl.syncFromEl();
 
@@ -492,6 +509,8 @@ function createSlicer(savedState = null) {
 			endInput.value    = 1;
 			startSlider.value = 0;
 			endSlider.value   = 1;
+			startSliderCtrl.syncFromEl();
+			endSliderCtrl.syncFromEl();
 			applyRange(0, 1, { autoPlay: false, keepPlayhead: false });
 			currentFileName = file.name;
 			renderFileInfo();
@@ -519,6 +538,8 @@ function createSlicer(savedState = null) {
 		endInput.value    = end.toFixed(3);
 		startSlider.value = start;
 		endSlider.value   = end;
+		startSliderCtrl.syncFromEl();
+		endSliderCtrl.syncFromEl();
 	};
 
 	// Take slider-space [start, end] (0..1), map through virtual window, slice the engine.
@@ -918,7 +939,8 @@ function createSlicer(savedState = null) {
 	const getTilePlayback = (tile, stepSecVal) => {
 		if (!tile) return null;
 		const playDur = (tile.w > 0 ? tile.w : 1) * stepSecVal;
-		if (tile.muted) {
+		if (tile.gap || tile.muted) {
+			// A gap (leave-gaps mode) is a silent slot that still occupies its time.
 			return { buffer: null, playbackRate: 1, dur: playDur, fill: false };
 		}
 		const buf = slicer.engine.audioBuffer;
@@ -1123,22 +1145,129 @@ function createSlicer(savedState = null) {
 		renderSequencer();
 	};
 
+	// --- Leave-gaps mode: unit-grid overwrite operations -------------------------
+	// The bar is U units; edits rasterize it at SUBSTEP resolution (widths are exact
+	// multiples of 1/SUBSTEP), mutate the cell grid, then rebuild the ordered
+	// clip/gap list. Each cell holds { clip, srcSub } — the source sub-unit that cell
+	// reads — so trimming or splitting a clip keeps each remnant's source anchored;
+	// null = a gap (silence).
+	const RES     = SUBSTEP;
+	const gridLen = () => Math.round((unitCount() || 1) * RES);
+
+	const rasterizeBar = (tiles) => {
+		const n = gridLen();
+		const cells = new Array(n).fill(null);
+		let pos = 0;
+		for (const t of tiles) {
+			const wc = Math.round((t.w > 0 ? t.w : 0) * RES);
+			if (!t.gap) {
+				const base = Math.round((t.src || 0) * RES);
+				for (let k = 0; k < wc && pos + k < n; k++) cells[pos + k] = { clip: t, srcSub: base + k };
+			}
+			pos += wc;
+		}
+		return cells;
+	};
+
+	// Rebuild an ordered clip/gap list from the cell grid. A run of the same clip with
+	// contiguous source becomes one clip entry; a run of null becomes a gap. Split
+	// remnants share the clip's colour/offset/mute (a cut clip keeps its identity).
+	const rebuildFromCells = (cells) => {
+		const out = [];
+		let k = 0;
+		while (k < cells.length) {
+			const c = cells[k];
+			if (!c) {
+				let j = k; while (j < cells.length && !cells[j]) j++;
+				// src:0 is a harmless dummy so pack-mode width arithmetic (which reads
+				// .src) never sees undefined if the row still holds gaps after a switch.
+				out.push({ gap: true, w: (j - k) / RES, src: 0 });
+				k = j;
+			} else {
+				const clip = c.clip, base = c.srcSub;
+				let j = k;
+				while (j < cells.length && cells[j] && cells[j].clip === clip && cells[j].srcSub === base + (j - k)) j++;
+				out.push({ src: base / RES, w: (j - k) / RES, offset: clip.offset || 0, muted: !!clip.muted, colorIdx: clip.colorIdx });
+				k = j;
+			}
+		}
+		return out;
+	};
+
+	// Paint clip over [startCell, startCell+wCells), reading source from srcBaseSub —
+	// overwriting whatever those cells held.
+	const paintCells = (cells, clip, startCell, wCells, srcBaseSub) => {
+		for (let k = 0; k < wCells; k++) {
+			const idx = startCell + k;
+			if (idx >= 0 && idx < cells.length) cells[idx] = { clip, srcSub: srcBaseSub + k };
+		}
+	};
+
+	// Gaps-mode reorder: the clip leaves a gap where it was and lands (left edge) at
+	// unit `targetUnit`, overwriting whatever it covers. Width/source unchanged.
+	const moveTileGaps = (fromIdx, targetUnit) => {
+		const clip = seq.tiles[fromIdx];
+		if (!clip || clip.gap) return;
+		const cells  = rasterizeBar(seq.tiles);
+		for (let k = 0; k < cells.length; k++) if (cells[k] && cells[k].clip === clip) cells[k] = null;
+		const wCells = Math.round(clip.w * RES);
+		let start    = Math.round(targetUnit * RES);
+		start = Math.max(0, Math.min(start, cells.length - wCells));
+		paintCells(cells, clip, start, wCells, Math.round((clip.src || 0) * RES));
+		seq.tiles = rebuildFromCells(cells);
+		renderSequencer();
+	};
+
+	// Gaps-mode edge resize (pure — takes a snapshot list, returns a new list). END
+	// pins the front (src fixed): shrinking leaves a gap, growing overwrites the cells
+	// ahead. START pins the end (src+w fixed): shrinking leaves a front gap, growing
+	// back overwrites cells behind. Bounded to the bar [0,U] and the source [0,U].
+	const computeResizeGaps = (tiles, i, edge, dU) => {
+		const clip = tiles[i];
+		if (!clip || clip.gap) return tiles;
+		const cells = rasterizeBar(tiles);
+		const n     = cells.length;
+		let first = -1, count = 0;
+		const base = Math.round((clip.src || 0) * RES);
+		for (let k = 0; k < n; k++) if (cells[k] && cells[k].clip === clip) { if (first < 0) first = k; count++; }
+		if (first < 0) return tiles;
+		for (let k = 0; k < n; k++) if (cells[k] && cells[k].clip === clip) cells[k] = null;   // lift the clip
+		const dCells = Math.round(snapU(dU) * RES);
+		const minC   = Math.max(1, Math.round(MIN_W * RES));
+		let start = first, wCells = count, srcBase = base;
+		if (edge === 'end') {
+			wCells = Math.max(minC, count + dCells);   // front pinned
+			wCells = Math.min(wCells, n - start, n - srcBase);   // bar + source end
+		} else {
+			const end = first + count;                 // end pinned
+			start = Math.max(0, Math.min(first + dCells, end - minC));
+			srcBase = base + (start - first);
+			if (srcBase < 0) { start -= srcBase; srcBase = 0; }
+			wCells = Math.min(end - start, n - start, n - srcBase);
+		}
+		paintCells(cells, clip, start, Math.round(wCells), srcBase);
+		return rebuildFromCells(cells);
+	};
+
 	// Merge tile i into its left neighbour (or the right one if it's the first),
 	// combining widths — the quick way down from 16 unit-tiles to a few wide slices.
 	// The kept tile's window stays within the cut (its src may not be contiguous
 	// with the absorbed one after reordering, so the combined width is capped).
 	const mergeTile = (i) => {
 		if (seq.tiles.length <= 1 || i < 0 || i >= seq.tiles.length) return;
+		if (seq.tiles[i].gap) return;                 // gaps aren't merged
 		const U = unitCount() || 1;
-		if (i > 0) {
+		if (i > 0 && !seq.tiles[i - 1].gap) {
 			const a = seq.tiles[i - 1];               // left neighbour extends forward
 			a.w = Math.min(a.w + seq.tiles[i].w, U - a.src);
 			seq.tiles.splice(i, 1);
-		} else {
+		} else if (i === 0 && seq.tiles[1] && !seq.tiles[1].gap) {
 			const b = seq.tiles[1];                   // absorb into the right neighbour
 			b.src = seq.tiles[0].src;
 			b.w   = Math.min(b.w + seq.tiles[0].w, U - b.src);
 			seq.tiles.splice(0, 1);
+		} else {
+			return;                                    // neighbour is a gap → nothing to merge into
 		}
 		renderSequencer();
 	};
@@ -1212,12 +1341,12 @@ function createSlicer(savedState = null) {
 		ctx.stroke();
 	};
 
-	// Redraw every tile's backdrop (children are tiles in order).
+	// Redraw every tile's backdrop. Children may include gaps (no _tile), so read the
+	// tile off each element rather than counting positions.
 	const redrawTileWaves = () => {
-		let idx = 0;
 		for (const el of seqStepsRow.children) {
 			if (!el.classList.contains('seq-tile')) continue;
-			const t = seq.tiles[idx++];
+			const t = el._tile;
 			if (!t) continue;
 			drawTileWave(el.querySelector('.seq-tile-wave'), t.src, t.w, tileColor(t));
 		}
@@ -1233,7 +1362,22 @@ function createSlicer(savedState = null) {
 		for (let i = 0; i < seq.tiles.length; i++) {
 			const tile = seq.tiles[i];
 			const el   = document.createElement('div');
+
+			// Leave-gaps mode: a gap is a passive silent slot — it holds its width in the
+			// bar but has no waveform, handles, or pointer wiring (you fill it by moving a
+			// clip over it or growing a neighbour). Kept as a child so children stay 1:1
+			// with seq.tiles for setPlayingTile's index lookup.
+			if (tile.gap) {
+				el.className       = 'seq-gap';
+				el.style.flexGrow  = String(tile.w);
+				el.style.flexBasis = '0';
+				el.title           = 'Silence (gap) — drop or grow a clip here to overwrite it';
+				seqStepsRow.appendChild(el);
+				continue;
+			}
+
 			el.className        = 'seq-tile';
+			el._tile            = tile;             // back-ref (children may include gaps)
 			el.style.flexGrow   = String(tile.w);  // width ∝ unit span (Σ flexGrow = U)
 			el.style.flexBasis  = '0';
 			el.title             = TILE_TITLE;
@@ -1339,17 +1483,39 @@ function createSlicer(savedState = null) {
 					return { idx: seq.tiles.length - 1, after: true };
 				};
 
+				// Captured once the drag begins, for gaps-mode free placement: pixels/unit
+				// and the cursor's offset within the tile, so the clip's LEFT edge tracks
+				// the cursor (minus that offset) and snaps to the sub-unit grid.
+				let pxPerU = 0, grabDX = 0;
+				// Gaps mode: the clip's landing unit (left edge) under the cursor, snapped.
+				const gapsTargetUnit = (clientX) => {
+					const rowRect = seqStepsRow.getBoundingClientRect();
+					return snapU(pxPerU > 0 ? ((clientX - grabDX) - rowRect.left) / pxPerU : 0);
+				};
+
 				const onMove = (e2) => {
 					if (!dragging) {
 						if (Math.abs(e2.clientX - startX) < 4) return;   // horizontal threshold
 						dragging = true;
 						dragFromIdx = i;
 						startRect = el.getBoundingClientRect();
+						const rowRect0 = seqStepsRow.getBoundingClientRect();
+						pxPerU = rowRect0.width / (unitCount() || 1);
+						grabDX = startX - startRect.left;
 						el.classList.add('dragging');
 						ghost = makeDragGhost(el);
 						document.body.appendChild(ghost);
 					}
 					clearDropMarkers();
+					const rowRect = seqStepsRow.getBoundingClientRect();
+					if (seqEditMode === 'gaps') {
+						// Free placement: ghost follows the cursor, snapped to the unit grid,
+						// clamped to the row. No insertion markers (there's no "between").
+						const u = Math.max(0, Math.min(gapsTargetUnit(e2.clientX), (unitCount() || 1) - startRect.width / pxPerU));
+						const left = Math.max(rowRect.left, Math.min(rowRect.left + u * pxPerU, rowRect.right - startRect.width));
+						ghost.style.transform = `translateX(${left - startRect.left}px)`;
+						return;
+					}
 					const { idx, after } = dropTargetAt(e2.clientX);
 					const target = seqStepsRow.children[idx];
 					if (!target) return;
@@ -1358,7 +1524,6 @@ function createSlicer(savedState = null) {
 					// so it lands cleanly in the slot it'll occupy rather than trailing the
 					// raw cursor.
 					const trect   = target.getBoundingClientRect();
-					const rowRect = seqStepsRow.getBoundingClientRect();
 					let left = after ? trect.right : trect.left;   // insertion boundary
 					left = Math.max(rowRect.left, Math.min(left, rowRect.right - startRect.width));
 					ghost.style.transform = `translateX(${left - startRect.left}px)`;
@@ -1377,11 +1542,14 @@ function createSlicer(savedState = null) {
 					const swallow = (ce) => { ce.stopPropagation(); ce.preventDefault(); };
 					window.addEventListener('click', swallow, { capture: true, once: true });
 					setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 0);
-					const { idx, after } = dropTargetAt(e2.clientX);
-					const to   = idx + (after ? 1 : 0);
 					const from = dragFromIdx;
 					dragFromIdx = null;
-					moveTile(from, to);                 // renderSequencer() inside
+					if (seqEditMode === 'gaps') {
+						moveTileGaps(from, gapsTargetUnit(e2.clientX));   // leave gap + overwrite
+					} else {
+						const { idx, after } = dropTargetAt(e2.clientX);
+						moveTile(from, idx + (after ? 1 : 0));            // renderSequencer() inside
+					}
 				};
 				window.addEventListener('pointermove', onMove);
 				window.addEventListener('pointerup',   onUp);
@@ -1409,6 +1577,31 @@ function createSlicer(savedState = null) {
 						ev.preventDefault();
 						ev.stopPropagation();
 						resizing = true;       // suppresses the tile's reorder pointerdown
+
+						// Leave-gaps mode: non-conserving edge resize. Shrinking leaves a gap;
+						// growing overwrites the neighbour. Deterministic per move: recompute
+						// from a start-of-drag snapshot so back-and-forth doesn't accumulate.
+						if (seqEditMode === 'gaps') {
+							const rowRect = seqStepsRow.getBoundingClientRect();
+							const pxPerU  = rowRect.width / U;
+							const startX  = ev.clientX;
+							const snap    = seq.tiles.map((t) => ({ ...t }));
+							const gonMove = (e2) => {
+								const dU = pxPerU > 0 ? (e2.clientX - startX) / pxPerU : 0;
+								seq.tiles = computeResizeGaps(snap, i, edge, dU);
+								renderSequencer();
+							};
+							const gonUp = () => {
+								window.removeEventListener('pointermove', gonMove);
+								window.removeEventListener('pointerup',   gonUp);
+								resizing = false;
+								scheduleSave();
+							};
+							window.addEventListener('pointermove', gonMove);
+							window.addEventListener('pointerup',   gonUp);
+							return;
+						}
+
 						const lastIdx = seq.tiles.length - 1;
 						const rowRect = seqStepsRow.getBoundingClientRect();
 						const pxPerU  = rowRect.width / U;
@@ -1569,10 +1762,19 @@ function createSlicer(savedState = null) {
 		getTilePlayback: getTilePlayback,
 		isLooping:       () => seq.loop,
 		onTileVisual: (tileIndex, src, w, frac) => {
-			setPlayingTile(tileIndex);
+			setPlayingTile(tileIndex);   // a gap child isn't a .seq-tile → no highlight
+			const cur = seq.tiles[tileIndex];
 			if (seq.currentTile !== tileIndex) {
 				seq.currentTile = tileIndex;
-				seqStatus.textContent = `Playing slice ${tileIndex + 1} of ${seq.tiles.length}`;
+				seqStatus.textContent = (cur && cur.gap)
+					? `Gap ${tileIndex + 1} of ${seq.tiles.length}`
+					: `Playing slice ${tileIndex + 1} of ${seq.tiles.length}`;
+			}
+			// During a gap there's no source region playing — clear the waveform playhead.
+			if (cur && cur.gap) {
+				slicer.view.setPlayingRegion(null);
+				slicer.view.setIsPlaying(false);
+				return;
 			}
 			const r = tileRegion(src, w);
 			slicer.view.setPlayingRegion(r.start, r.end);
@@ -1596,7 +1798,9 @@ function createSlicer(savedState = null) {
 	// "first played" slicer as the internal clock source. -1 while stopped.
 	let playOrder = -1;
 
-	const startSeqPlayback = async () => {
+	// `atTime`: shared-clock anchor from the master so every track starts aligned
+	// (Tier 1c). Undefined for individual play → the transport self-anchors.
+	const startSeqPlayback = async (atTime) => {
 		if (seq.isPlaying) return;
 		if (seq.tiles.length === 0) return;
 
@@ -1608,7 +1812,7 @@ function createSlicer(savedState = null) {
 		renderSequencer();    // reflect playing state (disables drag/resize)
 
 		prescanStretches();   // enqueue all needed stretch builds up front (one smooth bar)
-		await transport.start();
+		await transport.start(atTime);
 	};
 
 	// transport.stop() cancels scheduled audio + both timers, then fires onStop
@@ -1674,7 +1878,9 @@ function createSlicer(savedState = null) {
 		masterPitch,
 		randLevel,
 		seq:            {
-			tiles: seq.tiles.map((t) => ({ src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: t.colorIdx })),
+			tiles: seq.tiles.map((t) => (t.gap
+				? { gap: true, w: t.w }
+				: { src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: t.colorIdx })),
 			loop:  seq.loop,
 		},
 	});
@@ -1711,6 +1917,8 @@ function createSlicer(savedState = null) {
 		if (Number.isFinite(savedState.end))          endInput.value   = savedState.end;
 		startSlider.value = startInput.value;
 		endSlider.value   = endInput.value;
+		startSliderCtrl.syncFromEl();
+		endSliderCtrl.syncFromEl();
 		if (Number.isFinite(savedState.virtualStart)) virtualStart = savedState.virtualStart;
 		if (Number.isFinite(savedState.virtualEnd))   virtualEnd   = savedState.virtualEnd;
 
@@ -1735,10 +1943,12 @@ function createSlicer(savedState = null) {
 			// drop them and regenerate defaults after the audio re-slices.
 			seq.tiles = Array.isArray(savedState.seq.tiles)
 				? savedState.seq.tiles
-					.filter((t) => t && Number.isFinite(t.src) && Number.isFinite(t.w) && t.w > 0)
-					.map((t, i) => ({ src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: Number.isFinite(t.colorIdx) ? t.colorIdx : i }))
+					.filter((t) => t && Number.isFinite(t.w) && t.w > 0 && (t.gap || Number.isFinite(t.src)))
+					.map((t, i) => (t.gap
+						? { gap: true, w: t.w, src: 0 }
+						: { src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: Number.isFinite(t.colorIdx) ? t.colorIdx : i }))
 				: [];
-			nextColorIdx = seq.tiles.reduce((m, t) => Math.max(m, t.colorIdx), -1) + 1;
+			nextColorIdx = seq.tiles.reduce((m, t) => Math.max(m, t.gap ? -1 : t.colorIdx), -1) + 1;
 			seq.loop  = !!savedState.seq.loop;
 			seqLoopBtn.classList.toggle('active', seq.loop);
 			seqLoopBtn.setAttribute('aria-pressed', String(seq.loop));
@@ -1763,7 +1973,7 @@ function createSlicer(savedState = null) {
 					// or any tile falls outside the cut at the restored resolution.
 					const Ur = unitCount();
 					const valid = seq.tiles.length > 0 &&
-						seq.tiles.every((t) => t.w > 0 && t.src >= 0 && t.src + t.w <= Ur);
+						seq.tiles.every((t) => t.w > 0 && (t.gap || (t.src >= 0 && t.src + t.w <= Ur)));
 					if (!valid) seq.tiles = defaultTiles(Ur);
 					renderSequencer();
 				} else {
@@ -1790,6 +2000,14 @@ function createSlicer(savedState = null) {
 const masterClock = { bpm: null, running: false, userSet: false };
 let masterBpmControl, masterPlayBtn, masterStopBtn;
 
+// Master tempo bounds — shared by the clamp and the BPM DragControl so the
+// stored tempo can never diverge from what the control can display. A very
+// short/long one-bar selection would otherwise derive an out-of-range BPM
+// (e.g. a 59s clip → 240/59 ≈ 4 BPM) that the control silently clamps for
+// display while masterClock.bpm kept the raw value — the two then disagreed.
+const MASTER_BPM_MIN = 20, MASTER_BPM_MAX = 400;
+const clampMasterBpm = (v) => Math.max(MASTER_BPM_MIN, Math.min(MASTER_BPM_MAX, v));
+
 // True when the internal master owns the tempo (no external MIDI clock engaged).
 function masterDriving() { return !midiClock.isEnabled(); }
 
@@ -1803,21 +2021,32 @@ function applyMasterTempo() {
 // first-clip auto-adopt from overriding it later).
 function setMasterBpm(v, user) {
 	if (!(v > 0)) return;
-	masterClock.bpm = v;
+	masterClock.bpm = clampMasterBpm(v);
 	if (user) masterClock.userSet = true;
-	if (masterBpmControl) masterBpmControl.setValue(v);   // no-op mid-drag (guarded)
+	if (masterBpmControl) masterBpmControl.setValue(masterClock.bpm);   // no-op mid-drag (guarded)
 	applyMasterTempo();
 	if (user) scheduleSave();
+}
+
+// Restart every tile-bearing slicer at ONE shared-clock instant so all tracks are
+// sample-aligned on the shared AudioContext (Tier 1c). Resume the context first so
+// no per-track resume() delay pushes a track past the anchor; the cushion covers
+// the synchronous per-track setup (renderSequencer + prescan) before each start.
+async function startAllAligned() {
+	const ctx = getAudioContext();
+	if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (err) { /* gesture needed */ } }
+	const when = ctx.currentTime + 0.12;
+	for (const s of slicers) {
+		if (!(s.hasTiles && s.hasTiles())) continue;
+		s.seqStop  && s.seqStop();    // restart from the top
+		s.seqStart && s.seqStart(when);
+	}
 }
 
 function masterPlayAll() {
 	if (!masterDriving()) return;
 	masterClock.running = true;
-	for (const s of slicers) {
-		if (!(s.hasTiles && s.hasTiles())) continue;
-		s.seqStop  && s.seqStop();    // restart from the top → all aligned
-		s.seqStart && s.seqStart();
-	}
+	startAllAligned();
 }
 function masterStopAll() {
 	masterClock.running = false;
@@ -1836,7 +2065,7 @@ function updateMasterControlsEnabled() {
 // While MIDI sync is on, the derived BPM is pushed to all slicers (overriding the
 // master) and MIDI Start/Continue/Stop drive their sequencers. See midi-clock.js.
 const midiBar = document.getElementById('midiBar');
-let syncBtn, midiDeviceSel, midiStatusEl;
+let syncBtn, midiDeviceSel, midiDeviceCtrl, midiStatusEl;
 // Reflect the Sync toggle-button's on/off state.
 function setSyncActive(on) {
 	if (!syncBtn) return;
@@ -1868,6 +2097,7 @@ function populateMidiDevices() {
 		opt.value = ''; opt.textContent = 'No MIDI inputs';
 		midiDeviceSel.appendChild(opt);
 		midiDeviceSel.disabled = true;
+		if (midiDeviceCtrl) { midiDeviceCtrl.refreshOptions(); midiDeviceCtrl.setDisabled(true); }
 		return;
 	}
 	for (const inp of inputs) {
@@ -1877,6 +2107,8 @@ function populateMidiDevices() {
 	}
 	midiDeviceSel.disabled = !midiClock.isEnabled();
 	if (current) midiDeviceSel.value = current;
+	// Reflect the rebuilt option list + enabled state into the drag-control.
+	if (midiDeviceCtrl) { midiDeviceCtrl.refreshOptions(); midiDeviceCtrl.setDisabled(midiDeviceSel.disabled); }
 }
 
 async function onMidiEnableToggle() {
@@ -1891,7 +2123,7 @@ async function onMidiEnableToggle() {
 			? midiSettings.inputId
 			: (inputs[0] ? inputs[0].id : null);
 		midiClock.setInput(wanted);
-		if (wanted) midiDeviceSel.value = wanted;
+		if (wanted) { midiDeviceSel.value = wanted; if (midiDeviceCtrl) midiDeviceCtrl.syncFromEl(); }
 	} else {
 		midiClock.setEnabled(false);
 		// Hand tempo back to the internal master (re-locks every slicer to it).
@@ -1912,7 +2144,7 @@ function buildMidiBar() {
 	const masterLabel = makeLabel('Master');
 	masterBpmControl = new DragControl({
 		label: 'BPM',
-		min: 20, max: 400, step: 1,
+		min: MASTER_BPM_MIN, max: MASTER_BPM_MAX, step: 1,
 		value: masterClock.bpm != null ? masterClock.bpm : 120,
 		format: (v) => `${Math.round(v)}`,
 		onChange: (v) => setMasterBpm(v, true),
@@ -1927,6 +2159,26 @@ function buildMidiBar() {
 
 	masterPlayBtn.addEventListener('click', masterPlayAll);
 	masterStopBtn.addEventListener('click', masterStopAll);
+
+	// Global tile-edit mode: OFF = classic packed (repack + length-conserving resize),
+	// ON = leave gaps (free placement, overwrite on drop/grow). A toggle-button like
+	// Loop/Sync. onSeqEditModeChange re-paints it (also fired on restore).
+	const seqModeBtn = document.createElement('button');
+	seqModeBtn.className = 'toggle-btn';
+	seqModeBtn.title = 'Tile editing: OFF = packed (reorder repacks, resize borrows from neighbour). ON = leave gaps (moving/shrinking leaves silence; dropping/growing overwrites).';
+	const paintSeqModeBtn = () => {
+		const on = seqEditMode === 'gaps';
+		seqModeBtn.textContent = on ? 'Gaps' : 'Packed';
+		seqModeBtn.classList.toggle('active', on);
+		seqModeBtn.setAttribute('aria-pressed', String(on));
+	};
+	onSeqEditModeChange = paintSeqModeBtn;
+	paintSeqModeBtn();
+	seqModeBtn.addEventListener('click', () => {
+		seqEditMode = (seqEditMode === 'gaps') ? 'pack' : 'gaps';
+		paintSeqModeBtn();
+		scheduleSave();
+	});
 
 	const title = document.createElement('span');
 	title.className   = 'midi-bar-title';
@@ -1945,6 +2197,11 @@ function buildMidiBar() {
 	midiDeviceSel = document.createElement('select');
 	midiDeviceSel.className = 'midi-device-select';
 	midiDeviceSel.disabled  = true;
+	// Wrap in the unified DragControl. The option list is dynamic (devices hot-plug),
+	// so populateMidiDevices() calls midiDeviceCtrl.refreshOptions() after rebuilding
+	// the <option>s. Starts empty + disabled until Sync is enabled.
+	midiDeviceCtrl = new DragControl({ el: midiDeviceSel, label: '' });
+	midiDeviceCtrl.setDisabled(true);
 
 	midiStatusEl = document.createElement('span');
 	midiStatusEl.className = 'midi-status';
@@ -1983,9 +2240,10 @@ function buildMidiBar() {
 	midiBar.appendChild(setSpan(masterBpmControl.getElement(), 2));   // BPM drag-control
 	midiBar.appendChild(setSpan(masterPlayBtn, 1));
 	midiBar.appendChild(setSpan(masterStopBtn, 1));
+	midiBar.appendChild(setSpan(seqModeBtn, 1));    // Packed / Gaps tile-edit mode
 	midiBar.appendChild(setSpan(title, 1));
 	midiBar.appendChild(setSpan(syncBtn, 1));
-	midiBar.appendChild(setSpan(midiDeviceSel, 2));    // device names need room
+	midiBar.appendChild(setSpan(midiDeviceCtrl.getElement(), 2));    // device names need room
 	midiBar.appendChild(setSpan(midiStatusEl, 1));
 	midiBar.appendChild(setSpan(clockBox, 2));         // source + BPM + beat dots
 
@@ -2068,11 +2326,11 @@ midiClock.onBpm((bpm) => {
 // slicers that have a sequence.
 midiClock.onTransport((ev) => {
 	if (!midiClock.isEnabled()) return;
-	for (const s of slicers) {
-		if (ev === 'stop') { s.seqStop && s.seqStop(); continue; }
-		if (!(s.hasTiles && s.hasTiles())) continue;
-		if (ev === 'start' && s.seqStop) s.seqStop();   // from the beginning
-		s.seqStart && s.seqStart();
+	if (ev === 'stop') {
+		for (const s of slicers) s.seqStop && s.seqStop();
+	} else {
+		// start/continue: (re)start every track on one shared anchor → aligned.
+		startAllAligned();
 	}
 	updateMidiStatus();
 });
@@ -2098,9 +2356,14 @@ window.addEventListener('beforeunload', saveState);
 const savedAll = loadStateRaw();
 // Restore the master tempo before creating slicers so they adopt it on load.
 if (savedAll && savedAll.master && Number.isFinite(savedAll.master.bpm)) {
-	masterClock.bpm     = savedAll.master.bpm;
+	masterClock.bpm     = clampMasterBpm(savedAll.master.bpm);
 	masterClock.userSet = !!savedAll.master.userSet;
 	if (masterBpmControl) masterBpmControl.setValue(masterClock.bpm);
+}
+// Restore the global tile-edit mode and repaint its toggle.
+if (savedAll && (savedAll.seqEditMode === 'gaps' || savedAll.seqEditMode === 'pack')) {
+	seqEditMode = savedAll.seqEditMode;
+	onSeqEditModeChange();
 }
 if (savedAll && Array.isArray(savedAll.slicers) && savedAll.slicers.length) {
 	const maxId  = savedAll.slicers.reduce((m, st) => Math.max(m, Number.isFinite(st.id) ? st.id : -1), -1);

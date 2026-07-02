@@ -1,3 +1,5 @@
+import { getAudioContext } from './audio-context.js';
+
 /**
  * AudioEngine: Handles audio loading, slicing, playback, segment enable/disable, and state.
  * Emits events for playback and state changes. No DOM or canvas dependencies.
@@ -5,7 +7,10 @@
 class AudioEngine extends EventTarget {
 	constructor() {
 		super();
-		this.audioContext    = new (window.AudioContext || window.webkitAudioContext)();
+		// Shared process-wide context (Tier 1c) — all engines run on one clock so the
+		// master transport can sample-lock every track. This engine still owns its own
+		// gain/panner below, so per-slicer volume/pan stay independent.
+		this.audioContext    = getAudioContext();
 		this.audioBuffer     = null;
 		this.originalBuffer  = null;
 		this.segments        = [];
@@ -243,9 +248,11 @@ class AudioEngine extends EventTarget {
 	dispose() {
 		this.stop();
 		this.cancelScheduled();
-		if (this.audioContext) {
-			this.audioContext.close();
-		}
+		// The AudioContext is shared across all engines (Tier 1c) — never close it
+		// here or every other slicer loses its clock. Just detach this engine's own
+		// nodes from the shared destination so it stops contributing output.
+		try { this.gainNode && this.gainNode.disconnect(); } catch (err) { /* already gone */ }
+		try { this.pannerNode && this.pannerNode.disconnect(); } catch (err) { /* already gone */ }
 	}
 }
 
