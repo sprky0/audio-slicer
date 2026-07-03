@@ -1,88 +1,58 @@
-# CSS System & Variables Documentation
+# CSS / design system
 
-## Overview
+All styles live in **`css/styles.css`** (one file: tokens in `:root`, then
+components). It's a dark, relative-unit system — no hard-coded layout pixels, no
+media queries. `example.html` + `css/example.css` are a standalone demo page, not
+part of the app.
 
-This project uses a modern CSS system based on CSS custom properties (variables) to enable flexible, maintainable, and themeable styles. The system is designed to make it easy to update colors, spacing, typography, and other design tokens globally, while keeping the CSS organized and readable.
+## Design tokens (`:root`)
 
-## Where to Find the CSS
+**Colors** — dark surfaces + semantic action colors, each with resting/hover/active
+shades (hover lightens, press darkens):
+- Surfaces: `--color-bg-primary` `#282c34`, `--color-bg-secondary` `#181818`,
+  `--color-input-bg`; text `--color-text-primary`; borders `--color-border`,
+  `--color-border-hover`.
+- Neutral / default = **blue** (`--color-accent`, `-hover`, `-active`).
+- Positive / "go" / on = **green** (`--color-positive*`, dark text `--color-on-positive`).
+- Danger / stop / destructive = **red** (`--color-danger*`, `--color-marker`).
+- Section-label chip: `--color-label-bg` (grey) + `--color-label-text` (orange).
+- `--focus-ring`, `--focus-ring-accent`, `--shadow-btn`.
 
-- Main stylesheet: `css/styles.css`
-- Example demonstration: `example.html` and `css/example.css`
+**Spacing / radius / misc:** `--space-xs…xxxl` (6→32px), `--radius-sm/md/lg`,
+`--transition-fast` / `-press`, `--opacity-disabled`.
 
-## CSS Variables
+**Layout grid — the important part.** One relative base unit drives every height,
+gap and column width, so the whole UI scales with the root font size:
+- `--ui-scale` (default 1) — global size knob; bump it (on `:root` or a single
+  `.slicer-container`) for a roomier/accessible mode and everything grows together.
+- `--grid-unit` = `0.5rem * --ui-scale` (~8px). Derived: `--gap` (1u),
+  `--control-h` (4u, one interface row ~32px), `--col-min` (12u, min column),
+  `--tile-h` (sequencer tile-row height; overridden per edit/perform mode on
+  `.slicer-container`).
 
-CSS variables are defined in the `:root` selector for global scope. Example:
+## Layout conventions
 
-```css
-:root {
-  --color-primary: #007bff;
-  --color-secondary: #6c757d;
-  --color-success: #28a745;
-  --color-danger: #dc3545;
-  --color-warning: #ffc107;
-  --color-info: #17a2b8;
-  --color-light: #f8f9fa;
-  --color-dark: #343a40;
+- **Toolbars are fluid auto-fit grids.** `.toolbar-cluster` / `.seq-toolbar` use
+  `grid-template-columns: repeat(auto-fit, minmax(var(--col-min), 1fr))` +
+  `grid-auto-rows: minmax(var(--control-h), auto)`, so they reflow at any width
+  with no media queries. Every control is one `--control-h` row tall.
+- **Per-item span** via `setSpan(el, cols, rows)` (helper in `main.js`): sets
+  `--col-span` / `--row-span` custom props the CSS reads. `cols='full'` →
+  `.span-full` (whole row). Retune a toolbar by changing those numbers, not the CSS.
 
-  --font-family-base: 'Segoe UI', Arial, sans-serif;
-  --font-size-base: 16px;
-  --font-size-lg: 1.25rem;
-  --font-size-sm: 0.875rem;
+## Components
 
-  --spacing-xs: 0.25rem;
-  --spacing-sm: 0.5rem;
-  --spacing-md: 1rem;
-  --spacing-lg: 2rem;
-  --border-radius: 0.25rem;
-}
-```
+- **`.drag-control`** — the unified control (replaces knobs/sliders/dropdowns): a
+  button-shaped cell with a translucent fill from origin→value, a bright leading
+  edge, and a centered "Label value" readout. Driven by `js/drag-control.js`.
+- **`.toggle-btn`** — on/off toggle (recessed hollow-pip OFF vs lit-green filled-pip
+  ON). Used by Loop, Show/Hide details, Sync, the Packed/Gaps mode toggle.
+- **Buttons** carry semantic intent by class (blue default / green primary / red
+  danger), each with hover/active/focus-visible/disabled states.
+- **`.ui-label`** — section-title chip (`makeLabel('…')` in main.js); e.g. the
+  "Source" / "Sequencer" titles.
+- **`.seq-tile`** / **`.seq-gap`** — sequencer tiles (waveform-backed) and silent
+  gaps (dashed well, leave-gaps mode).
 
-## Using CSS Variables
-
-You can use variables anywhere in your CSS:
-
-```css
-body {
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-base);
-  color: var(--color-dark);
-  background: var(--color-light);
-}
-.button {
-  background: var(--color-primary);
-  color: #fff;
-  padding: var(--spacing-sm) var(--spacing-md);
-  border-radius: var(--border-radius);
-}
-```
-
-## Extending and Customizing
-
-To add or override variables, add them to the `:root` selector or a specific selector for scoping. For theming, you can define alternate sets of variables under a class or data attribute.
-
-Example (dark mode):
-
-```css
-body.dark-mode {
-  --color-background: #222;
-  --color-text: #eee;
-}
-```
-
-## Example Page
-
-See `example.html` for a comprehensive demonstration of all variables and styles in use, including:
-
-- Headings, paragraphs, and text styles
-- Buttons in all color variants
-- Alerts and cards
-- Spacing and layout utilities
-- Customizing variables live
-
-## Best Practices
-
-- Use variables for all design tokens (colors, spacing, fonts, etc.)
-- Reference variables with `var(--variable-name)` in your CSS
-- Group related variables for clarity
-- Use semantic variable names (e.g., `--color-primary`, not `--blue`)
-- Document new variables in this file
+When adding a control, reuse these tokens/classes so it stays cohesive; assign its
+grid footprint with `setSpan` rather than writing new width CSS.

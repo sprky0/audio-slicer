@@ -243,16 +243,20 @@ function createSlicer(savedState = null) {
 	const startSliderCtrl = new DragControl({ el: startSlider, label: 'Start', format: (v) => (+v).toFixed(2) });
 	const endSliderCtrl   = new DragControl({ el: endSlider,   label: 'End',   format: (v) => (+v).toFixed(2) });
 
-	// Unit resolution U: the selection (one bar) is split into this many equal
-	// units — the finest step grid. Tiles are contiguous runs of these units.
-	const subdivisionsSelect = document.createElement('select');
-	[2, 4, 8, 16, 32].forEach(val => {
+	// Beats: how many quarter-note beats the selection is (its musical length). This
+	// sets the tempo mapping — BPM = 60·beats/selectionDuration — so e.g. 8 = two bars
+	// of 4/4, 6 = two bars of 3/4. Odd counts allowed (a fixed quarter-note beat unit
+	// for now; dotted/compound meters are future work). The sequencer grid (how many
+	// equal slices the selection is cut into) is derived from beats × the Step
+	// subdivision, not from this control directly. See cellCount().
+	const beatsSelect = document.createElement('select');
+	[1, 2, 3, 4, 6, 8, 12, 16].forEach(val => {
 		const opt = document.createElement('option');
 		opt.value = val;
 		opt.textContent = val;
-		subdivisionsSelect.appendChild(opt);
+		beatsSelect.appendChild(opt);
 	});
-	subdivisionsSelect.value = 16;
+	beatsSelect.value = 4;
 
 	// --- Details toggle (hides Start/End inputs + sliders behind a button) ---
 	const detailsBtn = document.createElement('button');
@@ -264,9 +268,8 @@ function createSlicer(savedState = null) {
 	const cluster = document.createElement('div');
 	cluster.className = 'toolbar-cluster';
 
-	// Units: a stepped drag-control wrapping the resolution <select> (existing
-	// readers/handlers of the select keep working — the control just drives it).
-	const unitsControl = new DragControl({ el: subdivisionsSelect, label: 'Units' });
+	// Beats: a stepped drag-control wrapping the beat-count <select>.
+	const beatsControl = new DragControl({ el: beatsSelect, label: 'Beats' });
 
 	// --- Volume / Pan / Pitch: unified drag-controls. These shape the audible output
 	// (including sequenced playback), so they live in the always-visible header — not
@@ -301,7 +304,7 @@ function createSlicer(savedState = null) {
 	editGrid.className = 'toolbar-cluster';
 	editGrid.appendChild(setSpan(selectFileBtn, 1));
 	editGrid.appendChild(setSpan(fileInfo, 3));               // name + duration + rate
-	editGrid.appendChild(setSpan(unitsControl.getElement(), 1));
+	editGrid.appendChild(setSpan(beatsControl.getElement(), 1));
 	editGrid.appendChild(setSpan(sliceBtn, 1));
 	editGrid.appendChild(setSpan(cutBtn, 1));                 // "Trim"
 	editGrid.appendChild(setSpan(resetBtn, 1));
@@ -460,15 +463,18 @@ function createSlicer(savedState = null) {
 		virtualEnd   = 1;
 		slicer.setView(0, 1);
 
-		// Reset start/end/unit resolution UI
+		// Reset region + Beats/Step back to defaults (4 beats · 1/16 → 16-cell grid).
 		startInput.value  = 0;
 		endInput.value    = 1;
 		startSlider.value = 0;
 		endSlider.value   = 1;
 		startSliderCtrl.syncFromEl();
 		endSliderCtrl.syncFromEl();
-		subdivisionsSelect.value = 16;
-		unitsControl.syncFromEl();
+		beatsSelect.value = 4;
+		beatsControl.syncFromEl();
+		divisionDenom = 16;
+		divisionSelect.value = '16';
+		stepControl.syncFromEl();
 
 		// Stop playback, re-slice the full buffer at the default resolution
 		// (segmentsliced → default tiles), and restore the auto-derived tempo.
@@ -476,7 +482,6 @@ function createSlicer(savedState = null) {
 		playPauseBtn.textContent = 'Play';
 		isPlaying = false;
 		bpmManual      = false;
-		divisionManual = false;
 		applyRange(0, 1, { autoPlay: false, keepPlayhead: false });
 	});
 
@@ -549,17 +554,18 @@ function createSlicer(savedState = null) {
 	};
 
 	// Take slider-space [start, end] (0..1), map through virtual window, slice the engine.
+	// The grid is beats × step (cellCount), and the tempo derives from beats.
 	const applyRange = (sliderStart, sliderEnd, opts = { keepPlayhead: true }) => {
-		const subdivisions = parseInt(subdivisionsSelect.value, 10);
-		if (!(sliderEnd > sliderStart) || subdivisions <= 0) return;
+		const cells = cellCount();
+		if (!(sliderEnd > sliderStart) || cells <= 0) return;
 		const actualStart = sliderToActual(sliderStart);
 		const actualEnd   = sliderToActual(sliderEnd);
 		// Record the applied selection BEFORE slicing — region buffers + the unit
 		// grid (built lazily during playback) read from these.
 		selStartFrac = actualStart;
 		selEndFrac   = actualEnd;
-		slicer.slice(actualStart, actualEnd, subdivisions, opts);
-		deriveTransport(actualStart, actualEnd, subdivisions);
+		slicer.slice(actualStart, actualEnd, cells, opts);
+		deriveTransport(actualStart, actualEnd);
 		scheduleSave();
 	};
 
@@ -594,25 +600,8 @@ function createSlicer(savedState = null) {
 		applyRange(start, end);
 	});
 
-	// Subdivisions change → re-slice using current slider range.
-	subdivisionsSelect.addEventListener('change', () => {
-		// Keep the Step:Units ratio constant as Units changes, so the loop's felt
-		// resolution follows (Units 8→16 takes Step 1/4→1/8; 1/2→1/4). Only when the
-		// user has taken manual control of Step — otherwise deriveTransport re-locks
-		// Step = Units (the 1:1 case, whose ratio is already preserved). The old unit
-		// count is the engine's current segment count (re-slice hasn't run yet).
-		if (divisionManual) {
-			const oldUnits = (slicer.engine.getSegments() || []).length;
-			const newUnits = parseInt(subdivisionsSelect.value, 10);
-			if (oldUnits > 0 && newUnits > 0 && newUnits !== oldUnits) {
-				const OPTS  = [2, 4, 8, 16, 32];
-				const want  = divisionDenom * (newUnits / oldUnits);
-				const denom = OPTS.reduce((best, o) => Math.abs(o - want) < Math.abs(best - want) ? o : best, OPTS[0]);
-				divisionDenom        = denom;
-				divisionSelect.value = String(denom);
-				stepControl.syncFromEl();
-			}
-		}
+	// Beats change → re-slice (cellCount = beats × step) + re-derive the tempo.
+	beatsSelect.addEventListener('change', () => {
 		const start = clamp01(parseFloat(startInput.value));
 		const end   = clamp01(parseFloat(endInput.value));
 		applyRange(start, end);
@@ -777,17 +766,23 @@ function createSlicer(savedState = null) {
 	// Monotonic source of stable per-tile colour ids.
 	let nextColorIdx = 0;
 
-	// Unit resolution U. After a slice the engine holds U equal unit-segments,
-	// so their count is the source of truth; fall back to the select while empty.
+	// Beats in the loop (musical length) and the derived sequencer grid.
+	const beatCount = () => parseInt(beatsSelect.value, 10) || 4;
+	// Grid cells = one step each. A 1/D-note step is 4/D quarter-notes, so a loop of
+	// `beats` quarters holds beats·D/4 steps. Integer for every D≥4 (quarter or finer);
+	// only 1/2-note steps on an odd beat count round (rare — deferred edge case).
+	const cellCount = () => Math.max(1, Math.round(beatCount() * divisionDenom / 4));
+
+	// Grid resolution U. After a slice the engine holds U equal unit-segments, so their
+	// count is the source of truth; fall back to the derived cell count while empty.
 	const unitCount = () => {
 		const n = (slicer.engine.getSegments() || []).length;
-		return n > 0 ? n : (parseInt(subdivisionsSelect.value, 10) || 16);
+		return n > 0 ? n : cellCount();
 	};
 	const defaultTiles = (n) => {
 		nextColorIdx = n;
 		return Array.from({ length: n }, (_, i) => ({ src: i, w: 1, offset: 0, muted: false, colorIdx: i }));
 	};
-	const totalUnits   = () => seq.tiles.reduce((sum, t) => sum + t.w, 0);
 	const tileColor    = (t) => PALETTE[t.colorIdx % PALETTE.length];
 
 	// Edge-resize snaps to 1/SUBSTEP of a unit (sub-step precision), so tile widths
@@ -806,9 +801,8 @@ function createSlicer(savedState = null) {
 	// itself, unless the user has manually overridden either control.
 	let bpm           = 120;
 	let originalBPM   = 120;            // last auto-derived (natural) tempo of the selection
-	let divisionDenom = 16;
+	let divisionDenom = 16;            // Step subdivision (1/divisionDenom note)
 	let bpmManual     = false;
-	let divisionManual= false;
 	let masterPitch   = 0;             // semitones; per-step offsets stack on top
 
 	// When an external MIDI clock is driving the tempo this holds its derived BPM
@@ -1040,21 +1034,17 @@ function createSlicer(savedState = null) {
 		if (show) bpmResetBtn.textContent = `↺ ${originalBPM.toFixed(2)}`;
 	};
 
-	const deriveTransport = (selStart, selEnd, n) => {
+	const deriveTransport = (selStart, selEnd) => {
 		const buf = slicer.engine.audioBuffer;
 		if (!buf) return;
 		const selDur = (selEnd - selStart) * buf.duration;
 		if (selDur <= 0) return;
-		originalBPM = 240 / selDur;        // one bar (4 beats) == the selection
+		originalBPM = 60 * beatCount() / selDur;   // the loop is `beats` quarter-notes long
 		if (!bpmManual) {
 			bpm = originalBPM;
 			bpmInput.value = bpm.toFixed(2);
 		}
-		if (!divisionManual && [2, 4, 8, 16, 32].includes(n)) {
-			divisionDenom = n;             // each step == one slice
-			divisionSelect.value = String(n);
-			stepControl.syncFromEl();
-		}
+		// Step is independent (its own control) — no longer auto-set from the grid.
 		updateBpmResetBtn();
 
 		// Master sync: the first loaded clip sets the master tempo (until the user
@@ -1084,9 +1074,13 @@ function createSlicer(savedState = null) {
 		schedulePrescan();
 		scheduleSave();
 	});
+	// Step change → new subdivision means a new cell count (beats × step), so re-slice
+	// the selection into that grid. Tempo is unchanged (it comes from beats).
 	divisionSelect.addEventListener('change', () => {
-		divisionDenom  = parseInt(divisionSelect.value, 10);
-		divisionManual = true;
+		divisionDenom = parseInt(divisionSelect.value, 10);
+		const start = clamp01(parseFloat(startInput.value));
+		const end   = clamp01(parseFloat(endInput.value));
+		applyRange(start, end);
 		schedulePrescan();
 		scheduleSave();
 	});
@@ -1749,7 +1743,7 @@ function createSlicer(savedState = null) {
 		if (seq.isPlaying) {
 			seqStatus.textContent = `Playing slice ${seq.currentTile + 1} of ${seq.tiles.length}`;
 		} else {
-			seqStatus.textContent = `${seq.tiles.length} slices · ${fmtW(totalUnits())} steps/loop · grid ${U}`;
+			seqStatus.textContent = `${beatCount()} beats · 1/${divisionDenom} · ${U} steps`;
 		}
 
 		// Draw backdrops synchronously: reading clientWidth forces flex layout, so
@@ -1892,11 +1886,10 @@ function createSlicer(savedState = null) {
 		virtualEnd,
 		start:          parseFloat(startInput.value),
 		end:            parseFloat(endInput.value),
-		subdivisions:   parseInt(subdivisionsSelect.value, 10),
+		beats:          beatCount(),
 		bpm,
 		divisionDenom,
 		bpmManual,
-		divisionManual,
 		volume:         volumeKnob.value,
 		pan:            panKnob.value,
 		masterPitch,
@@ -1936,7 +1929,10 @@ function createSlicer(savedState = null) {
 
 	if (savedState) {
 		// Settings that don't need the decoded audio buffer — apply synchronously.
-		if (Number.isFinite(savedState.subdivisions)) { subdivisionsSelect.value = String(savedState.subdivisions); unitsControl.syncFromEl(); }
+		// `beats` is the current field; pre-reframe saves only had `subdivisions`
+		// (the old grid count) which no longer maps cleanly → fall back to the default
+		// beat count and let the tile-validity check regenerate tiles for the new grid.
+		if (Number.isFinite(savedState.beats)) { beatsSelect.value = String(savedState.beats); beatsControl.syncFromEl(); }
 		if (Number.isFinite(savedState.start))        startInput.value = savedState.start;
 		if (Number.isFinite(savedState.end))          endInput.value   = savedState.end;
 		startSlider.value = startInput.value;
@@ -1949,7 +1945,6 @@ function createSlicer(savedState = null) {
 		if (Number.isFinite(savedState.bpm))           { bpm = savedState.bpm; bpmInput.value = bpm.toFixed(2); }
 		if (Number.isFinite(savedState.divisionDenom)) { divisionDenom = savedState.divisionDenom; divisionSelect.value = String(divisionDenom); stepControl.syncFromEl(); }
 		bpmManual      = !!savedState.bpmManual;
-		divisionManual = !!savedState.divisionManual;
 		updateBpmResetBtn();
 
 		if (Number.isFinite(savedState.volume)) { volumeKnob.setValue(savedState.volume); slicer.setVolume(savedState.volume); }
