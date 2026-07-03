@@ -260,8 +260,7 @@ function createSlicer(savedState = null) {
 	detailsBtn.className   = 'slicer-details-btn';
 	detailsBtn.setAttribute('aria-expanded', 'false');
 
-	// Interface controls live in a fluid auto-fit grid (the "cluster"); the knob
-	// rack is assembled separately and sits beside it (see end of this section).
+	// Interface controls live in a fluid auto-fit grid (the "cluster").
 	const cluster = document.createElement('div');
 	cluster.className = 'toolbar-cluster';
 
@@ -269,64 +268,9 @@ function createSlicer(savedState = null) {
 	// readers/handlers of the select keep working — the control just drives it).
 	const unitsControl = new DragControl({ el: subdivisionsSelect, label: 'Units' });
 
-	// Per-item grid footprint (columns). Tweak these to retune the toolbar.
-	// Transport is master-only (Play All / Stop All in the top bar), so the
-	// per-slicer audition Play/Stop are not shown.
-	cluster.appendChild(setSpan(makeLabel('Source'), 1));   // titles the source row
-	cluster.appendChild(fileInput);                          // hidden; no grid cell
-	cluster.appendChild(setSpan(selectFileBtn, 1));
-	cluster.appendChild(setSpan(fileInfo, 3));               // room for name + details
-	cluster.appendChild(setSpan(unitsControl.getElement(), 1));
-	cluster.appendChild(setSpan(sliceBtn, 1));
-	cluster.appendChild(setSpan(cutBtn, 1));                 // "Trim"
-	cluster.appendChild(setSpan(resetBtn, 1));
-	cluster.appendChild(setSpan(detailsBtn, 2));  // "Show/Hide details"
-	cluster.appendChild(setSpan(removeBtn, 1));
-
-	// --- Collapsible details panel: Start/End number inputs + range sliders ---
-	const detailsPanel = document.createElement('div');
-	detailsPanel.className = 'slicer-details';
-	detailsPanel.hidden    = true;
-
-	const numRow = document.createElement('div');
-	numRow.className = 'slicer-details-row';
-
-	const startNumLabel = document.createElement('label');
-	startNumLabel.className = 'slicer-details-label';
-	startNumLabel.appendChild(document.createTextNode('Start: '));
-	startNumLabel.appendChild(startInput);
-
-	const endNumLabel = document.createElement('label');
-	endNumLabel.className = 'slicer-details-label';
-	endNumLabel.appendChild(document.createTextNode('End: '));
-	endNumLabel.appendChild(endInput);
-
-	numRow.appendChild(startNumLabel);
-	numRow.appendChild(endNumLabel);
-
-	// --- Slider row ---
-	const sliderRow = document.createElement('div');
-	sliderRow.className = 'slicer-slider-row';
-
-	// The drag-controls carry their own "Start"/"End" label + value readout, so no
-	// separate text labels are needed; they stack full-width in the column row.
-	sliderRow.appendChild(startSliderCtrl.getElement());
-	sliderRow.appendChild(endSliderCtrl.getElement());
-
-	detailsPanel.appendChild(numRow);
-	detailsPanel.appendChild(sliderRow);
-	cluster.appendChild(setSpan(detailsPanel, 'full'));
-
-	detailsBtn.addEventListener('click', () => {
-		const showing = !detailsPanel.hidden;
-		detailsPanel.hidden = showing;
-		detailsBtn.textContent = showing ? 'Show details' : 'Hide details';
-		detailsBtn.setAttribute('aria-expanded', String(!showing));
-		detailsBtn.classList.toggle('active', !showing);
-	});
-
-	// --- Volume / Pan / Pitch: unified drag-controls (button-shaped grid cells).
-	// onChange is wired after the slicer exists (see "--- control wiring" below).
+	// --- Volume / Pan / Pitch: unified drag-controls. These shape the audible output
+	// (including sequenced playback), so they live in the always-visible header — not
+	// the details panel. onChange wired after the slicer exists (see control wiring).
 	const volumeKnob = new DragControl({
 		label: 'Vol',
 		min: 0, max: 1, step: 0.01, value: 1,
@@ -344,14 +288,76 @@ function createSlicer(savedState = null) {
 		min: -5, max: 5, step: 1, value: 0, detent: 0,
 		format: (v) => (v > 0 ? `+${v}` : `${v}`),
 	});
-	// One column wide, one row tall — same footprint as a button now (no longer a
-	// taller dial), inserted before the full-row details panel.
-	cluster.insertBefore(setSpan(volumeKnob.getElement(), 1), detailsPanel);
-	cluster.insertBefore(setSpan(panKnob.getElement(),    1), detailsPanel);
-	cluster.insertBefore(setSpan(pitchKnob.getElement(),  1), detailsPanel);
+
+	// --- Details panel: ALL source-editing controls (everything but the waveform and
+	// the sequencer controls). Shown = "edit" mindset (big waveform, small tile row);
+	// hidden = "perform" mindset (small waveform, big tile row). applyEditMode() trades
+	// the two heights so the layout signals which task you're in.
+	const detailsPanel = document.createElement('div');
+	detailsPanel.className = 'slicer-details';
+
+	// Source-editing controls, in their own auto-fit grid inside the panel.
+	const editGrid = document.createElement('div');
+	editGrid.className = 'toolbar-cluster';
+	editGrid.appendChild(setSpan(selectFileBtn, 1));
+	editGrid.appendChild(setSpan(fileInfo, 3));               // name + duration + rate
+	editGrid.appendChild(setSpan(unitsControl.getElement(), 1));
+	editGrid.appendChild(setSpan(sliceBtn, 1));
+	editGrid.appendChild(setSpan(cutBtn, 1));                 // "Trim"
+	editGrid.appendChild(setSpan(resetBtn, 1));
+
+	// The Start/End number fields are gone from the UI — the waveform handles and the
+	// Start/End slider drag-controls cover region editing. The `startInput`/`endInput`
+	// elements are kept (detached, never appended) purely as the region's value store,
+	// which setStart/setEnd/Slice/Trim/restore/syncControls read + write.
+	const sliderRow = document.createElement('div');
+	sliderRow.className = 'slicer-slider-row';
+	// The drag-controls carry their own "Start"/"End" label + value readout.
+	sliderRow.appendChild(startSliderCtrl.getElement());
+	sliderRow.appendChild(endSliderCtrl.getElement());
+
+	detailsPanel.appendChild(editGrid);
+	detailsPanel.appendChild(sliderRow);
+
+	// Header (always visible): mix controls that also drive the sequencer + the mode
+	// toggle + remove.
+	cluster.appendChild(fileInput);                          // hidden native input
+	cluster.appendChild(setSpan(volumeKnob.getElement(), 1));
+	cluster.appendChild(setSpan(panKnob.getElement(),    1));
+	cluster.appendChild(setSpan(pitchKnob.getElement(),  1));
+	cluster.appendChild(setSpan(detailsBtn, 2));             // Show/Hide details
+	cluster.appendChild(setSpan(removeBtn, 1));
+	// The details panel is a SIBLING of the header cluster, not a grid item in it.
+	// Otherwise its full-width row forces the auto-fit grid to keep all columns, and
+	// toggling it would resize (jump) the header cells. As a sibling it just stacks
+	// below the header and can show/hide with no effect on the header layout.
+
+	// Edit vs perform: trade waveform height for sequencer tile-row height. The tile
+	// height comes from --tile-h (set per-mode by the .editing class in CSS); the
+	// waveform height is driven in JS (the view forces its own canvas height).
+	const WAVE_H_EDIT = 280, WAVE_H_PERFORM = 96;
+	let detailsShown = true;                                  // default: edit mindset
+	const applyEditMode = (editing) => {
+		detailsShown = editing;
+		detailsPanel.hidden = !editing;
+		container.classList.toggle('editing', editing);
+		detailsBtn.textContent = editing ? 'Hide details' : 'Show details';
+		detailsBtn.setAttribute('aria-expanded', String(editing));
+		detailsBtn.classList.toggle('active', editing);
+		if (slicer && slicer.view) slicer.view.setHeight(editing ? WAVE_H_EDIT : WAVE_H_PERFORM);
+		// The tile row changed height with --tile-h → repaint its backdrops next frame.
+		requestAnimationFrame(() => { try { redrawTileWaves(); } catch (err) { /* not ready */ } });
+	};
+	detailsBtn.addEventListener('click', () => applyEditMode(!detailsShown));
 
 	controls.appendChild(cluster);
+	controls.appendChild(detailsPanel);   // sibling of the header (see note above)
 
+	// "Source" titles the whole slicer from its top-left corner (was a cell in the
+	// details grid).
+	const sourceLabel = makeLabel('Source');
+	sourceLabel.classList.add('slicer-title');
+	container.appendChild(sourceLabel);
 	container.appendChild(controls);
 	slicersDiv.appendChild(container);
 
@@ -575,8 +581,9 @@ function createSlicer(savedState = null) {
 		applyRange(start, end);
 	};
 
-	startInput.addEventListener('input',  (e) => setStart(e.target.value));
-	endInput.addEventListener('input',    (e) => setEnd(e.target.value));
+	// The slider drag-controls drive the region (they mirror to startSlider/endSlider
+	// and dispatch 'input'). startInput/endInput are detached value-holders now, so no
+	// listeners on them.
 	startSlider.addEventListener('input', (e) => setStart(e.target.value));
 	endSlider.addEventListener('input',   (e) => setEnd(e.target.value));
 
@@ -589,6 +596,23 @@ function createSlicer(savedState = null) {
 
 	// Subdivisions change → re-slice using current slider range.
 	subdivisionsSelect.addEventListener('change', () => {
+		// Keep the Step:Units ratio constant as Units changes, so the loop's felt
+		// resolution follows (Units 8→16 takes Step 1/4→1/8; 1/2→1/4). Only when the
+		// user has taken manual control of Step — otherwise deriveTransport re-locks
+		// Step = Units (the 1:1 case, whose ratio is already preserved). The old unit
+		// count is the engine's current segment count (re-slice hasn't run yet).
+		if (divisionManual) {
+			const oldUnits = (slicer.engine.getSegments() || []).length;
+			const newUnits = parseInt(subdivisionsSelect.value, 10);
+			if (oldUnits > 0 && newUnits > 0 && newUnits !== oldUnits) {
+				const OPTS  = [2, 4, 8, 16, 32];
+				const want  = divisionDenom * (newUnits / oldUnits);
+				const denom = OPTS.reduce((best, o) => Math.abs(o - want) < Math.abs(best - want) ? o : best, OPTS[0]);
+				divisionDenom        = denom;
+				divisionSelect.value = String(denom);
+				stepControl.syncFromEl();
+			}
+		}
 		const start = clamp01(parseFloat(startInput.value));
 		const end   = clamp01(parseFloat(endInput.value));
 		applyRange(start, end);
@@ -1989,6 +2013,7 @@ function createSlicer(savedState = null) {
 	}
 
 	renderSequencer();
+	applyEditMode(detailsShown);   // set initial edit/perform layout (waveform + tile heights)
 }
 
 // --- Internal master clock (groovebox transport) ---

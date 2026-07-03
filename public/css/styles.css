@@ -368,6 +368,11 @@ input[type="checkbox"]:disabled {
 	margin: var(--space-xxxl) auto;
 	padding: var(--space-xl);
 	border-radius: var(--radius-lg);
+	/* Two mindsets trade vertical space (see applyEditMode in main.js): perform mode
+	   (details hidden) gets a tall sequencer tile row + short waveform; edit mode
+	   (.editing, details shown) gets short tiles + a tall waveform. The waveform
+	   height is driven in JS; the tile row follows --tile-h here. */
+	--tile-h: calc(var(--grid-unit) * 16);   /* perform: tall tiles */
 	background: var(--color-bg-secondary);
 	position: relative;
 	box-sizing: border-box;
@@ -376,6 +381,19 @@ input[type="checkbox"]:disabled {
 .slicer-waveform-canvas {
 	display: block;
 	width: 100%;
+}
+/* "Source" title at the top-left of each slicer. */
+.slicer-title {
+	display: inline-flex;
+	margin-bottom: var(--space-md);
+}
+/* Edit mindset: short tiles (the sequencer yields space to the tall waveform). */
+.slicer-container.editing {
+	--tile-h: calc(var(--grid-unit) * 7);
+}
+/* The slice hint under the waveform is only relevant while editing. */
+.slicer-container:not(.editing) .wave-help {
+	display: none;
 }
 /* --- Control toolbars: a fluid, relative-unit grid -----------------------
    .slicer-controls splits into the interface cluster (flexible) + the knob rack
@@ -481,28 +499,13 @@ input[type="checkbox"]:disabled {
 /* --- Collapsible details panel (Start/End numerics + sliders) --- */
 .slicer-details {
 	margin-top: var(--space-md);
-	padding: var(--space-md);
-	border: 1px solid var(--color-border);
-	border-radius: var(--radius-sm);
+	padding: var(--space-md) 0;               /* top/bottom only — no side padding */
+	border-top: 1px solid var(--color-border);
+	border-bottom: 1px solid var(--color-border);
 	background: rgba(0, 0, 0, 0.20);
-	flex: 1 0 100%;
 }
 .slicer-details[hidden] {
 	display: none;
-}
-
-.slicer-details-row {
-	display: flex;
-	flex-wrap: wrap;
-	gap: var(--space-lg);
-	margin-bottom: var(--space-sm);
-}
-
-.slicer-details-label {
-	display: inline-flex;
-	align-items: center;
-	gap: var(--space-xs);
-	color: var(--color-text-primary);
 }
 
 /* Toggle styling for .slicer-details-btn lives with .seq-loop-btn (search

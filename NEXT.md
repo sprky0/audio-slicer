@@ -1,7 +1,31 @@
 # Where we are / next steps
 
-Working notes for jsloop. Updated 2026-06-30, branch
+Working notes for jsloop. Updated 2026-07-02, branch
 `feature-slice-drag-sequencer`.
+
+## Checkpoint committed 2026-07-02 (`7438a51`)
+Committed the whole stretch: finished DragControl rollout (region sliders + dynamic
+MIDI dropdown + dead-knob removal + grid/getValue fixes), master-BPM clamp fix,
+Tier 1c shared AudioContext + aligned start, Packed/Gaps sequencer modes, and the
+`.slicer-container` / `.sequencer` border+padding tweaks. All verified live.
+
+## "Two mindsets" layout — DONE (2026-07-02, UNCOMMITTED)
+Show/Hide details now switches each slicer between an **edit** and a **perform**
+mindset, trading vertical space between the waveform and the sequencer tile row.
+- Details panel holds the source-editing controls: Source label, Select File +
+  file info, Units, Slice, Trim, Reset, region Start/End (numbers + sliders).
+- Always-visible header: Vol/Pan/Pitch (kept out of details — they shape the
+  audible/sequenced output), Show/Hide details, Remove.
+- Details SHOWN (`.editing`, default): waveform tall (JS `WaveformView.setHeight`
+  = 280px), tile row short (`--tile-h` 7u). Details HIDDEN: waveform short (96px),
+  tile row tall (16u). `applyEditMode()` in main.js drives both; slice hint hidden
+  in perform mode.
+- Verified live: default edit mode; toggle trades 280↔96 waveform / 60↔132 tiles,
+  reversible; controls in the right places; no errors.
+- Interpretation to confirm w/ user: Vol/Pan/Pitch left in the header (they affect
+  seq playback). If they should live in details, move the 3 appends.
+- Default is edit mode (details open) so a fresh user sees the editing controls +
+  big waveform; not persisted (resets each load).
 
 ## Recently landed (this stretch of work)
 

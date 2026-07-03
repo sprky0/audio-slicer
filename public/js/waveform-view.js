@@ -67,6 +67,7 @@ class WaveformView extends EventTarget {
 
 		// Help message (inserted before canvas)
 		this.helpMsg = document.createElement('div');
+		this.helpMsg.className      = 'wave-help';
 		this.helpMsg.style.color    = '#aaa';
 		this.helpMsg.style.fontSize = '13px';
 		this.helpMsg.style.margin   = '4px 0 8px 0';
@@ -109,6 +110,14 @@ class WaveformView extends EventTarget {
 	setView(start, end) {
 		this.viewStart = start;
 		this.viewEnd   = end;
+		this._scheduleDraw();
+	}
+
+	// Change the canvas height and redraw. Used to "trade" vertical space with the
+	// sequencer: tall in edit mode (details shown), short in perform mode (hidden).
+	setHeight(px) {
+		this.options.height = px;
+		this._resizeCanvas();
 		this._scheduleDraw();
 	}
 
