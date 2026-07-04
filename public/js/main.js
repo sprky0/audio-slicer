@@ -201,10 +201,6 @@ function createSlicer(savedState = null) {
 	const fileInfo = document.createElement('div');
 	fileInfo.className = 'file-info';
 
-	const sliceBtn = document.createElement('button');
-	sliceBtn.textContent = 'Slice';
-	sliceBtn.disabled    = true;
-
 	const startInput = document.createElement('input');
 	startInput.type  = 'number';
 	startInput.min   = 0;
@@ -309,7 +305,6 @@ function createSlicer(savedState = null) {
 	editGrid.appendChild(setSpan(selectFileBtn, 1));
 	editGrid.appendChild(setSpan(fileInfo, 3));               // name + duration + rate
 	editGrid.appendChild(setSpan(beatsControl.getElement(), 1));
-	editGrid.appendChild(setSpan(sliceBtn, 1));
 	editGrid.appendChild(setSpan(cutBtn, 1));                 // "Trim"
 	editGrid.appendChild(setSpan(resetBtn, 1));
 
@@ -329,6 +324,7 @@ function createSlicer(savedState = null) {
 	// Header (always visible): mix controls that also drive the sequencer + the mode
 	// toggle + remove.
 	cluster.appendChild(fileInput);                          // hidden native input
+	cluster.appendChild(setSpan(makeLabel('Source'), 1));    // section title, inline with the mix controls
 	cluster.appendChild(setSpan(volumeKnob.getElement(), 1));
 	cluster.appendChild(setSpan(panKnob.getElement(),    1));
 	cluster.appendChild(setSpan(pitchKnob.getElement(),  1));
@@ -344,7 +340,10 @@ function createSlicer(savedState = null) {
 	// height comes from --tile-h (set per-mode by the .editing class in CSS); the
 	// waveform height is driven in JS (the view forces its own canvas height).
 	const WAVE_H_EDIT = 280, WAVE_H_PERFORM = 96;
-	let detailsShown = true;                                  // default: edit mindset
+	// New (empty) slicers open in edit mode (details shown) so you can load + slice;
+	// restored or duplicated slicers are already configured, so they open in perform
+	// mode (details hidden, big sequencer). `savedState` present ⇒ not a fresh add.
+	let detailsShown = !savedState;
 	const applyEditMode = (editing) => {
 		detailsShown = editing;
 		detailsPanel.hidden = !editing;
@@ -361,11 +360,6 @@ function createSlicer(savedState = null) {
 	controls.appendChild(cluster);
 	controls.appendChild(detailsPanel);   // sibling of the header (see note above)
 
-	// "Source" titles the whole slicer from its top-left corner (was a cell in the
-	// details grid).
-	const sourceLabel = makeLabel('Source');
-	sourceLabel.classList.add('slicer-title');
-	container.appendChild(sourceLabel);
 	container.appendChild(controls);
 	slicersDiv.appendChild(container);
 
@@ -536,7 +530,6 @@ function createSlicer(savedState = null) {
 		const file = e.target.files[0];
 		if (file) {
 			await slicer.loadFile(file);
-			sliceBtn.disabled = false;
 			// Reset selection to the whole buffer and slice at the current unit
 			// resolution (loadFile slices with a placeholder count). This drives
 			// segmentsliced → default tiles + deriveTransport.
@@ -618,13 +611,6 @@ function createSlicer(savedState = null) {
 	// listeners on them.
 	startSlider.addEventListener('input', (e) => setStart(e.target.value));
 	endSlider.addEventListener('input',   (e) => setEnd(e.target.value));
-
-	// Slice button — just re-applies the current slider range.
-	sliceBtn.addEventListener('click', () => {
-		const start = clamp01(parseFloat(startInput.value));
-		const end   = clamp01(parseFloat(endInput.value));
-		applyRange(start, end);
-	});
 
 	// Beats change → re-slice (cellCount = beats × step) + re-derive the tempo.
 	beatsSelect.addEventListener('change', () => {
@@ -753,6 +739,43 @@ function createSlicer(savedState = null) {
 	const seqStatus = document.createElement('span');
 	seqStatus.className = 'seq-status';
 
+	// --- Slice settings: act on the currently SELECTED tile (click a tile to select).
+	// Sits to the right of Step. Disabled while nothing is selected. Mute replaces the
+	// old per-tile mute dot.
+	const sliceLabel = makeLabel('Slice');
+	const muteToggle = document.createElement('button');
+	muteToggle.className = 'toggle-btn';
+	muteToggle.textContent = 'Mute';
+	muteToggle.setAttribute('aria-pressed', 'false');
+	muteToggle.addEventListener('click', () => {
+		const sel = seq.tiles.includes(selectedTile) ? selectedTile : null;
+		if (!sel) return;
+		sel.muted = !sel.muted;
+		renderSequencer();       // repaint the tile's muted state + refresh these controls
+		scheduleSave();
+	});
+	// Duplicate the selected slice into the adjacent cells (◀ before / ▶ after),
+	// overwriting what's under. duplicateSlice() lives with the tile-edit helpers.
+	const dupBeforeBtn = document.createElement('button');
+	dupBeforeBtn.textContent = 'Dup ◀';
+	dupBeforeBtn.title = 'Duplicate the selected slice before it (overwrites what’s under the copy)';
+	dupBeforeBtn.addEventListener('click', () => duplicateSlice(-1));
+	const dupAfterBtn = document.createElement('button');
+	dupAfterBtn.textContent = 'Dup ▶';
+	dupAfterBtn.title = 'Duplicate the selected slice after it (overwrites what’s under the copy)';
+	dupAfterBtn.addEventListener('click', () => duplicateSlice(1));
+	// Reflect the selection into the slice-settings controls (enabled + mute state).
+	const updateSliceSettings = () => {
+		const sel = seq.tiles.includes(selectedTile) ? selectedTile : null;
+		const on  = !!sel;
+		muteToggle.disabled = !on;
+		muteToggle.classList.toggle('active', on && !!sel.muted);
+		muteToggle.setAttribute('aria-pressed', String(on && !!sel.muted));
+		dupBeforeBtn.disabled = !on;
+		dupAfterBtn.disabled  = !on;
+		sliceLabel.classList.toggle('disabled', !on);
+	};
+
 	// Per-item grid footprint (columns) for the sequencer toolbar. Transport is
 	// master-only, so the per-slicer Play/Stop are not shown here.
 	seqToolbar.appendChild(setSpan(seqLabel, 1));
@@ -763,6 +786,10 @@ function createSlicer(savedState = null) {
 	// Per-track BPM is hidden: the master clock governs tempo (bpmInput/bpmResetBtn
 	// stay in memory so setMidiBpm's value/lock writes are harmless).
 	seqToolbar.appendChild(setSpan(stepControl.getElement(), 1));    // Step
+	seqToolbar.appendChild(setSpan(sliceLabel, 1));                  // Slice settings ↓
+	seqToolbar.appendChild(setSpan(muteToggle, 1));
+	seqToolbar.appendChild(setSpan(dupBeforeBtn, 1));
+	seqToolbar.appendChild(setSpan(dupAfterBtn, 1));
 	seqToolbar.appendChild(setSpan(seqStatus, 'full'));
 
 	const seqStepsRow = document.createElement('div');
@@ -1118,10 +1145,10 @@ function createSlicer(savedState = null) {
 	// True while an edge-resize pointer drag is active — suppresses a reorder drag so
 	// the two gestures never collide.
 	let resizing    = false;
-	// On touch devices there's no hover, so a tap reveals that slice's edge
-	// handles. Survives re-renders via this index (transient UI, not persisted).
-	const coarsePointer = !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
-	let handlesTileIdx  = null;
+	// The currently-selected tile (by object, so it survives reorder/resize). Clicking
+	// a tile toggles selection; a selected tile shows its length handles and drives the
+	// Slice settings (Mute). Transient UI — not persisted.
+	let selectedTile = null;
 
 	const updatePitchBadge = (badge, offset) => {
 		if (offset) {
@@ -1157,7 +1184,7 @@ function createSlicer(savedState = null) {
 	const makeDragGhost = (srcTile) => {
 		const rect = srcTile.getBoundingClientRect();
 		const g = srcTile.cloneNode(true);
-		g.classList.remove('dragging', 'playing', 'drop-before', 'drop-after', 'handles-visible');
+		g.classList.remove('dragging', 'playing', 'drop-before', 'drop-after', 'selected');
 		g.classList.add('seq-tile-ghost');
 		g.style.left   = `${rect.left}px`;
 		g.style.top    = `${rect.top}px`;
@@ -1177,15 +1204,17 @@ function createSlicer(savedState = null) {
 	// keep every tile within the cut (0 ≤ src, src+w ≤ U) and w ≥ 1. The loop length
 	// is Σ w steps and varies as slices grow/shrink (no neighbour compensation).
 
-	// Reorder: pull tile `from` out and reinsert at `to` (carries its src/w/offset).
-	const moveTile = (from, to) => {
+	// Reorder: pull tile `from` out and reinsert at `insert` — an index in the array
+	// AFTER the dragged tile is removed (the standard sortable convention, computed by
+	// packedInsertIndex). This is symmetric for forward and back drags; the old
+	// boundary-index math counted the dragged tile in place, so a small forward drag
+	// resolved to "before the next tile" = the dragged tile's own slot = no-op.
+	const moveTile = (from, insert) => {
 		if (from < 0 || from >= seq.tiles.length) return;
-		if (to < 0) to = 0;
-		if (to > seq.tiles.length) to = seq.tiles.length;
-		const item     = seq.tiles[from];
+		const item = seq.tiles[from];
 		seq.tiles.splice(from, 1);
-		const insertAt = (from < to) ? to - 1 : to;
-		seq.tiles.splice(insertAt, 0, item);
+		insert = Math.max(0, Math.min(insert, seq.tiles.length));
+		seq.tiles.splice(insert, 0, item);
 		renderSequencer();
 	};
 
@@ -1245,6 +1274,42 @@ function createSlicer(savedState = null) {
 			const idx = startCell + k;
 			if (idx >= 0 && idx < cells.length) cells[idx] = { clip, srcSub: srcBaseSub + k };
 		}
+	};
+
+	// Find the (non-gap) tile whose left edge sits at grid cell `cell` (RES units).
+	const tileStartingAtCell = (cell) => {
+		let cum = 0;
+		for (const t of seq.tiles) {
+			if (cum === cell && !t.gap) return t;
+			cum += Math.round(t.w * RES);
+		}
+		return null;
+	};
+
+	// Duplicate the selected slice into the adjacent cells — dir -1 = before, +1 =
+	// after — overwriting whatever is under the copy (Σ w stays U; works in both
+	// modes since it's an explicit overwrite, not a drag). The copy reads the same
+	// source and keeps the slice's colour, so it reads as a true clone; near a bar
+	// edge it truncates to the room available. The new copy becomes the selection, so
+	// repeated clicks stamp copies along the bar.
+	const duplicateSlice = (dir) => {
+		const sel = seq.tiles.includes(selectedTile) ? selectedTile : null;
+		if (!sel || sel.gap) return;
+		const cells = rasterizeBar(seq.tiles);
+		let selStart = -1, selCount = 0;
+		for (let k = 0; k < cells.length; k++) if (cells[k] && cells[k].clip === sel) { if (selStart < 0) selStart = k; selCount++; }
+		if (selStart < 0 || selCount <= 0) return;
+		let start = dir > 0 ? selStart + selCount : selStart - selCount;
+		let w = selCount;
+		if (start < 0) { w += start; start = 0; }                       // clamp/truncate at bar start
+		if (start + w > cells.length) w = cells.length - start;         // …and bar end
+		if (w <= 0) return;                                             // no room to place a copy
+		const copy = { src: sel.src, w: selCount / RES, offset: sel.offset || 0, muted: !!sel.muted, colorIdx: sel.colorIdx };
+		paintCells(cells, copy, start, w, Math.round((sel.src || 0) * RES));
+		seq.tiles = rebuildFromCells(cells);
+		selectedTile = tileStartingAtCell(start);                       // keep the copy selected
+		renderSequencer();
+		scheduleSave();
 	};
 
 	// Gaps-mode reorder: the clip leaves a gap where it was and lands (left edge) at
@@ -1392,11 +1457,13 @@ function createSlicer(savedState = null) {
 			if (!el.classList.contains('seq-tile')) continue;
 			const t = el._tile;
 			if (!t) continue;
-			drawTileWave(el.querySelector('.seq-tile-wave'), t.src, t.w, tileColor(t));
+			// Selected slice's wave is drawn white to pop against its tinted background.
+			const color = (t === selectedTile) ? '#ffffff' : tileColor(t);
+			drawTileWave(el.querySelector('.seq-tile-wave'), t.src, t.w, color);
 		}
 	};
 
-	const TILE_TITLE = 'Drag: reorder · drag green/red edges: resize · dbl-click: split · shift-click: merge · scroll: pitch';
+	const TILE_TITLE = 'Click: select (show handles) · drag: reorder · drag green/red edges: resize · dbl-click: split · shift-click: merge · scroll: pitch';
 
 	const renderSequencer = () => {
 		seqStepsRow.innerHTML = '';
@@ -1430,7 +1497,7 @@ function createSlicer(savedState = null) {
 			// playback. renderSequencer only rebuilds DOM (no audio calls), and the playing
 			// highlight re-attaches on the next visual frame.
 			if (tile.muted) el.classList.add('muted');
-			if (coarsePointer && handlesTileIdx === i) el.classList.add('handles-visible');
+			if (tile === selectedTile) el.classList.add('selected');   // shows length handles
 
 			// Waveform backdrop: this slice's own audio, drawn after layout settles.
 			const wave = document.createElement('canvas');
@@ -1459,19 +1526,6 @@ function createSlicer(savedState = null) {
 			});
 			el.appendChild(badge);
 
-			// Mute dot.
-			const mute = document.createElement('span');
-			mute.className   = 'seq-tile-mute';
-			mute.textContent = tile.muted ? '✕' : '●';
-			mute.title       = tile.muted ? 'Unmute' : 'Mute';
-			mute.addEventListener('pointerdown', (ev) => ev.stopPropagation());
-			mute.addEventListener('click', (ev) => {
-				ev.stopPropagation();
-				tile.muted = !tile.muted;
-				renderSequencer();
-			});
-			el.appendChild(mute);
-
 			// Wheel over a tile nudges its pitch offset (±5), independent of master.
 			el.addEventListener('wheel', (ev) => {
 				ev.preventDefault();
@@ -1488,15 +1542,12 @@ function createSlicer(savedState = null) {
 				splitTile(i);
 			});
 
-			// Shift-click merges the tile into its neighbour. On touch (no hover), a
-			// plain tap reveals this slice's edge handles (and hides the others').
+			// Plain click toggles this slice's SELECTION (shows/hides its length handles
+			// and targets the Slice settings). Shift-click still merges into a neighbour.
 			el.addEventListener('click', (ev) => {
 				if (ev.shiftKey) { ev.preventDefault(); mergeTile(i); return; }
-				if (coarsePointer) {
-					handlesTileIdx = (handlesTileIdx === i) ? null : i;
-					for (const c of seqStepsRow.children) c.classList.remove('handles-visible');
-					if (handlesTileIdx === i) el.classList.add('handles-visible');
-				}
+				selectedTile = (selectedTile === tile) ? null : tile;
+				renderSequencer();
 			});
 
 			// --- Reorder (pointer-driven, HORIZONTAL only) ---
@@ -1512,19 +1563,34 @@ function createSlicer(savedState = null) {
 				let ghost     = null;      // translucent copy that snaps to the target slot
 				let startRect = null;      // the dragged tile's position when the drag began
 
-				// Find the drop slot under an x coordinate: the tile it's over, and
-				// whether the pointer is past that tile's midpoint (→ insert after).
-				const dropTargetAt = (clientX) => {
-					let idx = 0;
-					for (const child of seqStepsRow.children) {
-						if (!child.classList.contains('seq-tile')) continue;
-						const rect = child.getBoundingClientRect();
-						if (clientX < rect.right || idx === seq.tiles.length - 1) {
-							return { idx, after: (clientX - rect.left) > rect.width / 2 };
-						}
-						idx++;
+				// Every OTHER entry (clips AND gaps) in DOM order — i.e. seq.tiles minus the
+				// dragged tile. Including gaps is essential: moveTile splices into seq.tiles
+				// (which holds gap entries too) at this index, so the index must be in the
+				// same entry space or a clip lands in the wrong slot when gaps are present.
+				const otherEntries = () => [...seqStepsRow.children].filter((ch) => ch !== el);
+				// Drop index in the array AFTER the dragged tile is removed: how many of
+				// the OTHER entries have their midpoint left of the cursor. Symmetric for
+				// forward and back drags.
+				const packedInsertIndex = (clientX) => {
+					let insert = 0;
+					for (const ch of otherEntries()) {
+						const r = ch.getBoundingClientRect();
+						if (clientX > r.left + r.width / 2) insert++;
 					}
-					return { idx: seq.tiles.length - 1, after: true };
+					return insert;
+				};
+				// The (non-dragged) tile currently under the cursor — the one being dropped
+				// onto. The ghost snaps to overlap it, so a right drag sits ON the tile it
+				// will swap with rather than a tile-width past it (the dragged tile still
+				// occupies its slot, so a boundary-based position would land offset).
+				const tileUnderCursor = (clientX) => {
+					const rest = otherEntries();
+					if (!rest.length) return null;
+					for (const ch of rest) {
+						const r = ch.getBoundingClientRect();
+						if (clientX >= r.left && clientX < r.right) return ch;
+					}
+					return clientX < rest[0].getBoundingClientRect().left ? rest[0] : rest[rest.length - 1];
 				};
 
 				// Captured once the drag begins, for gaps-mode free placement: pixels/unit
@@ -1560,15 +1626,16 @@ function createSlicer(savedState = null) {
 						ghost.style.transform = `translateX(${left - startRect.left}px)`;
 						return;
 					}
-					const { idx, after } = dropTargetAt(e2.clientX);
-					const target = seqStepsRow.children[idx];
-					if (!target) return;
-					target.classList.toggle(after ? 'drop-after' : 'drop-before', true);
-					// Snap the ghost to the insertion boundary (X only), clamped to the row
-					// so it lands cleanly in the slot it'll occupy rather than trailing the
-					// raw cursor.
-					const trect   = target.getBoundingClientRect();
-					let left = after ? trect.right : trect.left;   // insertion boundary
+					const insert = packedInsertIndex(e2.clientX);
+					// Drop marker on the boundary among the other tiles.
+					const rest = otherEntries();
+					if (rest.length) {
+						if (insert < rest.length) rest[insert].classList.add('drop-before');
+						else rest[rest.length - 1].classList.add('drop-after');
+					}
+					// Overlap the tile under the cursor (X only), clamped to the row.
+					const over = tileUnderCursor(e2.clientX);
+					let left = over ? over.getBoundingClientRect().left : rowRect.left;
 					left = Math.max(rowRect.left, Math.min(left, rowRect.right - startRect.width));
 					ghost.style.transform = `translateX(${left - startRect.left}px)`;
 				};
@@ -1591,8 +1658,7 @@ function createSlicer(savedState = null) {
 					if (seqEditMode === 'gaps') {
 						moveTileGaps(from, gapsTargetUnit(e2.clientX));   // leave gap + overwrite
 					} else {
-						const { idx, after } = dropTargetAt(e2.clientX);
-						moveTile(from, idx + (after ? 1 : 0));            // renderSequencer() inside
+						moveTile(from, packedInsertIndex(e2.clientX));    // renderSequencer() inside
 					}
 				};
 				window.addEventListener('pointermove', onMove);
@@ -1765,6 +1831,11 @@ function createSlicer(savedState = null) {
 
 			seqStepsRow.appendChild(el);
 		}
+
+		// Drop a stale selection (its tile was split/merged/re-sliced away) and reflect
+		// the current selection into the Slice settings controls.
+		if (selectedTile && !seq.tiles.includes(selectedTile)) selectedTile = null;
+		updateSliceSettings();
 
 		if (seq.isPlaying) {
 			seqStatus.textContent = `Playing slice ${seq.currentTile + 1} of ${seq.tiles.length}`;
@@ -2013,7 +2084,6 @@ function createSlicer(savedState = null) {
 					applyRange(parseFloat(startInput.value), parseFloat(endInput.value), { keepPlayhead: false });
 					bpmInput.value = bpm.toFixed(2);
 					updateBpmResetBtn();
-					sliceBtn.disabled = false;
 					// Saved tiles win, but fall back to defaults if absent (pre-v3 save)
 					// or any tile falls outside the cut at the restored resolution.
 					const Ur = unitCount();
