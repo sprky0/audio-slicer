@@ -177,6 +177,10 @@ function createSlicer(savedState = null) {
 	resetBtn.textContent = 'Reset';
 	resetBtn.className = 'slicer-reset-btn';
 
+	const duplicateBtn = document.createElement('button');
+	duplicateBtn.textContent = 'Duplicate';
+	duplicateBtn.title = 'Make a copy of this slicer (audio, region, beats/step, tiles, mix)';
+
 	const removeBtn = document.createElement('button');
 	removeBtn.textContent = 'Remove';
 	removeBtn.className = 'slicer-remove-btn';
@@ -329,6 +333,7 @@ function createSlicer(savedState = null) {
 	cluster.appendChild(setSpan(panKnob.getElement(),    1));
 	cluster.appendChild(setSpan(pitchKnob.getElement(),  1));
 	cluster.appendChild(setSpan(detailsBtn, 2));             // Show/Hide details
+	cluster.appendChild(setSpan(duplicateBtn, 1));
 	cluster.appendChild(setSpan(removeBtn, 1));
 	// The details panel is a SIBLING of the header cluster, not a grid item in it.
 	// Otherwise its full-width row forces the auto-fit grid to keep all columns, and
@@ -497,6 +502,27 @@ function createSlicer(savedState = null) {
 		const idx = slicers.findIndex((s) => s.id === id);
 		if (idx !== -1) slicers.splice(idx, 1);
 		deleteAudio('audio-' + id);
+		scheduleSave();
+	});
+
+	// --- Duplicate: clone this slicer via its serialized state under a new id ---
+	// getState() is the same snapshot persistence uses, so createSlicer() reconstructs
+	// everything (region, beats/step, tiles, mix). The audio lives in IndexedDB keyed
+	// by id, so copy the blob to the new id first, then the new slicer's restore path
+	// loads it. The copy lands right after this slicer (DOM + slicers[] order).
+	duplicateBtn.addEventListener('click', async () => {
+		const state = getState();
+		const newId = nextSlicerId++;
+		state.id = newId;
+		try {
+			const blob = await getAudio('audio-' + id);
+			if (blob) await putAudio('audio-' + newId, blob);
+		} catch (err) { /* nothing to copy — duplicate restores silent */ }
+		const newContainer = createSlicer(state);
+		if (newContainer && container.parentNode) container.after(newContainer);
+		const dup = slicers.pop();                       // createSlicer pushed it last
+		const srcIdx = slicers.findIndex((s) => s.id === id);
+		if (dup) slicers.splice(srcIdx + 1, 0, dup);     // keep array order == DOM order
 		scheduleSave();
 	});
 
@@ -2009,6 +2035,7 @@ function createSlicer(savedState = null) {
 
 	renderSequencer();
 	applyEditMode(detailsShown);   // set initial edit/perform layout (waveform + tile heights)
+	return container;              // so Duplicate can slot the copy in right after the source
 }
 
 // --- Internal master clock (groovebox transport) ---
