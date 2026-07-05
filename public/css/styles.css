@@ -909,6 +909,13 @@ input[type="checkbox"]:disabled {
 		rgba(255, 255, 255, 0.03) 0, rgba(255, 255, 255, 0.03) 6px,
 		transparent 6px, transparent 12px);
 	box-sizing: border-box;
+	cursor: pointer;
+}
+/* Selected empty space: accent-tinted, solid border (echoes .seq-tile.selected). */
+.seq-gap.selected {
+	border-style: solid;
+	border-color: var(--color-accent);
+	background: #1e3a52;
 }
 
 /* This slice's audio, filling the tile behind the chrome. */
@@ -952,6 +959,22 @@ input[type="checkbox"]:disabled {
 	opacity: 0.85;
 	pointer-events: none;
 	z-index: 1;
+}
+
+/* Lock indicator (top-right) on a protected slice. */
+.seq-tile-lock {
+	position: absolute;
+	top: 2px;
+	right: 3px;
+	font-size: 11px;
+	line-height: 1;
+	pointer-events: none;
+	z-index: 3;
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+/* Locked slice: a faint ring so it reads as protected at a glance. */
+.seq-tile.locked {
+	box-shadow: inset 0 0 0 2px rgba(245, 166, 35, 0.7);
 }
 
 /* Resize handles: a coloured line + flag on each slice edge, echoing the

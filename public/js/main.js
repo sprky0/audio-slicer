@@ -754,6 +754,19 @@ function createSlicer(savedState = null) {
 		renderSequencer();       // repaint the tile's muted state + refresh these controls
 		scheduleSave();
 	});
+	// Lock: protect the selected slice from being overwritten (gaps-mode paints flow
+	// around it) and from being moved by Randomize.
+	const lockToggle = document.createElement('button');
+	lockToggle.className = 'toggle-btn';
+	lockToggle.textContent = 'Lock';
+	lockToggle.setAttribute('aria-pressed', 'false');
+	lockToggle.addEventListener('click', () => {
+		const sel = seq.tiles.includes(selectedTile) ? selectedTile : null;
+		if (!sel || sel.gap) return;
+		sel.locked = !sel.locked;
+		renderSequencer();
+		scheduleSave();
+	});
 	// Duplicate the selected slice into the adjacent cells (◀ before / ▶ after),
 	// overwriting what's under. duplicateSlice() lives with the tile-edit helpers.
 	const dupBeforeBtn = document.createElement('button');
@@ -764,16 +777,53 @@ function createSlicer(savedState = null) {
 	dupAfterBtn.textContent = 'Dup ▶';
 	dupAfterBtn.title = 'Duplicate the selected slice after it (overwrites what’s under the copy)';
 	dupAfterBtn.addEventListener('click', () => duplicateSlice(1));
-	// Reflect the selection into the slice-settings controls (enabled + mute state).
+	// Refill: fill the selected empty space, or reset a moved/duplicated slice, with the
+	// source audio native to its position (src = its grid position). Works on a gap OR a
+	// clip; enabled only when there's something to do (a gap, or a clip whose src has
+	// drifted from its position).
+	const refillBtn = document.createElement('button');
+	refillBtn.textContent = 'Refill';
+	refillBtn.title = 'Fill the selected empty space — or reset the selected slice — to the source audio native to its position';
+	refillBtn.addEventListener('click', () => refillSelected());
+
+	// Start position (in units) of an entry within the bar, or -1 if not found.
+	const entryStartUnit = (entry) => {
+		let s = 0;
+		for (const t of seq.tiles) { if (t === entry) return s; s += t.w; }
+		return -1;
+	};
+
+	// Reflect the selection into the slice-settings controls.
 	const updateSliceSettings = () => {
-		const sel = seq.tiles.includes(selectedTile) ? selectedTile : null;
-		const on  = !!sel;
-		muteToggle.disabled = !on;
-		muteToggle.classList.toggle('active', on && !!sel.muted);
-		muteToggle.setAttribute('aria-pressed', String(on && !!sel.muted));
-		dupBeforeBtn.disabled = !on;
-		dupAfterBtn.disabled  = !on;
-		sliceLabel.classList.toggle('disabled', !on);
+		const sel  = seq.tiles.includes(selectedTile) ? selectedTile : null;
+		const clip = !!(sel && !sel.gap);
+		const start = sel ? entryStartUnit(sel) : -1;
+		// Refill possible for a gap, or a clip that isn't already native to its slot.
+		const canRefill = !!sel && (sel.gap || Math.abs((sel.src || 0) - start) > 1e-6);
+		muteToggle.disabled = !clip;
+		muteToggle.classList.toggle('active', clip && !!sel.muted);
+		muteToggle.setAttribute('aria-pressed', String(clip && !!sel.muted));
+		lockToggle.disabled = !clip;
+		lockToggle.classList.toggle('active', clip && !!sel.locked);
+		lockToggle.setAttribute('aria-pressed', String(clip && !!sel.locked));
+		dupBeforeBtn.disabled = !clip;
+		dupAfterBtn.disabled  = !clip;
+		refillBtn.disabled    = !canRefill;
+		sliceLabel.classList.toggle('disabled', !sel);
+	};
+
+	// Replace the selected entry (gap or clip) with the default slice for its position:
+	// src = its start unit, so it reads the source region that naturally sits there.
+	const refillSelected = () => {
+		const idx = seq.tiles.indexOf(selectedTile);
+		if (idx < 0) return;
+		const start = entryStartUnit(selectedTile);
+		if (start < 0) return;
+		const fresh = { src: start, w: seq.tiles[idx].w, offset: 0, muted: false, colorIdx: Math.round(start) };
+		seq.tiles[idx] = fresh;
+		selectedTile   = fresh;    // keep the (now refilled) entry selected
+		renderSequencer();
+		scheduleSave();
 	};
 
 	// Per-item grid footprint (columns) for the sequencer toolbar. Transport is
@@ -788,8 +838,10 @@ function createSlicer(savedState = null) {
 	seqToolbar.appendChild(setSpan(stepControl.getElement(), 1));    // Step
 	seqToolbar.appendChild(setSpan(sliceLabel, 1));                  // Slice settings ↓
 	seqToolbar.appendChild(setSpan(muteToggle, 1));
+	seqToolbar.appendChild(setSpan(lockToggle, 1));
 	seqToolbar.appendChild(setSpan(dupBeforeBtn, 1));
 	seqToolbar.appendChild(setSpan(dupAfterBtn, 1));
+	seqToolbar.appendChild(setSpan(refillBtn, 1));
 	seqToolbar.appendChild(setSpan(seqStatus, 'full'));
 
 	const seqStepsRow = document.createElement('div');
@@ -1204,19 +1256,8 @@ function createSlicer(savedState = null) {
 	// keep every tile within the cut (0 ≤ src, src+w ≤ U) and w ≥ 1. The loop length
 	// is Σ w steps and varies as slices grow/shrink (no neighbour compensation).
 
-	// Reorder: pull tile `from` out and reinsert at `insert` — an index in the array
-	// AFTER the dragged tile is removed (the standard sortable convention, computed by
-	// packedInsertIndex). This is symmetric for forward and back drags; the old
-	// boundary-index math counted the dragged tile in place, so a small forward drag
-	// resolved to "before the next tile" = the dragged tile's own slot = no-op.
-	const moveTile = (from, insert) => {
-		if (from < 0 || from >= seq.tiles.length) return;
-		const item = seq.tiles[from];
-		seq.tiles.splice(from, 1);
-		insert = Math.max(0, Math.min(insert, seq.tiles.length));
-		seq.tiles.splice(insert, 0, item);
-		renderSequencer();
-	};
+	// (Packed reorder is applied live during the drag — see the reorder pointer
+	// handlers below, which shuffle seq.tiles + the DOM as the pointer moves.)
 
 	// --- Leave-gaps mode: unit-grid overwrite operations -------------------------
 	// The bar is U units; edits rasterize it at SUBSTEP resolution (widths are exact
@@ -1260,7 +1301,7 @@ function createSlicer(savedState = null) {
 				const clip = c.clip, base = c.srcSub;
 				let j = k;
 				while (j < cells.length && cells[j] && cells[j].clip === clip && cells[j].srcSub === base + (j - k)) j++;
-				out.push({ src: base / RES, w: (j - k) / RES, offset: clip.offset || 0, muted: !!clip.muted, colorIdx: clip.colorIdx });
+				out.push({ src: base / RES, w: (j - k) / RES, offset: clip.offset || 0, muted: !!clip.muted, colorIdx: clip.colorIdx, locked: !!clip.locked });
 				k = j;
 			}
 		}
@@ -1268,12 +1309,25 @@ function createSlicer(savedState = null) {
 	};
 
 	// Paint clip over [startCell, startCell+wCells), reading source from srcBaseSub —
-	// overwriting whatever those cells held.
+	// overwriting whatever those cells held, EXCEPT cells belonging to a locked clip
+	// (they're preserved, so a paint flows around locked slices instead of erasing them).
 	const paintCells = (cells, clip, startCell, wCells, srcBaseSub) => {
 		for (let k = 0; k < wCells; k++) {
 			const idx = startCell + k;
-			if (idx >= 0 && idx < cells.length) cells[idx] = { clip, srcSub: srcBaseSub + k };
+			if (idx < 0 || idx >= cells.length) continue;
+			if (cells[idx] && cells[idx].clip && cells[idx].clip.locked) continue;   // don't overwrite locked
+			cells[idx] = { clip, srcSub: srcBaseSub + k };
 		}
+	};
+
+	// True if [startCell, startCell+wCells) touches a cell owned by a LOCKED clip other
+	// than `exceptClip` — used to block moves/dups that would overwrite a locked slice.
+	const rangeHasLocked = (cells, startCell, wCells, exceptClip) => {
+		for (let k = 0; k < wCells; k++) {
+			const c = cells[startCell + k];
+			if (c && c.clip && c.clip.locked && c.clip !== exceptClip) return true;
+		}
+		return false;
 	};
 
 	// Find the (non-gap) tile whose left edge sits at grid cell `cell` (RES units).
@@ -1304,6 +1358,7 @@ function createSlicer(savedState = null) {
 		if (start < 0) { w += start; start = 0; }                       // clamp/truncate at bar start
 		if (start + w > cells.length) w = cells.length - start;         // …and bar end
 		if (w <= 0) return;                                             // no room to place a copy
+		if (rangeHasLocked(cells, start, w, sel)) return;               // don't overwrite a locked slice
 		const copy = { src: sel.src, w: selCount / RES, offset: sel.offset || 0, muted: !!sel.muted, colorIdx: sel.colorIdx };
 		paintCells(cells, copy, start, w, Math.round((sel.src || 0) * RES));
 		seq.tiles = rebuildFromCells(cells);
@@ -1322,6 +1377,7 @@ function createSlicer(savedState = null) {
 		const wCells = Math.round(clip.w * RES);
 		let start    = Math.round(targetUnit * RES);
 		start = Math.max(0, Math.min(start, cells.length - wCells));
+		if (rangeHasLocked(cells, start, wCells, clip)) { renderSequencer(); return; }   // blocked by a locked slice → snap back
 		paintCells(cells, clip, start, wCells, Math.round((clip.src || 0) * RES));
 		seq.tiles = rebuildFromCells(cells);
 		renderSequencer();
@@ -1347,11 +1403,23 @@ function createSlicer(savedState = null) {
 		if (edge === 'end') {
 			wCells = Math.max(minC, count + dCells);   // front pinned
 			wCells = Math.min(wCells, n - start, n - srcBase);   // bar + source end
+			// Don't grow over a locked slice: stop at the first locked-other cell.
+			for (let k = 0; k < wCells; k++) {
+				const c = cells[start + k];
+				if (c && c.clip && c.clip.locked && c.clip !== clip) { wCells = Math.max(count, k); break; }
+			}
 		} else {
 			const end = first + count;                 // end pinned
 			start = Math.max(0, Math.min(first + dCells, end - minC));
 			srcBase = base + (start - first);
 			if (srcBase < 0) { start -= srcBase; srcBase = 0; }
+			// Don't grow back over a locked slice: start no earlier than just past the
+			// rightmost locked-other cell in the range.
+			for (let p = end - 1; p >= start; p--) {
+				const c = cells[p];
+				if (c && c.clip && c.clip.locked && c.clip !== clip) { start = p + 1; break; }
+			}
+			srcBase = base + (start - first);
 			wCells = Math.min(end - start, n - start, n - srcBase);
 		}
 		paintCells(cells, clip, start, Math.round(wCells), srcBase);
@@ -1480,9 +1548,15 @@ function createSlicer(savedState = null) {
 			// with seq.tiles for setPlayingTile's index lookup.
 			if (tile.gap) {
 				el.className       = 'seq-gap';
+				el._tile           = tile;
 				el.style.flexGrow  = String(tile.w);
 				el.style.flexBasis = '0';
-				el.title           = 'Silence (gap) — drop or grow a clip here to overwrite it';
+				el.title           = 'Silence (gap) — click to select, then Refill to fill it from the source; or drop/grow a clip here to overwrite it';
+				if (tile === selectedTile) el.classList.add('selected');
+				el.addEventListener('click', () => {
+					selectedTile = (selectedTile === tile) ? null : tile;
+					renderSequencer();
+				});
 				seqStepsRow.appendChild(el);
 				continue;
 			}
@@ -1497,12 +1571,22 @@ function createSlicer(savedState = null) {
 			// playback. renderSequencer only rebuilds DOM (no audio calls), and the playing
 			// highlight re-attaches on the next visual frame.
 			if (tile.muted) el.classList.add('muted');
+			if (tile.locked) el.classList.add('locked');               // protected from overwrite/randomize
 			if (tile === selectedTile) el.classList.add('selected');   // shows length handles
 
 			// Waveform backdrop: this slice's own audio, drawn after layout settles.
 			const wave = document.createElement('canvas');
 			wave.className = 'seq-tile-wave';
 			el.appendChild(wave);
+
+			// Lock indicator (corner badge) when the slice is protected.
+			if (tile.locked) {
+				const lock = document.createElement('span');
+				lock.className   = 'seq-tile-lock';
+				lock.textContent = '🔒';
+				lock.title       = 'Locked — protected from overwrite + randomize';
+				el.appendChild(lock);
+			}
 
 			const label = document.createElement('span');
 			label.className   = 'seq-tile-label';
@@ -1563,36 +1647,6 @@ function createSlicer(savedState = null) {
 				let ghost     = null;      // translucent copy that snaps to the target slot
 				let startRect = null;      // the dragged tile's position when the drag began
 
-				// Every OTHER entry (clips AND gaps) in DOM order — i.e. seq.tiles minus the
-				// dragged tile. Including gaps is essential: moveTile splices into seq.tiles
-				// (which holds gap entries too) at this index, so the index must be in the
-				// same entry space or a clip lands in the wrong slot when gaps are present.
-				const otherEntries = () => [...seqStepsRow.children].filter((ch) => ch !== el);
-				// Drop index in the array AFTER the dragged tile is removed: how many of
-				// the OTHER entries have their midpoint left of the cursor. Symmetric for
-				// forward and back drags.
-				const packedInsertIndex = (clientX) => {
-					let insert = 0;
-					for (const ch of otherEntries()) {
-						const r = ch.getBoundingClientRect();
-						if (clientX > r.left + r.width / 2) insert++;
-					}
-					return insert;
-				};
-				// The (non-dragged) tile currently under the cursor — the one being dropped
-				// onto. The ghost snaps to overlap it, so a right drag sits ON the tile it
-				// will swap with rather than a tile-width past it (the dragged tile still
-				// occupies its slot, so a boundary-based position would land offset).
-				const tileUnderCursor = (clientX) => {
-					const rest = otherEntries();
-					if (!rest.length) return null;
-					for (const ch of rest) {
-						const r = ch.getBoundingClientRect();
-						if (clientX >= r.left && clientX < r.right) return ch;
-					}
-					return clientX < rest[0].getBoundingClientRect().left ? rest[0] : rest[rest.length - 1];
-				};
-
 				// Captured once the drag begins, for gaps-mode free placement: pixels/unit
 				// and the cursor's offset within the tile, so the clip's LEFT edge tracks
 				// the cursor (minus that offset) and snaps to the sub-unit grid.
@@ -1616,27 +1670,43 @@ function createSlicer(savedState = null) {
 						ghost = makeDragGhost(el);
 						document.body.appendChild(ghost);
 					}
-					clearDropMarkers();
 					const rowRect = seqStepsRow.getBoundingClientRect();
 					if (seqEditMode === 'gaps') {
 						// Free placement: ghost follows the cursor, snapped to the unit grid,
-						// clamped to the row. No insertion markers (there's no "between").
+						// clamped to the row. No reflow (overwrite mode has no "between").
 						const u = Math.max(0, Math.min(gapsTargetUnit(e2.clientX), (unitCount() || 1) - startRect.width / pxPerU));
 						const left = Math.max(rowRect.left, Math.min(rowRect.left + u * pxPerU, rowRect.right - startRect.width));
 						ghost.style.transform = `translateX(${left - startRect.left}px)`;
 						return;
 					}
-					const insert = packedInsertIndex(e2.clientX);
-					// Drop marker on the boundary among the other tiles.
-					const rest = otherEntries();
-					if (rest.length) {
-						if (insert < rest.length) rest[insert].classList.add('drop-before');
-						else rest[rest.length - 1].classList.add('drop-after');
+					// PACKED: live reflow — physically shuffle the underlying entries (DOM +
+					// seq.tiles) so the row rearranges as you drag; the ghost floats over the
+					// dragged tile's live slot. No drop line.
+					// Widths are stable under reorder (flex-grow sums are unchanged), so the
+					// insert index is computed on the layout as if the dragged tile were
+					// removed: subtract its width from the midpoints of entries currently to
+					// its right. That value is invariant to where the dragged tile sits, so
+					// there's no oscillation.
+					const entries    = [...seqStepsRow.children];
+					const draggedDom = entries.indexOf(el);
+					const others     = entries.filter((ch) => ch !== el);
+					const dw = startRect.width;
+					let insert = 0;
+					for (const ch of others) {
+						const r   = ch.getBoundingClientRect();
+						const mid = r.left + r.width / 2 - (entries.indexOf(ch) > draggedDom ? dw : 0);
+						if (e2.clientX > mid) insert++;
 					}
-					// Overlap the tile under the cursor (X only), clamped to the row.
-					const over = tileUnderCursor(e2.clientX);
-					let left = over ? over.getBoundingClientRect().left : rowRect.left;
-					left = Math.max(rowRect.left, Math.min(left, rowRect.right - startRect.width));
+					const ref = others[insert] || null;
+					if (el.nextSibling !== ref) {
+						seqStepsRow.insertBefore(el, ref);
+						const dt  = el._tile;
+						const cur = seq.tiles.indexOf(dt);
+						if (cur !== -1) { seq.tiles.splice(cur, 1); seq.tiles.splice(insert, 0, dt); }
+					}
+					// Ghost snaps over the dragged tile's (now relocated) slot.
+					const slot = el.getBoundingClientRect();
+					const left = Math.max(rowRect.left, Math.min(slot.left, rowRect.right - startRect.width));
 					ghost.style.transform = `translateX(${left - startRect.left}px)`;
 				};
 				const onUp = (e2) => {
@@ -1648,8 +1718,8 @@ function createSlicer(savedState = null) {
 					if (!dragging) return;
 					// A drag ending over a different tile fires `click` on the row, not on
 					// `el`, so swallow exactly the next click (capture phase) to stop the
-					// reorder from also triggering merge / handle-toggle. The timeout clears
-					// the trap if, in some path, no click is generated.
+					// reorder from also triggering merge / selection. The timeout clears the
+					// trap if, in some path, no click is generated.
 					const swallow = (ce) => { ce.stopPropagation(); ce.preventDefault(); };
 					window.addEventListener('click', swallow, { capture: true, once: true });
 					setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 0);
@@ -1658,7 +1728,10 @@ function createSlicer(savedState = null) {
 					if (seqEditMode === 'gaps') {
 						moveTileGaps(from, gapsTargetUnit(e2.clientX));   // leave gap + overwrite
 					} else {
-						moveTile(from, packedInsertIndex(e2.clientX));    // renderSequencer() inside
+						// Order was applied live during the drag; re-render once to refresh
+						// each tile's captured index/handlers, redraw backdrops, and commit.
+						renderSequencer();
+						scheduleSave();
 					}
 				};
 				window.addEventListener('pointermove', onMove);
@@ -1957,16 +2030,19 @@ function createSlicer(savedState = null) {
 	// so Σ w (loop length) and the available audio are untouched. Safe mid-play: the
 	// transport re-reads seq.tiles each scheduler tick.
 	const randomizeTiles = () => {
-		const n = seq.tiles.length;
-		if (n < 2) return;
 		const level = Math.max(0, Math.min(1, randLevel / 100));
-		for (let i = n - 1; i > 0; i--) {
+		// Locked slices stay put: shuffle only the movable entries among their own
+		// (non-locked) positions, leaving locked entries pinned at their indices.
+		const movablePos = [];
+		for (let i = 0; i < seq.tiles.length; i++) if (!seq.tiles[i].locked) movablePos.push(i);
+		if (movablePos.length < 2) return;
+		const items = movablePos.map((p) => seq.tiles[p]);
+		for (let a = items.length - 1; a > 0; a--) {
 			if (Math.random() >= level) continue;
-			const j = Math.floor(Math.random() * (i + 1));
-			const tmp = seq.tiles[i];
-			seq.tiles[i] = seq.tiles[j];
-			seq.tiles[j] = tmp;
+			const b = Math.floor(Math.random() * (a + 1));
+			const tmp = items[a]; items[a] = items[b]; items[b] = tmp;
 		}
+		movablePos.forEach((p, k) => { seq.tiles[p] = items[k]; });
 		renderSequencer();   // also schedules a save
 	};
 	randomizeBtn.addEventListener('click', randomizeTiles);
@@ -1994,7 +2070,7 @@ function createSlicer(savedState = null) {
 		seq:            {
 			tiles: seq.tiles.map((t) => (t.gap
 				? { gap: true, w: t.w }
-				: { src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: t.colorIdx })),
+				: { src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: t.colorIdx, locked: !!t.locked })),
 			loop:  seq.loop,
 		},
 	});
@@ -2062,7 +2138,7 @@ function createSlicer(savedState = null) {
 					.filter((t) => t && Number.isFinite(t.w) && t.w > 0 && (t.gap || Number.isFinite(t.src)))
 					.map((t, i) => (t.gap
 						? { gap: true, w: t.w, src: 0 }
-						: { src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: Number.isFinite(t.colorIdx) ? t.colorIdx : i }))
+						: { src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: Number.isFinite(t.colorIdx) ? t.colorIdx : i, locked: !!t.locked }))
 				: [];
 			nextColorIdx = seq.tiles.reduce((m, t) => Math.max(m, t.gap ? -1 : t.colorIdx), -1) + 1;
 			seq.loop  = !!savedState.seq.loop;

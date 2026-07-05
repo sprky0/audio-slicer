@@ -17,18 +17,26 @@ locked to one master clock.
   quarter-note beat unit for now.
 - **Tile sequencer.** Ordered variable-width tiles over the grid; drag-reorder /
   edge-resize / split (dbl-click) / merge (shift-click) / per-step pitch (wheel),
-  live while playing. **Click a tile to select** it — the selection highlights via
-  background tint + white waveform (no border/movement) and shows its length
-  handles. A **"Slice" settings** group (right of Step, disabled when nothing is
-  selected) acts on the selected slice: **Mute**, **Dup ◀ / Dup ▶** (stamp a clone
-  before/after, overwriting under it). (The old per-tile mute dot and the redundant
-  "Slice" action button in the details panel were removed.)
-  - Reorder drop index counts ALL entries (clips + gaps) so it maps to `seq.tiles`;
-    computed by excluding the dragged tile + midpoints (symmetric fwd/back); the
-    ghost overlaps the tile under the cursor.
+  live while playing. **Click a tile — or an empty gap — to select** it; the
+  selection highlights via background tint + white waveform (no border/movement)
+  and shows a clip's length handles. A **"Slice" settings** group (right of Step,
+  disabled when nothing is selected) acts on the selection:
+  - **Mute** / **Lock** (clip only) — Lock protects a slice from being overwritten
+    (moves/dups blocked, resize-grow clamps) and from Randomize (stays pinned); it
+    shows an orange ring + 🔒. `tile.locked`, persisted.
+  - **Dup ◀ / Dup ▶** (clip only) — stamp a clone before/after, overwriting under it.
+  - **Refill** (gap OR moved clip) — set the entry's `src` to its grid position so
+    it reads the source audio native to that spot (fills a gap, or resets a
+    moved/duplicated slice). Enabled only when there's work to do.
+  - (Removed: the old per-tile mute dot and the redundant details-panel "Slice" button.)
+  - **Packed reorder** = live reflow: the dragged tile is shuffled through seq.tiles +
+    the DOM as you drag (no drop line); the ghost snaps over its live slot; release
+    just re-renders + saves. Drop index excludes the dragged tile + counts midpoints
+    of ALL entries (clips + gaps) → maps to `seq.tiles`, stable (no oscillation).
   - **Packed vs Gaps** — global Master-bar toggle. Packed = length-conserving
     (no gaps). Gaps = free placement + overwrite; gaps are silent tiles
-    `{gap:true,w,src:0}`, edits go through a rasterize→rebuild cell grid.
+    `{gap:true,w,src:0}`, edits go through a rasterize→rebuild cell grid (which
+    carries `locked` and never overwrites locked cells).
 - **Edit / perform layout.** Show/Hide details trades waveform height (`setHeight`,
   280↔96) for tile-row height (`--tile-h`, 7u↔16u). `applyEditMode()` in main.js.
   Newly-added (empty) slicers open in **edit**; restored/duplicated (already
