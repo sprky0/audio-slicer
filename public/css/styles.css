@@ -28,9 +28,49 @@
 
 	/* Transition */
 	--transition-fast: 0.2s;
+	--transition-press: 0.08s;
 
 	/* Opacity */
 	--opacity-disabled: 0.5;
+
+	/* Semantic action colors + per-state shades.
+	   Neutral = blue (default), positive = green (play / on), danger = red
+	   (stop / destructive). Each action gets a resting, hover and pressed shade
+	   so every control reads the same way: hover lightens, press darkens. */
+	--color-accent-hover:    #4aa9e6;
+	--color-accent-active:   #2c80b8;
+	--color-positive:        #2ecc40;
+	--color-positive-hover:  #43d957;
+	--color-positive-active: #25a833;
+	--color-on-positive:     #0d2912;   /* dark text on green for contrast */
+	--color-danger:          #e74c3c;
+	--color-danger-hover:    #ef6253;
+	--color-danger-active:   #c0392b;
+
+	/* Input/select surface (a touch lighter than the container so fields read). */
+	--color-input-bg:        #23272f;
+	--color-border-hover:    #5a5f68;
+
+	/* Section-label chip: neutral grey plate with bold orange title text. */
+	--color-label-bg:        #3a3f4a;
+	--color-label-text:      #f5a623;
+
+	/* Shared focus ring + raised-button shadow. */
+	--focus-ring:    0 0 0 3px rgba(255, 255, 255, 0.30);
+	--focus-ring-accent: 0 0 0 3px rgba(52, 152, 219, 0.30);
+	--shadow-btn:    0 1px 0 rgba(0, 0, 0, 0.35);
+
+	/* --- Layout grid ---------------------------------------------------------
+	   A single relative base unit drives every height, gap and column width, so
+	   the whole UI scales with the root font size (and never hard-codes layout
+	   pixels). Bump --ui-scale for a roomier mode or a user "size" preference and
+	   the toolbars, control heights, gaps and knobs all grow together. */
+	--ui-scale:    1;
+	--grid-unit:   calc(0.5rem * var(--ui-scale));  /* base rhythm  (~8px @ 1)  */
+	--gap:         var(--grid-unit);                /* gap between cells        */
+	--control-h:   calc(var(--grid-unit) * 4);      /* one interface row (~32px)*/
+	--col-min:     calc(var(--grid-unit) * 12);     /* min column width (~96px) */
+	--tile-h:      calc(var(--grid-unit) * 11);     /* sequencer tile row (~88px)*/
 }
 
 /* Basic reset and layout */
@@ -52,6 +92,13 @@ body {
 	align-items: center;
 }
 
+/* Footer actions (Add Slicer / Clear Saved) sit outside any grid — give them
+   back the breathing room the old per-button margin used to provide. */
+#addSlicerBtn,
+#clearStateBtn {
+	margin: var(--grid-unit) auto 0;
+}
+
 /* Dropzone */
 #dropzone {
 	width: 300px;
@@ -65,6 +112,9 @@ body {
 	cursor: pointer;
 	transition: background-color var(--transition-fast);
 }
+#dropzone:hover {
+	background-color: rgba(52, 152, 219, 0.06);
+}
 #dropzone.drag-over {
 	background-color: rgba(52, 152, 219, 0.1); /* Could be var(--color-accent) with alpha, but CSS vars don't support alpha directly */
 }
@@ -77,18 +127,203 @@ label[for="subdivisions"] {
 	margin-right: var(--space-xl);
 }
 
-/* Button styling */
+/* Button styling.
+   Five states for every button: resting (inactive), hover, active (pressed),
+   focus-visible (keyboard ring) and disabled. Neutral is the blue default;
+   intent variants below recolour resting/hover/active. The `:not(:disabled)`
+   guards keep hover/press effects from firing on a dimmed, dead button. */
 button {
 	background-color: var(--color-accent);
 	color: var(--color-text-primary);
 	border: none;
 	border-radius: var(--radius-sm);
-	padding: var(--space-xs) var(--space-md);
-	margin: var(--space-xs);
+	box-sizing: border-box;
+	min-height: var(--control-h);
+	padding: 0 var(--space-md);
 	cursor: pointer;
 	font-size: var(--font-size-base);
+	/* Center the label so every button shares one baseline regardless of width. */
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	box-shadow: var(--shadow-btn);
+	transition: background-color var(--transition-fast),
+	            box-shadow       var(--transition-fast),
+	            transform        var(--transition-press) ease;
+}
+button:hover:not(:disabled) {
+	background-color: var(--color-accent-hover);
+}
+button:active:not(:disabled) {
+	background-color: var(--color-accent-active);
+	transform: translateY(1px);
+	box-shadow: none;
+}
+button:focus-visible {
+	outline: none;
+	box-shadow: var(--focus-ring);
 }
 button:disabled {
+	opacity: var(--opacity-disabled);
+	cursor: not-allowed;
+	box-shadow: none;
+}
+/* display:inline-flex above would otherwise defeat the [hidden] attribute. */
+button[hidden] {
+	display: none;
+}
+
+/* Intent: primary / "go" (green) — Play, Play Seq. Dark text for contrast. */
+.slicer-playpause-btn,
+.seq-play-btn {
+	background-color: var(--color-positive);
+	color: var(--color-on-positive);
+}
+.slicer-playpause-btn:hover:not(:disabled),
+.seq-play-btn:hover:not(:disabled) {
+	background-color: var(--color-positive-hover);
+}
+.slicer-playpause-btn:active:not(:disabled),
+.seq-play-btn:active:not(:disabled) {
+	background-color: var(--color-positive-active);
+}
+
+/* Intent: stop / destructive (red) — Stop, Stop Seq, Remove, Clear Saved. */
+.slicer-stop-btn,
+.seq-stop-btn,
+.slicer-remove-btn,
+#clearStateBtn {
+	background-color: var(--color-danger);
+}
+.slicer-stop-btn:hover:not(:disabled),
+.seq-stop-btn:hover:not(:disabled),
+.slicer-remove-btn:hover:not(:disabled),
+#clearStateBtn:hover:not(:disabled) {
+	background-color: var(--color-danger-hover);
+}
+.slicer-stop-btn:active:not(:disabled),
+.seq-stop-btn:active:not(:disabled),
+.slicer-remove-btn:active:not(:disabled),
+#clearStateBtn:active:not(:disabled) {
+	background-color: var(--color-danger-active);
+}
+
+/* Section-label chip — a reusable title plate (e.g. "Source", "Sequencer").
+   Neutral grey, bold orange text, and a full grid citizen: it takes --control-h
+   height and whatever column span setSpan() gives it, so it scales with the rest
+   of the system. */
+.ui-label {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	/* Fixed width so the section titles (Master / Source / Sequencer) are all the
+	   same size across their toolbars, instead of stretching to each grid's column
+	   width. --col-min is the grid column minimum, so it never overflows a cell. */
+	width: var(--col-min);
+	justify-self: start;
+	min-height: var(--control-h);
+	padding: 0 var(--space-md);
+	border-radius: var(--radius-sm);
+	background: var(--color-label-bg);
+	color: var(--color-label-text);
+	font-size: 13px;
+	font-weight: bold;
+	letter-spacing: 0.02em;
+	white-space: nowrap;
+	user-select: none;
+}
+/* Disabled section label (e.g. "Slice" while no slice is selected). */
+.ui-label.disabled {
+	opacity: var(--opacity-disabled);
+}
+
+/* --- Form controls: selects, text/number inputs, file picker, checkbox ---
+   Same five-state language as buttons: a resting field surface, a brighter
+   border on hover, an accent border + ring on focus, and a dim/no-cursor
+   disabled look. */
+select,
+input[type="number"],
+input[type="text"] {
+	background-color: var(--color-input-bg);
+	color: var(--color-text-primary);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	box-sizing: border-box;
+	min-height: var(--control-h);
+	padding: 0 var(--space-sm);
+	font-family: inherit;
+	font-size: 13px;
+	transition: border-color var(--transition-fast),
+	            box-shadow   var(--transition-fast);
+}
+select {
+	cursor: pointer;
+}
+select:hover:not(:disabled),
+input[type="number"]:hover:not(:disabled),
+input[type="text"]:hover:not(:disabled) {
+	border-color: var(--color-border-hover);
+}
+select:focus-visible,
+input[type="number"]:focus-visible,
+input[type="text"]:focus-visible {
+	outline: none;
+	border-color: var(--color-accent);
+	box-shadow: var(--focus-ring-accent);
+}
+select:disabled,
+input[type="number"]:disabled,
+input[type="text"]:disabled {
+	opacity: var(--opacity-disabled);
+	cursor: not-allowed;
+}
+
+/* File picker: style its embedded button as a neutral button with states. */
+input[type="file"] {
+	color: var(--color-text-primary);
+	font-size: 13px;
+}
+input[type="file"]::file-selector-button {
+	background-color: var(--color-accent);
+	color: var(--color-text-primary);
+	border: none;
+	border-radius: var(--radius-sm);
+	min-height: calc(var(--control-h) - 2px);
+	padding: 0 var(--space-md);
+	margin-right: var(--space-sm);
+	cursor: pointer;
+	font-size: 13px;
+	box-shadow: var(--shadow-btn);
+	transition: background-color var(--transition-fast);
+}
+input[type="file"]::file-selector-button:hover {
+	background-color: var(--color-accent-hover);
+}
+input[type="file"]:focus-visible {
+	outline: none;
+}
+input[type="file"]:focus-visible::file-selector-button {
+	box-shadow: var(--focus-ring);
+}
+
+/* Checkbox: tint with the accent, add a hover affordance and a focus ring. */
+input[type="checkbox"] {
+	accent-color: var(--color-accent);
+	width: 15px;
+	height: 15px;
+	cursor: pointer;
+	transition: filter var(--transition-fast);
+}
+input[type="checkbox"]:hover:not(:disabled) {
+	filter: brightness(1.2);
+}
+input[type="checkbox"]:focus-visible {
+	outline: none;
+	border-radius: 3px;
+	box-shadow: var(--focus-ring);
+}
+input[type="checkbox"]:disabled {
 	opacity: var(--opacity-disabled);
 	cursor: not-allowed;
 }
@@ -141,8 +376,12 @@ button:disabled {
 .slicer-container {
 	margin: var(--space-xxxl) auto;
 	padding: var(--space-xl);
-	border: 1px solid var(--color-border-light);
 	border-radius: var(--radius-lg);
+	/* Two mindsets trade vertical space (see applyEditMode in main.js): perform mode
+	   (details hidden) gets a tall sequencer tile row + short waveform; edit mode
+	   (.editing, details shown) gets short tiles + a tall waveform. The waveform
+	   height is driven in JS; the tile row follows --tile-h here. */
+	--tile-h: calc(var(--grid-unit) * 16);   /* perform: tall tiles */
 	background: var(--color-bg-secondary);
 	position: relative;
 	box-sizing: border-box;
@@ -152,44 +391,130 @@ button:disabled {
 	display: block;
 	width: 100%;
 }
+/* "Source" title at the top-left of each slicer. */
+/* Edit mindset: short tiles (the sequencer yields space to the tall waveform). */
+.slicer-container.editing {
+	--tile-h: calc(var(--grid-unit) * 7);
+}
+/* The slice hint under the waveform is only relevant while editing. */
+.slicer-container:not(.editing) .wave-help {
+	display: none;
+}
+/* --- Control toolbars: a fluid, relative-unit grid -----------------------
+   .slicer-controls splits into the interface cluster (flexible) + the knob rack
+   (intrinsic). The cluster is an auto-fit grid: it makes as many --col-min
+   columns as the width allows and collapses the empty ones, so the row fills
+   and reflows on any screen with no breakpoints. Every cell is --control-h tall;
+   wider controls span 2 columns (.span-2), full-width ones span the row. */
 .slicer-controls {
 	margin-bottom: var(--space-lg);
 }
+
+.toolbar-cluster {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(var(--col-min), 1fr));
+	/* Rows are one control tall by default, but grow to fit taller full-width
+	   content (the Show-details panel stacks two control-height region sliders,
+	   which a fixed --control-h row would clip onto the waveform below). */
+	grid-auto-rows: minmax(var(--control-h), auto);
+	align-items: stretch;
+	gap: var(--gap);
+}
+
+/* Controls fill their grid cell so a row of buttons reads as even columns;
+   keep labels on one line so a narrow cell never wraps the text. */
+.toolbar-cluster > button,
+.seq-toolbar > button,
+.midi-bar > button {
+	width: 100%;
+	margin: 0;
+	white-space: nowrap;
+}
+
+/* Per-item grid sizing. Every cell spans --col-span columns and --row-span rows
+   (default 1×1). Assign per control either inline — el.style.setProperty(
+   '--col-span', 3) — or with the .span-N / .row-N / .span-full helpers below.
+   This is the single knob for "how many grid units does this item take". */
+.toolbar-cluster > *,
+.seq-toolbar > *,
+.midi-bar > * {
+	grid-column: span var(--col-span, 1);
+	grid-row:    span var(--row-span, 1);
+}
+.span-2 { --col-span: 2; }
+.span-3 { --col-span: 3; }
+.span-4 { --col-span: 4; }
+.row-2  { --row-span: 2; }
+.row-3  { --row-span: 3; }
+/* Full-width cell (scoped so it outranks the generic span rule above). */
+.toolbar-cluster > .span-full,
+.seq-toolbar     > .span-full,
+.midi-bar        > .span-full { grid-column: 1 / -1; }
+
+/* A label+control field (File, Units) behaves as one cell. */
+.toolbar-field {
+	display: flex;
+	align-items: center;
+	gap: var(--space-xs);
+	min-height: var(--control-h);
+	color: var(--color-text-primary);
+	font-size: 13px;
+	white-space: nowrap;
+}
+.toolbar-field select,
+.toolbar-field input { flex: 1; min-width: 0; }
+
+/* File-details readout: a quiet field-surface cell listing the loaded file's
+   name (truncating) and its specs. A grid citizen at --control-h like the rest. */
+.file-info {
+	display: flex;
+	align-items: center;
+	gap: var(--space-sm);
+	box-sizing: border-box;
+	min-width: 0;                /* allow the name to ellipsis inside the cell */
+	min-height: var(--control-h);
+	padding: 0 var(--space-sm);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	background: var(--color-input-bg);
+	color: #888;                 /* muted when empty ("No file loaded") */
+	font-size: 12px;
+}
+.file-info.has-file {
+	color: var(--color-text-primary);
+}
+.file-info-name {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: 600;
+}
+.file-info-meta {
+	flex: 0 0 auto;
+	color: #888;
+	font-variant-numeric: tabular-nums;
+}
+
 .input-width-60 {
-	width: 60px;
+	width: calc(var(--grid-unit) * 7.5);   /* ~60px, scales with the grid */
 }
 
 /* --- Collapsible details panel (Start/End numerics + sliders) --- */
 .slicer-details {
 	margin-top: var(--space-md);
-	padding: var(--space-md);
-	border: 1px solid var(--color-border);
-	border-radius: var(--radius-sm);
+	padding: var(--space-md) 0;               /* top/bottom only — no side padding */
+	border-top: 1px solid var(--color-border);
+	border-bottom: 1px solid var(--color-border);
 	background: rgba(0, 0, 0, 0.20);
-	flex: 1 0 100%;
 }
 .slicer-details[hidden] {
 	display: none;
 }
 
-.slicer-details-row {
-	display: flex;
-	flex-wrap: wrap;
-	gap: var(--space-lg);
-	margin-bottom: var(--space-sm);
-}
-
-.slicer-details-label {
-	display: inline-flex;
-	align-items: center;
-	gap: var(--space-xs);
-	color: var(--color-text-primary);
-}
-
-.slicer-details-btn.active {
-	background: #2ecc40;
-	color: #111;
-}
+/* Toggle styling for .slicer-details-btn lives with .seq-loop-btn (search
+   "Toggle buttons"). */
 
 /* --- Start/End slider row --- */
 .slicer-slider-row {
@@ -207,8 +532,8 @@ button:disabled {
 	font-size: var(--font-size-base);
 }
 
-.slicer-range-slider {
-	flex: 1;
+.slicer-range-slider,
+.seq-rand-level {
 	-webkit-appearance: none;
 	appearance: none;
 	height: 6px;
@@ -217,9 +542,32 @@ button:disabled {
 	border: 1px solid var(--color-border);
 	outline: none;
 	cursor: pointer;
+	transition: border-color var(--transition-fast),
+	            box-shadow   var(--transition-fast);
+}
+.slicer-range-slider {
+	flex: 1;
 }
 
-.slicer-range-slider::-webkit-slider-thumb {
+/* Range states (covers start/end + Amount): brighten the track border on
+   hover, ring on focus, dim when disabled. */
+.slicer-range-slider:hover:not(:disabled),
+.seq-rand-level:hover:not(:disabled) {
+	border-color: var(--color-border-hover);
+}
+.slicer-range-slider:focus-visible,
+.seq-rand-level:focus-visible {
+	border-color: var(--color-accent);
+	box-shadow: var(--focus-ring-accent);
+}
+.slicer-range-slider:disabled,
+.seq-rand-level:disabled {
+	opacity: var(--opacity-disabled);
+	cursor: not-allowed;
+}
+
+.slicer-range-slider::-webkit-slider-thumb,
+.seq-rand-level::-webkit-slider-thumb {
 	-webkit-appearance: none;
 	appearance: none;
 	width: 16px;
@@ -231,12 +579,18 @@ button:disabled {
 	transition: transform var(--transition-fast);
 }
 
-.slicer-range-slider::-webkit-slider-thumb:active {
+.slicer-range-slider:hover::-webkit-slider-thumb,
+.seq-rand-level:hover::-webkit-slider-thumb {
+	transform: scale(1.1);
+}
+.slicer-range-slider::-webkit-slider-thumb:active,
+.seq-rand-level::-webkit-slider-thumb:active {
 	cursor: grabbing;
 	transform: scale(1.15);
 }
 
-.slicer-range-slider::-moz-range-thumb {
+.slicer-range-slider::-moz-range-thumb,
+.seq-rand-level::-moz-range-thumb {
 	width: 14px;
 	height: 14px;
 	border-radius: 50%;
@@ -256,25 +610,25 @@ button:disabled {
 /* --- Sequencer --- */
 .sequencer {
 	margin-top: var(--space-xl);
-	padding: var(--space-md);
-	border: 1px solid var(--color-border);
+	padding: var(--space-md) 0 0;
 	border-radius: var(--radius-md);
 	background: rgba(0, 0, 0, 0.25);
 }
 
 .seq-toolbar {
-	display: flex;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(var(--col-min), 1fr));
+	grid-auto-rows: var(--control-h);
 	align-items: center;
-	flex-wrap: wrap;
-	gap: var(--space-sm);
+	gap: var(--gap);
 	margin-bottom: var(--space-md);
 }
+/* Spans for these are assigned per item in main.js (--col-span / .span-full);
+   here we just let their inner control fill the wider cell. */
+.seq-bpm-label .seq-bpm-input,
+.seq-division-label .seq-division-select { flex: 1; min-width: 0; }
+.seq-status { margin-left: 0; }
 
-.seq-label {
-	font-weight: bold;
-	margin-right: var(--space-xs);
-	color: var(--color-text-primary);
-}
 
 .seq-bpm-label,
 .seq-division-label {
@@ -291,51 +645,392 @@ button:disabled {
 	cursor: pointer;
 }
 
+.seq-rand-level-label {
+	display: flex;
+	align-items: center;
+	gap: var(--space-xs);
+	color: var(--color-text-primary);
+	font-size: 13px;
+}
+
+.seq-rand-level {
+	width: 90px;
+}
+
+.seq-rand-level-value {
+	min-width: 32px;
+	text-align: right;
+	color: #aaa;
+	font-variant-numeric: tabular-nums;
+}
+
 .seq-status {
 	margin-left: var(--space-md);
 	color: #aaa;
 	font-size: 13px;
 }
 
-.seq-steps {
+/* Global MIDI clock sync bar — sits above the slicers as a master tempo control. */
+.midi-bar {
 	display: grid;
-	grid-template-columns: repeat(var(--seq-cols, 8), minmax(0, 1fr));
-	gap: var(--space-xs);
+	grid-template-columns: repeat(auto-fit, minmax(var(--col-min), 1fr));
+	grid-auto-rows: var(--control-h);
 	align-items: center;
-	min-height: 44px;
+	gap: var(--gap);
+	/* Full width, matching the slicer panels (same fluid grid as the toolbars). */
+	width: min(95vw, 1600px);
+	box-sizing: border-box;
+	margin: var(--space-md) auto;
+	padding: var(--space-sm) var(--space-lg);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
+	background: var(--color-bg-secondary);
 }
 
-.seq-step,
-.seq-add-slot {
+/* Positioned host wrapping the waveform canvas so overlays (background-task band,
+   etc.) can float over it without affecting layout. */
+.wave-wrap {
+	position: relative;
+	width: 100%;
+}
+
+/* Background-task overlay: a non-interactive band across the bottom 1/8 of the
+   waveform, shown while a clip is being processed (time-stretch). Translucent
+   blue plate, a translucent highlight progress fill that blends with the
+   waveform (invert-ish via mix-blend), and a light label. Fades in/out gently;
+   absolutely positioned so it never shifts layout. */
+.wave-task {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 12.5%;                 /* 1/8 of the waveform box */
+	display: flex;
+	align-items: center;
+	overflow: hidden;
+	background: rgba(52, 152, 219, 0.22);   /* translucent blue */
+	pointer-events: none;          /* no mouse events on this element */
+	opacity: 0;
+	/* Asymmetric fade: this (no .is-active) is the fade-OUT — quick. */
+	transition: opacity 320ms ease;
+	z-index: 5;
+}
+.wave-task.is-active {
+	opacity: 1;
+	/* Fade-IN — substantially faster (snaps in as work starts). */
+	transition: opacity 110ms ease-out;
+}
+/* Progress fill — translucent highlight that grows left→right with the percent,
+   inverting the waveform beneath it. No width transition: the fill width is set
+   to the exact same rounded percent as the label, so bar and number stay in
+   lockstep (parity) rather than the bar sliding behind the text. */
+.wave-task-fill {
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	width: 0;
+	background: rgba(120, 200, 255, 0.6);
+	mix-blend-mode: difference;    /* invert-style overlay; tune/remove later */
+}
+.wave-task-label {
+	position: relative;            /* above the fill */
+	z-index: 1;
+	padding: 0 var(--space-sm);
+	color: #f0f0f0;                /* light grey / white */
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+/* Preview transport: small floating Play/Pause + Stop over the waveform. Shown
+   only while a click-to-audition preview runs (.visible); absolutely positioned
+   so it never shifts layout. Container ignores pointer events (clicks fall
+   through to the waveform for re-positioning); only the buttons are clickable. */
+.wave-transport {
+	position: absolute;
+	top: var(--space-sm);
+	left: 50%;
+	transform: translateX(-50%);
+	display: flex;
+	gap: var(--space-xs);
+	padding: 4px;
+	border-radius: var(--radius-md);
+	background: rgba(0, 0, 0, 0.55);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 150ms ease;
+	z-index: 6;
+}
+.wave-transport.visible {
+	opacity: 1;
+	pointer-events: auto;
+}
+.wave-transport-btn {
+	width: 28px;
+	height: 28px;
+	min-height: 0;                 /* override the base button --control-h */
+	padding: 0;
+	border-radius: var(--radius-sm);
+	background: rgba(255, 255, 255, 0.14);
+	color: #fff;
+	font-size: 13px;
+	line-height: 1;
+	box-shadow: none;
+}
+.wave-transport-btn:hover:not(:disabled) {
+	background: rgba(255, 255, 255, 0.26);
+}
+.wave-transport-btn:active:not(:disabled) {
+	transform: translateY(1px);
+}
+
+.midi-bar-title {
+	font-weight: bold;
+	color: var(--color-text-primary);
+}
+
+.midi-enable-label {
+	display: flex;
+	align-items: center;
+	gap: var(--space-xs);
+	color: var(--color-text-primary);
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.midi-device-select {
+	max-width: 240px;
+}
+
+.midi-status {
+	color: #aaa;
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+}
+
+/* Clock indicator: source + master BPM + a 4-beat pulse, pinned to the right. */
+.clock-indicator {
+	display: flex;
+	align-items: center;
+	gap: var(--space-sm);
+	/* In the grid the indicator is a normal cell (no flex auto-margin push). */
+}
+
+.clock-label {
+	color: #888;
+	font-size: 12px;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+}
+
+.clock-source {
+	font-weight: bold;
+	color: var(--color-accent);
+	font-size: 13px;
+	min-width: 56px;
+}
+
+.clock-bpm {
+	color: var(--color-text-primary);
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+	min-width: 64px;
+}
+
+.clock-beats {
+	display: flex;
+	align-items: center;
+	gap: var(--space-xs);
+	margin-left: var(--space-xs);
+}
+
+.clock-beat-dot {
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+	background: var(--color-text-primary);
+	opacity: 0.18;
+	/* Beat 1 (the downbeat) gets a brighter resting tint so the bar start reads. */
+	transition: opacity 0.05s linear;
+}
+
+.clock-beat-dot:first-child { background: var(--color-accent); opacity: 0.3; }
+
+.clock-beat-dot.active {
+	background: var(--color-marker);
+}
+
+/* Tile row: one flex item per slice, width ∝ unit span. Laid edge-to-edge so the
+   row reads as one continuous waveform that rearranges with the slices. */
+.seq-steps {
+	display: flex;
+	align-items: stretch;
+	gap: 0;
+	min-height: var(--tile-h);
+	border-radius: var(--radius-sm);
+	overflow: hidden;
+}
+
+.seq-tile {
+	position: relative;
+	flex: 1 1 0;            /* flex-grow set inline to the tile's unit width */
+	min-width: 14px;
+	height: var(--tile-h);
+	background: #161616;   /* dark so the waveform backdrop pops */
+	color: var(--color-text-primary);
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+	cursor: grab;
+	user-select: none;
+	/* No overflow clip: the start/end flag handles sit on the slice edges and
+	   straddle the boundary, so they must be allowed to paint past the tile box. */
+	border: 2px solid transparent;
+	/* Subtle seam between adjacent slices without shifting layout. */
+	box-shadow: inset -1px 0 0 0 rgba(0, 0, 0, 0.55);
+	transition: border-color     var(--transition-fast),
+	            background-color var(--transition-fast),
+	            filter           var(--transition-fast),
+	            opacity          var(--transition-fast);
+}
+
+/* Leave-gaps mode: a silent slot in the bar. Passive (no handles/drag), rendered
+   as an inset dashed well so the empty time reads clearly against the tiles. */
+.seq-gap {
+	position: relative;
+	flex: 1 1 0;            /* flex-grow set inline to the gap's unit width */
+	min-width: 6px;
+	height: var(--tile-h);
+	border: 1px dashed var(--color-border);
+	border-radius: var(--radius-sm);
+	background: repeating-linear-gradient(
+		-45deg,
+		rgba(255, 255, 255, 0.03) 0, rgba(255, 255, 255, 0.03) 6px,
+		transparent 6px, transparent 12px);
+	box-sizing: border-box;
+	cursor: pointer;
+}
+/* Selected empty space: accent-tinted, solid border (echoes .seq-tile.selected). */
+.seq-gap.selected {
+	border-style: solid;
+	border-color: var(--color-accent);
+	background: #1e3a52;
+}
+
+/* This slice's audio, filling the tile behind the chrome. */
+.seq-tile-wave {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	display: block;
+	z-index: 0;
+	pointer-events: none;
+}
+.seq-tile:hover {
+	filter: brightness(1.1);        /* hover feedback with no vertical movement */
+}
+.seq-tile.muted {
+	opacity: 0.4;
+}
+
+/* Big source-unit number, centered. */
+.seq-tile-label {
+	position: absolute;
+	inset: 0;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	min-width: 0;          /* let the grid track size the box (scales with slice count) */
-	height: 36px;
-	padding: 0 var(--space-xs);
-	border-radius: var(--radius-sm);
 	font-weight: bold;
 	font-size: var(--font-size-base);
-	color: var(--color-text-primary);
-	cursor: pointer;
-	user-select: none;
-	border: 2px solid transparent;
-	transition: background-color var(--transition-fast),
-	            border-color     var(--transition-fast),
-	            transform        var(--transition-fast);
+	pointer-events: none;
+	z-index: 1;
 }
 
-.seq-step {
-	position: relative;
-	background: var(--color-accent); /* fallback; overridden inline with palette color */
-	text-shadow: 0 1px 1px rgba(0, 0, 0, 0.55);
+/* Small unit-width readout, bottom-center. */
+.seq-tile-width {
+	position: absolute;
+	bottom: 2px;
+	left: 0;
+	right: 0;
+	text-align: center;
+	font-size: 10px;
+	opacity: 0.85;
+	pointer-events: none;
+	z-index: 1;
 }
 
-/* Per-step pitch-offset badge (top-right corner; hidden when offset is 0). */
+/* Lock indicator (top-right) on a protected slice. */
+.seq-tile-lock {
+	position: absolute;
+	top: 2px;
+	right: 3px;
+	font-size: 11px;
+	line-height: 1;
+	pointer-events: none;
+	z-index: 3;
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+/* Locked slice: a faint ring so it reads as protected at a glance. */
+.seq-tile.locked {
+	box-shadow: inset 0 0 0 2px rgba(245, 166, 35, 0.7);
+}
+
+/* Resize handles: a coloured line + flag on each slice edge, echoing the
+   waveform canvas — green = start (drag back), red = end (drag forward).
+   Hidden until the slice is SELECTED (click a tile), so grips don't clutter the
+   row until you're editing that slice. Centred on the boundary. */
+.seq-tile-resize {
+	position: absolute;
+	top: 0;
+	width: 16px;
+	height: 100%;
+	cursor: ew-resize;
+	z-index: 4;
+	opacity: 0;
+	pointer-events: none;   /* invisible handles must not steal taps/clicks */
+	transition: opacity var(--transition-fast);
+	touch-action: none;
+}
+.seq-tile-resize.start { left:  -8px; color: #2ecc40; }  /* green, left boundary  */
+.seq-tile-resize.end   { right: -8px; color: #e74c3c; }  /* red,   right boundary */
+
+.seq-tile.selected .seq-tile-resize {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+/* Vertical line on the boundary. */
+.seq-tile-resize::after {
+	content: '';
+	position: absolute;
+	top: 0;
+	left: 50%;
+	transform: translateX(-50%);
+	width: 3px;
+	height: 100%;
+	background: currentColor;
+}
+/* Flag: triangle pointing down, sitting at the top of the line. */
+.seq-tile-resize::before {
+	content: '';
+	position: absolute;
+	top: 0;
+	left: 50%;
+	transform: translateX(-50%);
+	width: 0;
+	height: 0;
+	border-left:  6px solid transparent;
+	border-right: 6px solid transparent;
+	border-top:   9px solid currentColor;
+}
+
+/* Per-tile pitch-offset badge (top-right corner; hidden when offset is 0). */
 .seq-step-pitch {
 	position: absolute;
-	top: -6px;
-	right: -6px;
+	top: -4px;
+	right: 6px;
 	min-width: 16px;
 	height: 16px;
 	padding: 0 3px;
@@ -348,172 +1043,266 @@ button:disabled {
 	text-align: center;
 	text-shadow: none;
 	box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
-	pointer-events: none;
-}
-.seq-step:hover {
-	transform: translateY(-1px);
+	cursor: pointer;
+	z-index: 2;
 }
 
-.seq-step.selected {
-	border-color: #ffffff;
-	box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.25);
-}
-
-.seq-step.playing {
+.seq-tile.playing {
 	border-color: #ffffff;
 	box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.45),
 	            0 0 12px rgba(255, 255, 255, 0.55);
 }
 
-.seq-step.dragging {
+/* Selected slice (click to select): accent outline so it's clear which slice the
+   Slice settings + length handles act on. */
+/* Selected slice: highlight via background tint + a white waveform (drawn in JS) —
+   no border, no box-shadow, no movement. */
+.seq-tile.selected {
+	background: #1e3a52;
+}
+
+.seq-tile.dragging {
 	opacity: 0.4;
+	cursor: grabbing;
 }
 
-.seq-step.drop-before {
-	box-shadow: -4px 0 0 0 #ffffff;
+/* Translucent copy that trails the pointer (X only) during a reorder drag. */
+.seq-tile-ghost {
+	position: fixed;
+	z-index: 1000;
+	opacity: 0.6;
+	pointer-events: none;
+	margin: 0;
+	border: 2px solid rgba(255, 255, 255, 0.6);
+	border-radius: var(--radius-sm);
+	box-shadow: 0 8px 20px rgba(0, 0, 0, 0.55);
+	transition: transform 0.09s ease-out;   /* glide as it snaps between slots */
+	cursor: grabbing;
 }
-.seq-step.drop-after {
-	box-shadow: 4px 0 0 0 #ffffff;
+/* The ghost is a snapshot — no hover lift, and its edge handles stay hidden. */
+.seq-tile-ghost:hover { transform: none; }
+.seq-tile-ghost .seq-tile-resize { display: none; }
+
+.seq-tile.drop-before {
+	box-shadow: inset 4px 0 0 0 #ffffff;
 }
-.seq-add-slot.drop-into {
-	border-style: solid;
-	border-color: #ffffff;
-	color: #ffffff;
-	background: rgba(255, 255, 255, 0.12);
+.seq-tile.drop-after {
+	box-shadow: inset -4px 0 0 0 #ffffff;
 }
 
-/* Clone-mode (Option held) drop hint — green tint to echo "copy". */
-.seq-step.drop-clone {
-	outline: 2px dashed #2ecc40;
-	outline-offset: 2px;
-}
-.seq-add-slot.drop-clone {
-	border-color: #2ecc40;
-	color: #2ecc40;
-}
-
-.seq-add-slot {
-	background: transparent;
-	border: 2px dashed var(--color-border-light);
-	color: var(--color-border-light);
-	font-size: 18px;
-	min-width: 36px;
-}
-.seq-add-slot:hover {
-	border-color: var(--color-text-primary);
-	color: var(--color-text-primary);
-}
-.seq-add-slot.selected {
-	border-style: solid;
-	border-color: var(--color-text-primary);
-	color: var(--color-text-primary);
-	background: rgba(255, 255, 255, 0.08);
-}
-
-.seq-loop-btn {
+/* --- Toggle buttons (Loop, Show/Hide details) --------------------------------
+   Strong OFF vs ON distinction: OFF is a muted, recessed (inset) surface with a
+   hollow pip — clearly "not engaged"; ON is a lit green fill with an outer glow
+   and a filled pip. The pip (a leading dot that goes hollow→solid) makes the
+   state readable at a glance even before you register the colour. */
+.toggle-btn,
+.seq-loop-btn,
+.slicer-details-btn {
 	position: relative;
+	gap: var(--space-xs);
+	background-color: var(--color-input-bg);   /* OFF: recessed, not action-blue */
+	color: #9aa0a8;                            /* dimmed label when off */
+	box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45);
 }
-.seq-loop-btn.active {
-	background: #2ecc40;
-	color: #111;
-	box-shadow: 0 0 0 2px rgba(46, 204, 64, 0.35);
-}
-
-/* --- Knob Styles --- */
-.knob-container {
-	display: inline-flex;
-	flex-direction: column;
-	align-items: center;
-	margin: var(--space-lg);
-}
-
-.knob {
-	position: relative;
-	width: 48px;
-	height: 48px;
+/* Leading indicator pip: hollow ring when off. */
+.toggle-btn::before,
+.seq-loop-btn::before,
+.slicer-details-btn::before {
+	content: '';
+	flex: 0 0 auto;
+	width: 9px;
+	height: 9px;
 	border-radius: 50%;
-	background: var(--color-bg-primary);
+	border: 1.5px solid currentColor;
+	background: transparent;
+	transition: background-color var(--transition-fast);
+}
+.toggle-btn:hover:not(:disabled),
+.seq-loop-btn:hover:not(:disabled),
+.slicer-details-btn:hover:not(:disabled) {
+	background-color: #2b3038;
+	color: var(--color-text-primary);
+}
+.toggle-btn:active:not(:disabled),
+.seq-loop-btn:active:not(:disabled),
+.slicer-details-btn:active:not(:disabled) {
+	background-color: var(--color-input-bg);
+	transform: none;                            /* stay recessed, don't lift */
+}
+/* ON: lit green fill + outer glow, filled pip. */
+.toggle-btn.active,
+.seq-loop-btn.active,
+.slicer-details-btn.active {
+	background-color: var(--color-positive);
+	color: var(--color-on-positive);
+	box-shadow: 0 0 0 2px rgba(46, 204, 64, 0.45),
+	            0 0 12px rgba(46, 204, 64, 0.45);
+}
+.toggle-btn.active::before,
+.seq-loop-btn.active::before,
+.slicer-details-btn.active::before {
+	background: currentColor;                   /* filled pip when on */
+}
+.toggle-btn.active:hover:not(:disabled),
+.seq-loop-btn.active:hover:not(:disabled),
+.slicer-details-btn.active:hover:not(:disabled) {
+	background-color: var(--color-positive-hover);
+}
+
+/* --- DragControl: unified knob/slider/dropdown replacement -----------------
+   Button-shaped grid cell with a translucent fill from the origin to the value,
+   a bright vertical leading-edge marker, and a centered "Label value" readout.
+   Drag horizontally to change (ew-resize cursor). */
+.drag-control {
+	position: relative;
+	box-sizing: border-box;
+	width: 100%;
+	min-height: var(--control-h);
+	padding: 0 var(--space-md);
 	border: 1px solid var(--color-border);
-	display: flex;
+	border-radius: var(--radius-sm);
+	background: var(--color-input-bg);
+	color: var(--color-text-primary);
+	font-size: 13px;
+	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	margin-bottom: var(--space-xs);
-	cursor: ns-resize;          /* signals vertical drag */
-	touch-action: none;         /* don't scroll the page while dragging on touch */
+	overflow: hidden;
+	cursor: grab;                  /* drag in any direction (H or V) to change */
 	user-select: none;
-	outline: none;
+	touch-action: none;            /* dragging shouldn't scroll on touch */
+	box-shadow: var(--shadow-btn);
 	transition: border-color var(--transition-fast),
 	            box-shadow   var(--transition-fast);
 }
-
-/* Defensive: the rewritten knob has no range input, but a stale-cached old
-   knob.js may still inject one. Keep it hidden (and harmless) so it never shows
-   through the dial. Inert once the new knob.js loads. */
-.knob-input {
-	position: absolute;
-	inset: 0;
-	opacity: 0;
-	z-index: 2;
-	cursor: ns-resize;
+.drag-control:hover:not(.disabled)  { border-color: var(--color-border-hover); }
+.drag-control:focus-visible         { outline: none; box-shadow: var(--focus-ring-accent); }
+.drag-control.dragging              { border-color: var(--color-accent); cursor: grabbing; }
+.drag-control.disabled {
+	opacity: var(--opacity-disabled);
+	cursor: not-allowed;
 }
 
-/* Value arc: a 270° ring filled to the current value (set via --knob-fraction). */
-.knob::before {
-	content: '';
+/* Translucent fill from origin → value. */
+.drag-fill {
 	position: absolute;
-	inset: -3px;
-	border-radius: 50%;
-	background: conic-gradient(from -135deg,
-		var(--color-accent) calc(var(--knob-fraction, 0) * 270deg),
-		rgba(255, 255, 255, 0.12) 0 270deg,
-		transparent 270deg);
-	-webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
-	        mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
+	top: 0;
+	bottom: 0;
+	background: rgba(52, 152, 219, 0.28);
+	pointer-events: none;
 	z-index: 0;
-	pointer-events: none;
 }
-
-.knob:focus-visible {
-	box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.25);
-}
-
-.knob.dragging {
-	border-color: #ffffff;
-	box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.3);
-}
-
-.knob-value {
+/* Bright vertical leading edge at the exact value position. */
+.drag-edge {
 	position: absolute;
-	bottom: 4px;
-	left: 50%;
-	transform: translateX(-50%);
-	color: var(--color-text-primary);
-	font-size: 11px;
-	font-weight: bold;
-	line-height: 1;
+	top: 0;
+	bottom: 0;
+	width: 2px;
+	background: var(--color-accent);
 	pointer-events: none;
-	z-index: 3;
-}
-
-.knob-label {
-	margin-top: var(--space-xs);
-	color: var(--color-text-primary);
-	font-size: 12px;
-	text-align: center;
-}
-
-.knob::after {
-	content: '';
-	position: absolute;
-	left: 50%;
-	top: 50%;
-	width: 3px;
-	height: 18px;
-	background: var(--color-text-primary);
-	border-radius: 2px;
-	transform: translate(-50%, -90%) rotate(var(--knob-rotation, -135deg));
-	transform-origin: 50% 90%;
-	/* No transition — the indicator tracks the pointer 1:1 (the old transition
-	   made the knob feel laggy/unresponsive). */
 	z-index: 1;
+}
+.drag-label {
+	position: relative;
+	z-index: 2;
+	pointer-events: none;
+	white-space: nowrap;
+	/* Long readouts (e.g. a MIDI device name) truncate with an ellipsis instead
+	   of overflowing the fixed-height cell. Short values are unaffected. */
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-variant-numeric: tabular-nums;
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+/* A wrapped native input/select stays in the DOM (for value + events) but hidden. */
+.drag-native-hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+	pointer-events: none;
+}
+
+/* --- Export WAV panel --------------------------------------------------------
+   A modal card (offline render options) over a dimming backdrop. Uses the shared
+   tokens so it reads as part of the same system as the toolbars. */
+.export-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 2000;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.55);
+	padding: var(--space-xl);
+}
+.export-panel {
+	width: 100%;
+	max-width: calc(var(--grid-unit) * 44);
+	max-height: 90vh;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-lg);
+	padding: var(--space-xl);
+	background: var(--color-bg-primary);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-lg);
+	box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+	color: var(--color-text-primary);
+}
+.export-title {
+	font-weight: 700;
+	font-size: 1.1rem;
+	color: var(--color-label-text);
+}
+.export-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-xs);
+}
+.export-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-sm);
+	padding: var(--space-xs) var(--space-sm);
+	background: var(--color-input-bg);
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+}
+.export-row input[type="checkbox"] {
+	flex: 0 0 auto;
+	width: 16px;
+	height: 16px;
+	accent-color: var(--color-positive);
+	cursor: pointer;
+}
+.export-row-name {
+	flex: 1 1 auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.export-row-beats {
+	flex: 0 0 auto;
+	font-variant-numeric: tabular-nums;
+	color: #9aa0a8;
+	font-size: 0.85rem;
+}
+.export-length {
+	/* The DragControl is a fixed-height cell; give it a full-width row. */
+	display: grid;
+	grid-auto-rows: var(--control-h);
+}
+.export-status {
+	min-height: 1.2em;
+	font-size: 0.9rem;
+	color: #9aa0a8;
+	font-variant-numeric: tabular-nums;
+}
+.export-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--space-sm);
 }

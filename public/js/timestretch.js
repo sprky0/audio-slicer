@@ -49,16 +49,20 @@ function findBestLag(x, idealStart, refPos, corrLen, search) {
 }
 
 /**
+ * Incremental WSOLA stretcher. The synthesis loop is driven by output position,
+ * so it can be advanced in chunks — process() does a bounded slice of work and
+ * reports how far it got, which makes sample-accurate progress (outPos/outputLen)
+ * cheap and lets a long build yield to the event loop between chunks.
+ *
  * @param {Float32Array[]} channels  input channel data
  * @param {number} factor            output length / input length (> 0)
  * @param {object} [opts]            { frame, overlap, search }
- * @returns {Float32Array[]}         stretched channel data
+ * @returns {{ outputLen:number, inputLen:number, done:boolean,
+ *             process:(maxOut:number)=>number, result:()=>Float32Array[] }}
  */
-export function timeStretch(channels, factor, opts = {}) {
-	const numCh = channels.length;
-	if (numCh === 0) return channels;
-	const inputLen = channels[0].length;
-	if (inputLen === 0 || !(factor > 0)) return channels.map((c) => c.slice());
+export function createTimeStretcher(channels, factor, opts = {}) {
+	const numCh    = channels.length;
+	const inputLen = numCh ? channels[0].length : 0;
 
 	const frame   = opts.frame   || 1024;
 	const overlap = opts.overlap != null ? opts.overlap : 0.75;
@@ -68,54 +72,89 @@ export function timeStretch(channels, factor, opts = {}) {
 	const corrLen = Hs;
 	const win     = hann(frame);
 
-	const outputLen = Math.max(1, Math.round(inputLen * factor));
+	const valid     = numCh > 0 && inputLen > 0 && factor > 0;
+	const outputLen = valid ? Math.max(1, Math.round(inputLen * factor)) : inputLen;
 	const padded    = outputLen + frame;
 
 	const out  = [];
-	for (let c = 0; c < numCh; c++) out.push(new Float32Array(padded));
-	const norm = new Float32Array(padded);   // overlap-add normalization (COLA)
+	if (valid) for (let c = 0; c < numCh; c++) out.push(new Float32Array(padded));
+	const norm  = valid ? new Float32Array(padded) : null;   // overlap-add normalization (COLA)
+	const lagCh = numCh ? channels[0] : null;                // shared lag driven by one channel
 
-	const lagCh = channels[0];   // shared lag driven by one channel
 	let prevInputPos = 0;
 	let outPos       = 0;
 	let frameIdx     = 0;
 
-	while (outPos < outputLen) {
-		const idealStart = Math.round(frameIdx * Ha);
-		const delta = frameIdx > 0
-			? findBestLag(lagCh, idealStart, prevInputPos + Hs, corrLen, search)
-			: 0;
-		let start = idealStart + delta;
-		if (start < 0) start = 0;
-		if (start > inputLen - 1) start = inputLen - 1;
+	return {
+		outputLen,
+		inputLen,
+		get done() { return !valid || outPos >= outputLen; },
 
-		for (let c = 0; c < numCh; c++) {
-			const inp = channels[c];
-			const o   = out[c];
-			for (let n = 0; n < frame; n++) {
-				const si = start + n;
-				if (si >= inputLen) break;
-				o[outPos + n] += inp[si] * win[n];
+		// Advance synthesis by up to ~maxOut output samples (Infinity = finish).
+		// Returns the number of output samples advanced this call.
+		process(maxOut) {
+			if (!valid) return 0;
+			const startOut = outPos;
+			const lim      = Math.max(1, Math.floor(maxOut));
+			const target   = Math.min(outputLen, outPos + lim);
+			while (outPos < target) {
+				const idealStart = Math.round(frameIdx * Ha);
+				const delta = frameIdx > 0
+					? findBestLag(lagCh, idealStart, prevInputPos + Hs, corrLen, search)
+					: 0;
+				let start = idealStart + delta;
+				if (start < 0) start = 0;
+				if (start > inputLen - 1) start = inputLen - 1;
+
+				for (let c = 0; c < numCh; c++) {
+					const inp = channels[c];
+					const o   = out[c];
+					for (let n = 0; n < frame; n++) {
+						const si = start + n;
+						if (si >= inputLen) break;
+						o[outPos + n] += inp[si] * win[n];
+					}
+				}
+				for (let n = 0; n < frame; n++) {
+					if (start + n < inputLen) norm[outPos + n] += win[n];
+				}
+
+				prevInputPos = start;
+				outPos += Hs;
+				frameIdx++;
 			}
-		}
-		for (let n = 0; n < frame; n++) {
-			if (start + n < inputLen) norm[outPos + n] += win[n];
-		}
+			// Clamp to outputLen: the loop overshoots by up to one hop on the final
+			// chunk, but progress must sum to exactly outputLen (parity with total).
+			return Math.max(0, Math.min(outPos, outputLen) - startOut);
+		},
 
-		prevInputPos = start;
-		outPos += Hs;
-		frameIdx++;
-	}
+		// COLA-normalize the accumulated output and return the stretched channels.
+		result() {
+			if (!valid) return channels.map((c) => c.slice());
+			const res = [];
+			for (let c = 0; c < numCh; c++) {
+				const o = out[c];
+				const r = new Float32Array(outputLen);
+				for (let i = 0; i < outputLen; i++) {
+					const g = norm[i];
+					r[i] = g > 1e-6 ? o[i] / g : o[i];
+				}
+				res.push(r);
+			}
+			return res;
+		},
+	};
+}
 
-	const result = [];
-	for (let c = 0; c < numCh; c++) {
-		const o = out[c];
-		const r = new Float32Array(outputLen);
-		for (let i = 0; i < outputLen; i++) {
-			const g = norm[i];
-			r[i] = g > 1e-6 ? o[i] / g : o[i];
-		}
-		result.push(r);
-	}
-	return result;
+/**
+ * Convenience: run the whole stretch synchronously in one call.
+ * @param {Float32Array[]} channels  input channel data
+ * @param {number} factor            output length / input length (> 0)
+ * @param {object} [opts]            { frame, overlap, search }
+ * @returns {Float32Array[]}         stretched channel data
+ */
+export function timeStretch(channels, factor, opts = {}) {
+	const ts = createTimeStretcher(channels, factor, opts);
+	ts.process(Infinity);
+	return ts.result();
 }

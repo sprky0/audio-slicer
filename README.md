@@ -2,17 +2,22 @@
 
 A browser-based audio slicer and step sequencer, built with vanilla JavaScript and the Web Audio API. No build step, no dependencies — just static files.
 
-Load an audio file, chop it into slices on a waveform, and sequence those slices into loops. Each slicer is independent, so you can run several at once.
+Load an audio file, chop it into slices on a waveform, and sequence those slices into loops. Each slicer is independent, so you can run several at once, all locked to one master clock.
 
 ## Features
 
-- **Waveform slicing** — load a file, set start/end markers, and subdivide the selection into evenly spaced slices.
-- **Zoom & cut** — zoom into a selection and "cut" to make it the new working view.
-- **Step sequencer** — arrange slices into a per-slicer loop with adjustable BPM and sample-accurate scheduling.
-- **Time-stretch & pitch-shift** — WSOLA time-stretching keeps pitch constant across tempos; slices can also be pitch-shifted.
-- **Color-coded slices** — each slice has a consistent color across the waveform and the sequencer.
-- **Multiple slicers** — add as many independent slicers as you like.
-- **Persistence** — settings are saved to `localStorage` and audio files to IndexedDB, so your session survives a reload.
+- **Waveform slicing** — load a file, set the start/end region (drag the green/red handles or the sliders), and let the app cut it into an evenly spaced grid.
+- **Beats + Step** — declare how many quarter-note **beats** the loop is (this sets the tempo: `BPM = 60 × beats / selectionDuration`) and the **Step** subdivision (1/2…1/32). The slice grid is `beats × step` — e.g. 4 beats · 1/16 = 16 cells.
+- **Zoom & trim** — zoom into a selection and "Trim" to make it the new working view.
+- **Tile sequencer** — arrange slices into a per-slicer loop of variable-width tiles: drag to reorder, drag the edges to resize (sub-step precision), double-click to split, shift-click to merge — all live while the loop plays.
+  - **Packed vs Gaps** — a global mode toggle: *Packed* keeps tiles contiguous (resize borrows from the neighbour); *Gaps* is free placement — moving/shrinking a clip leaves silence, dropping/growing overwrites.
+- **Edit / perform layout** — Show/Hide details trades vertical space between a big waveform (edit) and a big tile row (perform).
+- **Master transport** — one Master tempo + Play All / Stop All drive every slicer. All slicers share a single AudioContext and start on one clock instant, so multi-track loops are sample-locked.
+- **MIDI clock sync** — sync to an external MIDI clock (Web MIDI): the incoming clock sets the master tempo, and MIDI Start/Continue/Stop drive the sequencers. A clock indicator shows the active source, tempo, and a 4-beat pulse.
+- **Time-stretch & pitch-shift** — WSOLA time-stretching keeps pitch constant across tempos; slices can also be pitch-shifted (master + per-step offsets).
+- **Randomize**, **color-coded slices**, **multiple slicers**, and **persistence** (settings in `localStorage`, audio in IndexedDB) so your session survives a reload.
+
+The whole UI is built from one unified drag-control (button-shaped, drag any direction; replaces knobs/sliders/dropdowns) on a fluid relative-unit grid — see [public/CSS.md](public/CSS.md).
 
 ## Running
 
@@ -30,15 +35,17 @@ Then open <http://localhost:8000> in a browser. (A server is needed rather than 
 ```
 public/
   index.html
-  css/
+  css/styles.css              design system (tokens + components) — see CSS.md
   js/
-    main.js                     entry point — wires up slicers, sequencer, persistence
+    main.js                     entry point — slicers, tile sequencer, transport, persistence
     audio-slicer-controller.js  connects the engine and the waveform view
     audio-engine.js             audio loading, slicing, playback (no DOM)
+    audio-context.js            the shared AudioContext singleton (Tier 1c)
     waveform-view.js            canvas drawing and interaction
     transport.js                lookahead sequencer scheduler
+    drag-control.js             the unified button-shaped control
+    midi-clock.js               Web MIDI clock receiver → master tempo + transport
     timestretch.js              WSOLA time-stretch DSP
-    knob.js                     custom rotary control
     palette.js                  shared slice colors
     storage.js                  localStorage + IndexedDB persistence
 ```

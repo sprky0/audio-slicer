@@ -1,14 +1,18 @@
-import PALETTE from './palette.js';
-
 /**
- * WaveformView: Handles all canvas drawing and user interaction for the waveform, markers, playhead, and segment controls.
- * Emits events for marker movement, segment clicks, and enable/disable toggles.
+ * WaveformView: Handles canvas drawing and user interaction for the waveform,
+ * selection handles, unit gridlines, and the playing-region playhead.
+ * Emits events for handle movement and waveform click-to-jump.
  * No audio logic; can be instantiated multiple times for parallel slicers.
  *
  * Two pairs of fractions to keep straight:
  *   - viewStart/viewEnd      : fractions of the real audio buffer that the canvas renders.
  *   - selectionStart/selectionEnd : fractions of the real audio buffer for the active slice.
  * Sliders in the UI manipulate selection (within view). "Cut" replaces view with selection.
+ *
+ * Sequencing (variable-width tiles, reorder/resize) lives in a DOM tile row in
+ * main.js, not on this canvas. The canvas just visualizes the source: waveform,
+ * selection, the unit grid, and a highlight of whichever source region is
+ * currently sounding (driven by setPlayingRegion + setPlayheadPosition).
  */
 class WaveformView extends EventTarget {
 	constructor(container, options = {}) {
@@ -16,7 +20,6 @@ class WaveformView extends EventTarget {
 		this.container = container;
 		this.options   = Object.assign({
 			height: 200,
-			segmentIndicatorHeight: 52,
 			peakBucketTarget: 250000, // upper bound on cached peak buckets
 			handleTriangleW:  9,
 			handleTriangleH:  12,
@@ -24,12 +27,6 @@ class WaveformView extends EventTarget {
 			handleHitTolerance: 8,
 			startHandleColor: '#2ecc40',
 			endHandleColor:   '#e74c3c',
-			// Segment indicator inner layout
-			indPadTop:        4,
-			indNumberH:       24,
-			indGap:           4,
-			indToggleH:       18,
-			indMinToggleW:    28,
 		}, options);
 
 		// Audio buffer + peak cache
@@ -39,14 +36,14 @@ class WaveformView extends EventTarget {
 		this.peakBucketSize      = 0;
 		this.peakBucketCount     = 0;
 
-		// Slicing state
-		this.segments            = [];
-		this.enabledSegments     = [];
-		this.activeSegment       = -1;
-		this.subdivisions        = 2;
+		// Grid + playback state
+		this.subdivisions        = 16;
 		this.playheadPosition    = 0;
 		this.isPlaying           = false;
 		this.isPaused            = false;
+		// Currently-sounding source region (real-buffer fractions), or null.
+		this.playStartFrac       = null;
+		this.playEndFrac         = null;
 
 		// View window (real-buffer fractions) — what the canvas displays
 		this.viewStart           = 0;
@@ -62,7 +59,7 @@ class WaveformView extends EventTarget {
 
 		// Pixel sizing
 		this._cssWidth           = 0;
-		this._cssHeight          = this.options.height + this.options.segmentIndicatorHeight;
+		this._cssHeight          = this.options.height;
 		this._dpr                = window.devicePixelRatio || 1;
 
 		// rAF throttle
@@ -70,10 +67,11 @@ class WaveformView extends EventTarget {
 
 		// Help message (inserted before canvas)
 		this.helpMsg = document.createElement('div');
+		this.helpMsg.className      = 'wave-help';
 		this.helpMsg.style.color    = '#aaa';
 		this.helpMsg.style.fontSize = '13px';
 		this.helpMsg.style.margin   = '4px 0 8px 0';
-		this.helpMsg.textContent    = 'Drag the green/red triangle handles or the sliders to pick a region. Click a numbered tile to play it; click its on/off row to mute it.';
+		this.helpMsg.textContent    = 'Drag the green/red triangle handles or the sliders to pick a region. Shape playback with the slice tiles below.';
 		this.container.appendChild(this.helpMsg);
 
 		// Canvas
@@ -115,14 +113,11 @@ class WaveformView extends EventTarget {
 		this._scheduleDraw();
 	}
 
-	setSegments(segments, enabledSegments) {
-		this.segments        = segments || [];
-		this.enabledSegments = enabledSegments || [];
-		this._scheduleDraw();
-	}
-
-	setActiveSegment(index) {
-		this.activeSegment = index;
+	// Change the canvas height and redraw. Used to "trade" vertical space with the
+	// sequencer: tall in edit mode (details shown), short in perform mode (hidden).
+	setHeight(px) {
+		this.options.height = px;
+		this._resizeCanvas();
 		this._scheduleDraw();
 	}
 
@@ -144,12 +139,22 @@ class WaveformView extends EventTarget {
 	setSelection(start, end, subdivisions) {
 		this.selectionStart = start;
 		this.selectionEnd   = end;
-		this.subdivisions   = subdivisions;
+		if (subdivisions) this.subdivisions = subdivisions;
 		this._scheduleDraw();
 	}
 
-	setEnabledSegments(enabledArray) {
-		this.enabledSegments = enabledArray;
+	/**
+	 * Mark the source region (real-buffer fractions) that is currently sounding,
+	 * so the playhead can sweep across exactly that span. Pass (null) to clear.
+	 */
+	setPlayingRegion(startFrac, endFrac) {
+		if (startFrac == null) {
+			this.playStartFrac = null;
+			this.playEndFrac   = null;
+		} else {
+			this.playStartFrac = startFrac;
+			this.playEndFrac   = endFrac;
+		}
 		this._scheduleDraw();
 	}
 
@@ -177,7 +182,7 @@ class WaveformView extends EventTarget {
 		// padding, which would push the right-edge handle outside the canvas.
 		const measured = this.canvas.getBoundingClientRect().width || this.canvas.clientWidth;
 		const cssWidth = Math.max(1, Math.floor(measured));
-		const cssHeight= this.options.height + this.options.segmentIndicatorHeight;
+		const cssHeight= this.options.height;
 
 		this._cssWidth  = cssWidth;
 		this._cssHeight = cssHeight;
@@ -249,17 +254,15 @@ class WaveformView extends EventTarget {
 	}
 
 	_draw() {
-		const ctx             = this.ctx;
-		const width           = this._cssWidth;
-		const height          = this.options.height;
-		const indicatorHeight = this.options.segmentIndicatorHeight;
-		ctx.clearRect(0, 0, width, height + indicatorHeight);
+		const ctx    = this.ctx;
+		const width  = this._cssWidth;
+		const height = this._cssHeight;
+		ctx.clearRect(0, 0, width, height);
 
 		this._drawWaveform(width, height);
 		this._drawSelectionOverlay(width, height);
 		this._drawSubdivisions(width, height);
 		this._drawPlayhead(width, height);
-		this._drawSegmentIndicators(width, height, indicatorHeight);
 		this._drawHandles(width, height);
 	}
 
@@ -345,6 +348,7 @@ class WaveformView extends EventTarget {
 		ctx.fillRect(startX, 0, endX - startX, height);
 	}
 
+	// Static unit-grid lines across the selection (the step resolution).
 	_drawSubdivisions(width, height) {
 		if (this.subdivisions <= 1) return;
 		const ctx          = this.ctx;
@@ -352,17 +356,12 @@ class WaveformView extends EventTarget {
 		const endX         = this._fractionToX(this.selectionEnd);
 		const selWidth     = endX - startX;
 		if (selWidth <= 0) return;
-		const segmentWidth = selWidth / this.subdivisions;
+		const unitWidth    = selWidth / this.subdivisions;
 
-		if (this.isPlaying && this.activeSegment !== -1) {
-			ctx.fillStyle = 'rgba(52, 152, 219, 0.2)';
-			ctx.fillRect(startX + segmentWidth * this.activeSegment, 0, segmentWidth, height);
-		}
-
-		ctx.strokeStyle = 'rgba(52, 152, 219, 0.5)';
+		ctx.strokeStyle = 'rgba(52, 152, 219, 0.4)';
 		ctx.lineWidth   = 1;
 		for (let i = 1; i < this.subdivisions; i++) {
-			const x = startX + segmentWidth * i;
+			const x = startX + unitWidth * i;
 			ctx.beginPath();
 			ctx.moveTo(x, 0);
 			ctx.lineTo(x, height);
@@ -371,81 +370,24 @@ class WaveformView extends EventTarget {
 	}
 
 	_drawPlayhead(width, height) {
-		if (!(this.isPlaying || this.isPaused) || this.activeSegment === -1) return;
-		const ctx          = this.ctx;
-		const startX       = this._fractionToX(this.selectionStart);
-		const endX         = this._fractionToX(this.selectionEnd);
-		const selWidth     = endX - startX;
-		if (selWidth <= 0) return;
-		const segCount     = this.subdivisions > 0 ? this.subdivisions : 1;
-		const segmentWidth = selWidth / segCount;
-		const segmentStart = startX + segmentWidth * this.activeSegment;
-		const playheadX    = segmentStart + (segmentWidth * this.playheadPosition);
+		if (!(this.isPlaying || this.isPaused) || this.playStartFrac == null) return;
+		const ctx    = this.ctx;
+		const startX = this._fractionToX(this.playStartFrac);
+		const endX   = this._fractionToX(this.playEndFrac);
+		const regionW= endX - startX;
+		if (regionW <= 0) return;
 
+		// Shade the sounding region, then sweep the playhead across it.
+		ctx.fillStyle = 'rgba(52, 152, 219, 0.22)';
+		ctx.fillRect(startX, 0, regionW, height);
+
+		const playheadX = startX + regionW * Math.min(1, Math.max(0, this.playheadPosition));
 		ctx.strokeStyle = '#ffffff';
 		ctx.lineWidth   = 2;
 		ctx.beginPath();
 		ctx.moveTo(playheadX, 0);
 		ctx.lineTo(playheadX, height);
 		ctx.stroke();
-	}
-
-	// Layout for one segment's indicator block, given the waveform `height`.
-	_indicatorLayout(height) {
-		const o = this.options;
-		const numberY = height + o.indPadTop;
-		const toggleY = numberY + o.indNumberH + o.indGap;
-		return { numberY, numberH: o.indNumberH, toggleY, toggleH: o.indToggleH };
-	}
-
-	_drawSegmentIndicators(width, height, indicatorHeight) {
-		if (this.segments.length === 0) return;
-		const ctx          = this.ctx;
-		const startX       = this._fractionToX(this.selectionStart);
-		const endX         = this._fractionToX(this.selectionEnd);
-		const selWidth     = endX - startX;
-		if (selWidth <= 0) return;
-		const segmentWidth = selWidth / this.segments.length;
-		const layout       = this._indicatorLayout(height);
-		const minToggleW   = this.options.indMinToggleW;
-
-		for (let i = 0; i < this.segments.length; i++) {
-			const x       = startX + segmentWidth * i;
-			const boxW    = Math.max(1, segmentWidth - 2);
-			const color   = PALETTE[i % PALETTE.length];
-			const enabled = this.enabledSegments[i];
-
-			ctx.save();
-
-			// --- Number rectangle (top) ---
-			ctx.globalAlpha = enabled ? 1.0 : 0.4;
-			ctx.fillStyle   = color;
-			ctx.fillRect(x, layout.numberY, boxW, layout.numberH);
-
-			if (i === this.activeSegment) {
-				ctx.strokeStyle = '#ffffff';
-				ctx.lineWidth   = 2;
-				ctx.strokeRect(x + 1, layout.numberY + 1, boxW - 2, layout.numberH - 2);
-			}
-
-			ctx.globalAlpha  = 1.0;
-			ctx.fillStyle    = '#ffffff';
-			ctx.font         = 'bold 14px sans-serif';
-			ctx.textAlign    = 'center';
-			ctx.textBaseline = 'middle';
-			ctx.fillText(`${i + 1}`, x + boxW / 2, layout.numberY + layout.numberH / 2);
-
-			// --- on/off toggle rectangle (bottom) ---
-			if (boxW >= minToggleW) {
-				ctx.fillStyle = enabled ? '#2ecc40' : '#e74c3c';
-				ctx.fillRect(x, layout.toggleY, boxW, layout.toggleH);
-				ctx.fillStyle = '#ffffff';
-				ctx.font      = 'bold 11px sans-serif';
-				ctx.fillText(enabled ? 'on' : 'off', x + boxW / 2, layout.toggleY + layout.toggleH / 2 + 0.5);
-			}
-
-			ctx.restore();
-		}
 	}
 
 	_drawHandles(width, height) {
@@ -563,45 +505,18 @@ class WaveformView extends EventTarget {
 				this._dragMoved = false;
 				return;
 			}
-			const rect            = this.canvas.getBoundingClientRect();
-			const x               = e.clientX - rect.left;
-			const y               = e.clientY - rect.top;
-			const width           = this._cssWidth;
-			const height          = this.options.height;
-			const indicatorHeight = this.options.segmentIndicatorHeight;
+			const rect   = this.canvas.getBoundingClientRect();
+			const x      = e.clientX - rect.left;
+			const y      = e.clientY - rect.top;
+			const height = this._cssHeight;
 
-			// Waveform area — only meaningful inside the current selection.
+			// Waveform area — click to audition from this position (only inside selection).
 			if (y >= 0 && y <= height) {
 				const startX = this._fractionToX(this.selectionStart);
 				const endX   = this._fractionToX(this.selectionEnd);
 				if (endX > startX && x >= startX && x <= endX) {
 					const rel = (x - startX) / (endX - startX);
 					this.dispatchEvent(new CustomEvent('waveformjump', { detail: { rel } }));
-				}
-				return;
-			}
-
-			// Segment indicator strip.
-			if (this.segments.length > 0 && y > height && y <= height + indicatorHeight) {
-				const startX       = this._fractionToX(this.selectionStart);
-				const endX         = this._fractionToX(this.selectionEnd);
-				const selWidth     = endX - startX;
-				if (selWidth <= 0) return;
-				const segmentWidth = selWidth / this.segments.length;
-				const layout       = this._indicatorLayout(height);
-				const minToggleW   = this.options.indMinToggleW;
-				const inToggleRow  = y >= layout.toggleY && y <= layout.toggleY + layout.toggleH;
-				for (let i = 0; i < this.segments.length; i++) {
-					const segX = startX + segmentWidth * i;
-					if (x >= segX && x < segX + segmentWidth) {
-						const boxW = Math.max(1, segmentWidth - 2);
-						if (inToggleRow && boxW >= minToggleW) {
-							this.dispatchEvent(new CustomEvent('segmenttoggle', { detail: { index: i, enabled: !this.enabledSegments[i] } }));
-						} else {
-							this.dispatchEvent(new CustomEvent('segmentclick', { detail: { index: i } }));
-						}
-						break;
-					}
 				}
 			}
 		});
