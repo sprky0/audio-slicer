@@ -1223,3 +1223,86 @@ input[type="checkbox"]:disabled {
 	opacity: 0;
 	pointer-events: none;
 }
+
+/* --- Export WAV panel --------------------------------------------------------
+   A modal card (offline render options) over a dimming backdrop. Uses the shared
+   tokens so it reads as part of the same system as the toolbars. */
+.export-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 2000;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.55);
+	padding: var(--space-xl);
+}
+.export-panel {
+	width: 100%;
+	max-width: calc(var(--grid-unit) * 44);
+	max-height: 90vh;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-lg);
+	padding: var(--space-xl);
+	background: var(--color-bg-primary);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-lg);
+	box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+	color: var(--color-text-primary);
+}
+.export-title {
+	font-weight: 700;
+	font-size: 1.1rem;
+	color: var(--color-label-text);
+}
+.export-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-xs);
+}
+.export-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-sm);
+	padding: var(--space-xs) var(--space-sm);
+	background: var(--color-input-bg);
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+}
+.export-row input[type="checkbox"] {
+	flex: 0 0 auto;
+	width: 16px;
+	height: 16px;
+	accent-color: var(--color-positive);
+	cursor: pointer;
+}
+.export-row-name {
+	flex: 1 1 auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.export-row-beats {
+	flex: 0 0 auto;
+	font-variant-numeric: tabular-nums;
+	color: #9aa0a8;
+	font-size: 0.85rem;
+}
+.export-length {
+	/* The DragControl is a fixed-height cell; give it a full-width row. */
+	display: grid;
+	grid-auto-rows: var(--control-h);
+}
+.export-status {
+	min-height: 1.2em;
+	font-size: 0.9rem;
+	color: #9aa0a8;
+	font-variant-numeric: tabular-nums;
+}
+.export-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--space-sm);
+}

@@ -5,6 +5,7 @@ import PALETTE from './palette.js';
 import midiClock from './midi-clock.js';
 import { getAudioContext } from './audio-context.js';
 import { createTimeStretcher } from './timestretch.js';
+import { renderMix, encodeWav, triggerDownload } from './export-wav.js';
 import {
 	saveStateRaw, loadStateRaw, clearStateRaw,
 	putAudio, getAudio, deleteAudio, clearAudio,
@@ -2094,6 +2095,31 @@ function createSlicer(savedState = null) {
 		seqStart: startSeqPlayback,
 		seqStop:  stopSeqPlayback,
 		hasTiles: () => seq.tiles.length > 0,
+		// --- WAV export hooks (see export-wav.js) ---
+		// Metadata for the export panel's checkbox list + the default-length LCM.
+		// A slicer is exportable once it has decoded audio and at least one audible
+		// (non-gap) tile.
+		exportMeta: () => ({
+			id,
+			fileName: currentFileName,
+			beats:    beatCount(),
+			exportable: !!slicer.engine.audioBuffer && seq.tiles.some((t) => !t.gap),
+		}),
+		// Enqueue every WSOLA build the current master tempo/pitch needs, so a
+		// pitch-correct export can await them before rendering.
+		exportPrescan: () => prescanStretches(),
+		// Outstanding stretch builds (0 = all cached → safe to render).
+		exportPending: () => stretchPending.size,
+		// Snapshot the render inputs: mix + a tile-list copy + stepSec at the master
+		// tempo + the live tile→buffer policy (returns cached stretched buffers now
+		// that exportPrescan's builds have landed).
+		exportTrack: () => ({
+			volume:  volumeKnob.value,
+			pan:     panKnob.value,
+			tiles:   seq.tiles.slice(),
+			stepSec: stepSec(),
+			getTilePlayback,
+		}),
 	});
 	// A slicer added while sync is already live adopts the current tempo at once —
 	// the external MIDI clock if it's driving, otherwise the internal master.
@@ -2246,12 +2272,186 @@ function masterStopAll() {
 	for (const s of slicers) s.seqStop && s.seqStop();
 }
 
+// --- WAV export -------------------------------------------------------------
+// Render the master mix offline → normalized stereo 16-bit WAV. The panel lets
+// the user pick which slicers to include and how many beats to render; the
+// default length is the LCM of the chosen slicers' beat counts so every loop
+// lands on the boundary (seamless). Pitch-correct: we prescan + await each
+// slicer's WSOLA builds before rendering (see export-wav.js).
+let exportBtn, exportPanel, exportOpen = false, exportKeyHandler = null;
+
+const gcd2 = (a, b) => { a = Math.abs(a); b = Math.abs(b); while (b) { [a, b] = [b, a % b]; } return a || 1; };
+const lcm2 = (a, b) => (a && b) ? Math.abs(a / gcd2(a, b) * b) : (a || b || 1);
+const beatsLcm = (arr) => arr.reduce((acc, n) => lcm2(acc, n), 1);
+
+// Poll until every chosen slicer's stretch queue drains (or a safety timeout),
+// so getTilePlayback returns pitch-preserving buffers instead of the fallback.
+function awaitStretchReady(chosen, timeoutMs = 60000) {
+	return new Promise((resolve) => {
+		const start = performance.now();
+		const tick = () => {
+			const pending = chosen.reduce((n, s) => n + (s.exportPending ? s.exportPending() : 0), 0);
+			if (pending === 0 || performance.now() - start > timeoutMs) { resolve(); return; }
+			setTimeout(tick, 60);
+		};
+		tick();
+	});
+}
+
+// Slicers eligible for export (have audio + at least one audible tile).
+function exportableSlicers() {
+	return slicers.filter((s) => s.exportMeta && s.exportMeta().exportable);
+}
+
+async function runExport(chosen, lengthBeats, statusEl, exportGoBtn) {
+	if (!chosen.length || !(masterClock.bpm > 0)) return;
+	const setStatus = (t) => { if (statusEl) statusEl.textContent = t; };
+	if (exportGoBtn) exportGoBtn.disabled = true;
+	try {
+		setStatus('Preparing time-stretch…');
+		chosen.forEach((s) => s.exportPrescan && s.exportPrescan());
+		await awaitStretchReady(chosen);
+
+		setStatus('Rendering…');
+		const tracks = chosen.map((s) => s.exportTrack());
+		const buffer = await renderMix({
+			tracks,
+			masterBpm:  masterClock.bpm,
+			lengthBeats,
+			sampleRate: getAudioContext().sampleRate,
+		});
+
+		setStatus('Encoding…');
+		const blob = encodeWav(buffer);
+		triggerDownload(blob, 'jsloop-export.wav');
+		setStatus('Exported ✓');
+	} catch (err) {
+		console.error('WAV export failed:', err);
+		setStatus('Export failed — see console');
+	} finally {
+		if (exportGoBtn) exportGoBtn.disabled = false;
+	}
+}
+
+function closeExportPanel() {
+	exportOpen = false;
+	if (exportPanel) { exportPanel.remove(); exportPanel = null; }
+	if (exportBtn) exportBtn.classList.remove('active');
+	if (exportKeyHandler) { document.removeEventListener('keydown', exportKeyHandler); exportKeyHandler = null; }
+}
+
+// Build the export panel fresh each open (the slicer roster changes). A modal
+// card over a dimming backdrop, styled with the shared tokens/DragControl.
+function openExportPanel() {
+	const eligible = exportableSlicers();
+	if (!eligible.length) return;
+
+	const backdrop = document.createElement('div');
+	backdrop.className = 'export-backdrop';
+	backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeExportPanel(); });
+
+	const card = document.createElement('div');
+	card.className = 'export-panel';
+
+	const heading = document.createElement('div');
+	heading.className = 'export-title';
+	heading.textContent = 'Export WAV';
+
+	// One checkbox row per eligible slicer.
+	const list = document.createElement('div');
+	list.className = 'export-list';
+	const rows = eligible.map((s, i) => {
+		const meta = s.exportMeta();
+		const row = document.createElement('label');
+		row.className = 'export-row';
+		const cb = document.createElement('input');
+		cb.type = 'checkbox';
+		cb.checked = true;
+		const name = document.createElement('span');
+		name.className = 'export-row-name';
+		name.textContent = meta.fileName || `Slicer ${i + 1}`;
+		const beatsTag = document.createElement('span');
+		beatsTag.className = 'export-row-beats';
+		beatsTag.textContent = `${meta.beats} beat${meta.beats === 1 ? '' : 's'}`;
+		row.appendChild(cb);
+		row.appendChild(name);
+		row.appendChild(beatsTag);
+		list.appendChild(row);
+		return { slicer: s, cb, beats: meta.beats };
+	});
+
+	// Length (beats): default = LCM of the enabled slicers' beat counts. Recomputed
+	// on checkbox change until the user drags it (then their value is respected).
+	let lengthTouched = false;
+	const chosenBeats = () => rows.filter((r) => r.cb.checked).map((r) => r.beats);
+	const lengthCtrl = new DragControl({
+		label: 'Length (beats)',
+		min: 1, max: 256, step: 1,
+		value: beatsLcm(chosenBeats()),
+		format: (v) => `${Math.round(v)}`,
+		onChange: () => { lengthTouched = true; },
+	});
+	const syncDefaultLength = () => {
+		if (lengthTouched) return;
+		const b = chosenBeats();
+		if (b.length) lengthCtrl.setValue(beatsLcm(b));
+	};
+	rows.forEach((r) => r.cb.addEventListener('change', syncDefaultLength));
+
+	const lengthWrap = document.createElement('div');
+	lengthWrap.className = 'export-length';
+	lengthWrap.appendChild(lengthCtrl.getElement());
+
+	const status = document.createElement('div');
+	status.className = 'export-status';
+
+	const actions = document.createElement('div');
+	actions.className = 'export-actions';
+	const cancelBtn = document.createElement('button');
+	cancelBtn.textContent = 'Cancel';
+	cancelBtn.className = 'seq-stop-btn';
+	cancelBtn.addEventListener('click', closeExportPanel);
+	const goBtn = document.createElement('button');
+	goBtn.textContent = 'Export';
+	goBtn.className = 'seq-play-btn';
+	goBtn.addEventListener('click', () => {
+		const chosen = rows.filter((r) => r.cb.checked).map((r) => r.slicer);
+		const lengthBeats = Math.max(1, Math.round(lengthCtrl.getValue()));
+		if (!chosen.length) { status.textContent = 'Select at least one slicer'; return; }
+		runExport(chosen, lengthBeats, status, goBtn);
+	});
+	actions.appendChild(cancelBtn);
+	actions.appendChild(goBtn);
+
+	card.appendChild(heading);
+	card.appendChild(list);
+	card.appendChild(lengthWrap);
+	card.appendChild(status);
+	card.appendChild(actions);
+	backdrop.appendChild(card);
+	document.body.appendChild(backdrop);
+	exportPanel = backdrop;
+	exportOpen  = true;
+	if (exportBtn) exportBtn.classList.add('active');
+	exportKeyHandler = (e) => { if (e.key === 'Escape') closeExportPanel(); };
+	document.addEventListener('keydown', exportKeyHandler);
+}
+
+function toggleExportPanel() {
+	if (exportOpen) closeExportPanel();
+	else openExportPanel();
+}
+
 // Master controls yield to the external MIDI clock while it's enabled.
 function updateMasterControlsEnabled() {
 	const ext = midiClock.isEnabled();
 	if (masterBpmControl) masterBpmControl.setDisabled(ext);
 	if (masterPlayBtn)  masterPlayBtn.disabled  = ext;
 	if (masterStopBtn)  masterStopBtn.disabled  = ext;
+	// Export renders at the master tempo, which isn't the effective tempo while an
+	// external clock drives — disable it (and close an open panel) until sync is off.
+	if (exportBtn) exportBtn.disabled = ext;
+	if (ext && exportOpen) closeExportPanel();
 }
 
 // --- Global transport bar (master clock + MIDI sync + clock indicator) ---
@@ -2353,6 +2553,13 @@ function buildMidiBar() {
 	masterPlayBtn.addEventListener('click', masterPlayAll);
 	masterStopBtn.addEventListener('click', masterStopAll);
 
+	// Export WAV: opens the render panel (offline mix → downloadable WAV).
+	exportBtn = document.createElement('button');
+	exportBtn.textContent = 'Export WAV';
+	exportBtn.className    = 'toggle-btn';
+	exportBtn.title        = 'Render the master mix to a downloadable stereo WAV';
+	exportBtn.addEventListener('click', toggleExportPanel);
+
 	// Global tile-edit mode: OFF = classic packed (repack + length-conserving resize),
 	// ON = leave gaps (free placement, overwrite on drop/grow). A toggle-button like
 	// Loop/Sync. onSeqEditModeChange re-paints it (also fired on restore).
@@ -2434,6 +2641,7 @@ function buildMidiBar() {
 	midiBar.appendChild(setSpan(masterPlayBtn, 1));
 	midiBar.appendChild(setSpan(masterStopBtn, 1));
 	midiBar.appendChild(setSpan(seqModeBtn, 1));    // Packed / Gaps tile-edit mode
+	midiBar.appendChild(setSpan(exportBtn, 1));     // Export WAV
 	midiBar.appendChild(setSpan(title, 1));
 	midiBar.appendChild(setSpan(syncBtn, 1));
 	midiBar.appendChild(setSpan(midiDeviceCtrl.getElement(), 2));    // device names need room
