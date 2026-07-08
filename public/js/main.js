@@ -526,29 +526,35 @@ function createSlicer(savedState = null) {
 	panKnob.onChange    = (v) => { slicer.setPan(v);    scheduleSave(); };
 	pitchKnob.onChange  = (v) => { masterPitch = v; schedulePrescan(); scheduleSave(); };
 
-	// File loading
-	fileInput.addEventListener('change', async (e) => {
-		const file = e.target.files[0];
-		if (file) {
-			await slicer.loadFile(file);
-			// Reset selection to the whole buffer and slice at the current unit
-			// resolution (loadFile slices with a placeholder count). This drives
-			// segmentsliced → default tiles + deriveTransport.
-			virtualStart = 0;
-			virtualEnd   = 1;
-			startInput.value  = 0;
-			endInput.value    = 1;
-			startSlider.value = 0;
-			endSlider.value   = 1;
-			startSliderCtrl.syncFromEl();
-			endSliderCtrl.syncFromEl();
-			applyRange(0, 1, { autoPlay: false, keepPlayhead: false });
-			currentFileName = file.name;
-			renderFileInfo();
-			await putAudio('audio-' + id, file);
-			scheduleSave();
-		}
-	});
+	// File loading — used by the Select File button, waveform drop, and waveform
+	// click-when-empty (all three route through here).
+	const loadAndInitFile = async (file) => {
+		if (!file) return;
+		await slicer.loadFile(file);
+		// Reset selection to the whole buffer and slice at the current unit
+		// resolution (loadFile slices with a placeholder count). This drives
+		// segmentsliced → default tiles + deriveTransport.
+		virtualStart = 0;
+		virtualEnd   = 1;
+		startInput.value  = 0;
+		endInput.value    = 1;
+		startSlider.value = 0;
+		endSlider.value   = 1;
+		startSliderCtrl.syncFromEl();
+		endSliderCtrl.syncFromEl();
+		applyRange(0, 1, { autoPlay: false, keepPlayhead: false });
+		currentFileName = file.name;
+		renderFileInfo();
+		await putAudio('audio-' + id, file);
+		scheduleSave();
+	};
+
+	fileInput.addEventListener('change', (e) => loadAndInitFile(e.target.files[0]));
+
+	// Empty waveform doubles as a drop target + "pick file" affordance. The view
+	// only fires these while the source is empty and only for supported files.
+	slicer.view.addEventListener('filedrop',       (e) => loadAndInitFile(e.detail.file));
+	slicer.view.addEventListener('emptyfileclick', ()  => fileInput.click());
 
 	// --- Virtual zoom window (slider 0..1 → [virtualStart..virtualEnd] of real buffer) ---
 	let virtualStart = 0;
@@ -1248,12 +1254,23 @@ function createSlicer(savedState = null) {
 		scheduleSave();
 	});
 	// Step change → new subdivision means a new cell count (beats × step), so re-slice
-	// the selection into that grid. Tempo is unchanged (it comes from beats).
+	// the selection into that grid. Tempo is unchanged (it comes from beats). User-
+	// marked slices (locked or muted) survive the change: audio + loop position are
+	// rescaled onto the new grid (see preserveMarkedTilesFromPrevGrid) so a mark keeps
+	// guarding the same content — contiguous unit-marks rejoin on downsize; a wide
+	// mark stays wide on upsize (the user can Split it further if they want finer
+	// control).
 	divisionSelect.addEventListener('change', () => {
+		const prevTiles = seq.tiles.slice();
 		divisionDenom = parseInt(divisionSelect.value, 10);
 		const start = clamp01(parseFloat(startInput.value));
 		const end   = clamp01(parseFloat(endInput.value));
 		applyRange(start, end);
+		// applyRange → segmentsliced → seq.tiles reset to defaultTiles(U_new).
+		// Reapply marks from the previous grid on top of those defaults; re-render
+		// only when something actually got re-marked (nothing to preserve → no
+		// second paint).
+		if (preserveMarkedTilesFromPrevGrid(prevTiles)) renderSequencer();
 		schedulePrescan();
 		scheduleSave();
 	});
@@ -1396,6 +1413,94 @@ function createSlicer(savedState = null) {
 			if (c && c.clip && c.clip.locked && c.clip !== exceptClip) return true;
 		}
 		return false;
+	};
+
+	// Re-apply user-marked slices (locked or muted) from a pre-resolution-change tile
+	// snapshot onto the fresh default grid in `seq.tiles`. Each marked run is rescaled
+	// by r = U_new / U_old so its audio + loop position stay put; contiguous runs that
+	// share contiguous source AND the same flags (locked, muted) are coalesced first
+	// so a run of unit-marks at the old resolution can re-emerge as one wider mark at
+	// the new one (and vice versa — splitting on upsize is just what rebuildFromCells
+	// does with a wider paint). Locks and mutes coalesce independently, so a run of
+	// muted tiles doesn't merge with a neighbouring locked one. Marks that shrink
+	// below the sub-step grain, or would overhang the bar after rescale, are dropped
+	// rather than truncated. On downsize collisions the earlier run wins.
+	const isMarked   = (t) => !!t && !t.gap && (t.locked || t.muted);
+	const sameMarks  = (a, b) => !!a.locked === !!b.locked && !!a.muted === !!b.muted;
+	const preserveMarkedTilesFromPrevGrid = (oldTiles) => {
+		const U_new = unitCount();
+		if (!(U_new > 0) || !oldTiles || oldTiles.length === 0) return false;
+		const U_old = oldTiles.reduce((s, t) => s + (t.w || 0), 0);
+		if (!(U_old > 0)) return false;
+
+		// Collect marked runs from the previous grid, coalescing adjacent marks that
+		// share contiguous source AND identical mark flags (so mutes don't merge into
+		// locks, and a downsize can rejoin same-flag unit-marks).
+		const runs = [];
+		let posU = 0;
+		let cur = null;
+		for (const t of oldTiles) {
+			if (isMarked(t)) {
+				const src = t.src || 0;
+				if (cur
+					&& sameMarks(cur, t)
+					&& Math.abs((cur.startU + cur.w) - posU) < 1e-9
+					&& Math.abs((cur.src + cur.w) - src)      < 1e-9) {
+					cur.w += t.w;
+				} else {
+					cur = {
+						startU:   posU,
+						w:        t.w,
+						src,
+						offset:   t.offset || 0,
+						locked:   !!t.locked,
+						muted:    !!t.muted,
+						colorIdx: t.colorIdx,
+					};
+					runs.push(cur);
+				}
+			} else {
+				cur = null;    // any unmarked (or gap) tile breaks the chain
+			}
+			posU += t.w || 0;
+		}
+		if (runs.length === 0) return false;
+
+		const r     = U_new / U_old;
+		const cells = rasterizeBar(seq.tiles);   // the fresh defaults from segmentsliced
+		let painted = false;
+		for (const run of runs) {
+			const startCell = Math.round(run.startU * r * RES);
+			const wCells    = Math.round(run.w      * r * RES);
+			const srcCell   = Math.round(run.src    * r * RES);
+			if (wCells < 1) continue;                                   // sub-cell → too small to represent
+			if (startCell < 0 || startCell + wCells > cells.length) continue;   // out of bar
+
+			// Skip if these cells already carry a mark placed by an earlier run
+			// (first-wins on any downsize collision — regardless of which flag).
+			let conflict = false;
+			for (let k = 0; k < wCells; k++) {
+				const c = cells[startCell + k];
+				if (c && c.clip && (c.clip.locked || c.clip.muted)) { conflict = true; break; }
+			}
+			if (conflict) continue;
+
+			const clip = {
+				src:      srcCell / RES,
+				w:        wCells  / RES,
+				offset:   run.offset,
+				colorIdx: run.colorIdx,
+				locked:   run.locked,
+				muted:    run.muted,
+			};
+			for (let k = 0; k < wCells; k++) {
+				cells[startCell + k] = { clip, srcSub: srcCell + k };
+			}
+			painted = true;
+		}
+		if (!painted) return false;
+		seq.tiles = rebuildFromCells(cells);
+		return true;
 	};
 
 	// Find the (non-gap) tile whose left edge sits at grid cell `cell` (RES units).
@@ -2130,26 +2235,89 @@ function createSlicer(savedState = null) {
 		renderSequencer();
 	});
 
-	// Shuffle the play order. A Fisher-Yates pass where each position swaps with a
-	// random earlier one only with probability `level` (0..1): the amount knob thus
-	// controls how far the result drifts from the current pattern — 0 = no change,
-	// 1 = a full shuffle. Only order changes; each tile keeps its src/w/offset/mute,
-	// so Σ w (loop length) and the available audio are untouched. Safe mid-play: the
-	// transport re-reads seq.tiles each scheduler tick.
+	// Shuffle the play order. A Fisher-Yates pass where each candidate swap fires only
+	// with probability `level` (0..1): the amount knob thus controls how far the result
+	// drifts from the current pattern — 0 = no change, 1 = a full shuffle. Only order
+	// changes; each tile keeps its src/w/offset/mute, so Σ w (loop length) and the
+	// available audio are untouched. Safe mid-play: the transport re-reads seq.tiles
+	// each scheduler tick.
+	//
+	// Locked slices stay put — both their identity AND their apparent start (= Σ w of
+	// everything before them). To keep every lock in place we treat the row as a chain
+	// of buckets (contiguous non-locked runs) separated by locks, and only permute in
+	// ways that preserve each bucket's TOTAL WIDTH:
+	//   1. Whole-bucket swaps between buckets of equal total width — this lets a run
+	//      of thin tiles trade places with a single wide tile between the same locks
+	//      (e.g., [1:1][2:1][3:1] ↔ [5:3] around a locked [4L:4], swapping the tile
+	//      counts as well as the identities).
+	//   2. Within-bucket Fisher-Yates on top, so each bucket's internal order also
+	//      shuffles.
+	// Buckets that don't match any other bucket's width can still shuffle internally
+	// but never swap out; that's the sub-set constraint that keeps the locks anchored.
 	const randomizeTiles = () => {
 		const level = Math.max(0, Math.min(1, randLevel / 100));
-		// Locked slices stay put: shuffle only the movable entries among their own
-		// (non-locked) positions, leaving locked entries pinned at their indices.
-		const movablePos = [];
-		for (let i = 0; i < seq.tiles.length; i++) if (!seq.tiles[i].locked) movablePos.push(i);
-		if (movablePos.length < 2) return;
-		const items = movablePos.map((p) => seq.tiles[p]);
-		for (let a = items.length - 1; a > 0; a--) {
-			if (Math.random() >= level) continue;
-			const b = Math.floor(Math.random() * (a + 1));
-			const tmp = items[a]; items[a] = items[b]; items[b] = tmp;
+
+		// Partition seq.tiles into buckets (non-locked runs) interleaved with locks:
+		// [bucket0, lock0, bucket1, lock1, ..., bucketN]. Bucket .w is the invariant
+		// each swap has to respect; we key equality by RES-scaled integer so fractional
+		// widths compare exactly.
+		const buckets = [{ tiles: [], w: 0 }];
+		const locks   = [];
+		for (const t of seq.tiles) {
+			if (t.locked) {
+				locks.push(t);
+				buckets.push({ tiles: [], w: 0 });
+			} else {
+				const cur = buckets[buckets.length - 1];
+				cur.tiles.push(t);
+				cur.w += (t.w || 0);
+			}
 		}
-		movablePos.forEach((p, k) => { seq.tiles[p] = items[k]; });
+		const wKey = (b) => Math.round(b.w * RES);
+
+		let swapped = false;
+
+		// (1) Whole-bucket swaps. Fisher-Yates over the bucket list, restricted to
+		// same-width partners; empty buckets (0-width slots between adjacent locks)
+		// only swap with other empty buckets, i.e. never usefully.
+		for (let a = buckets.length - 1; a > 0; a--) {
+			if (buckets[a].tiles.length === 0) continue;   // nothing to move out of a
+			if (Math.random() >= level) continue;
+			const wA = wKey(buckets[a]);
+			const partners = [];
+			for (let b = 0; b < a; b++) {
+				if (wKey(buckets[b]) === wA && buckets[b] !== buckets[a]) partners.push(b);
+			}
+			if (partners.length === 0) continue;
+			const b = partners[Math.floor(Math.random() * partners.length)];
+			const tmp = buckets[a].tiles;
+			buckets[a].tiles = buckets[b].tiles;
+			buckets[b].tiles = tmp;
+			// .w stays the same on both sides (that was the swap precondition).
+			swapped = true;
+		}
+
+		// (2) Within-bucket Fisher-Yates.
+		for (const bkt of buckets) {
+			const arr = bkt.tiles;
+			for (let k = arr.length - 1; k > 0; k--) {
+				if (Math.random() >= level) continue;
+				const j = Math.floor(Math.random() * (k + 1));
+				if (j === k) continue;
+				const t = arr[k]; arr[k] = arr[j]; arr[j] = t;
+				swapped = true;
+			}
+		}
+
+		if (!swapped) return;
+
+		// Interleave buckets and locks back into a flat tile row.
+		const rebuilt = [];
+		for (let i = 0; i < buckets.length; i++) {
+			for (const t of buckets[i].tiles) rebuilt.push(t);
+			if (i < locks.length) rebuilt.push(locks[i]);
+		}
+		seq.tiles = rebuilt;
 		renderSequencer();   // also schedules a save
 	};
 	randomizeBtn.addEventListener('click', randomizeTiles);

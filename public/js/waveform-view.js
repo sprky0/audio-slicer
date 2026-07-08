@@ -57,6 +57,9 @@ class WaveformView extends EventTarget {
 		this._draggingHandle     = null; // 'start' | 'end' | null
 		this._dragMoved          = false;
 
+		// External file drag-over (empty-state drop target)
+		this._isDragOver         = false;
+
 		// Pixel sizing
 		this._cssWidth           = 0;
 		this._cssHeight          = this.options.height;
@@ -91,6 +94,7 @@ class WaveformView extends EventTarget {
 		this._resizeObserver.observe(this.container);
 
 		this._bindCanvasEvents();
+		this._bindDragDropEvents();
 	}
 
 	setAudioBuffer(audioBuffer) {
@@ -264,6 +268,51 @@ class WaveformView extends EventTarget {
 		this._drawSubdivisions(width, height);
 		this._drawPlayhead(width, height);
 		this._drawHandles(width, height);
+		this._drawDropOverlay(width, height);
+	}
+
+	// Drop-target visuals for the canvas:
+	//   - empty source:  always show a centered "click or drag a file here" prompt.
+	//   - dragging over: dashed accent ring + tint; if already loaded, an extra
+	//                    "drop to replace" hint sits near the top (out of the way
+	//                    of the centered waveform).
+	_drawDropOverlay(width, height) {
+		const empty = !this.channelData;
+		if (!empty && !this._isDragOver) return;
+		const ctx = this.ctx;
+		ctx.save();
+		if (this._isDragOver) {
+			ctx.fillStyle   = 'rgba(52, 152, 219, 0.14)';
+			ctx.fillRect(0, 0, width, height);
+			ctx.strokeStyle = '#3498db';
+			ctx.lineWidth   = 2;
+			ctx.setLineDash([6, 4]);
+			ctx.strokeRect(1, 1, width - 2, height - 2);
+			ctx.setLineDash([]);
+		}
+		ctx.font         = '13px system-ui, -apple-system, sans-serif';
+		ctx.textAlign    = 'center';
+		if (empty) {
+			ctx.fillStyle    = this._isDragOver ? '#e6f2fb' : '#aaa';
+			ctx.textBaseline = 'middle';
+			ctx.fillText('click or drag a file here', width / 2, height / 2);
+		} else if (this._isDragOver) {
+			// Small pill so the hint stays readable over the waveform.
+			const label = 'drop to replace';
+			const padX  = 10;
+			const padY  = 5;
+			const metrics = ctx.measureText(label);
+			const w  = Math.ceil(metrics.width) + padX * 2;
+			const h  = 22;
+			const x0 = Math.round((width - w) / 2);
+			const y0 = 10;
+			ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+			ctx.fillRect(x0, y0, w, h);
+			ctx.fillStyle    = '#e6f2fb';
+			ctx.textBaseline = 'middle';
+			ctx.fillText(label, width / 2, y0 + h / 2);
+		}
+		ctx.restore();
 	}
 
 	_drawWaveform(width, height) {
@@ -425,6 +474,8 @@ class WaveformView extends EventTarget {
 	}
 
 	_hitTestHandle(x, y) {
+		// No handles are drawn on an empty source, so nothing to hit.
+		if (!this.channelData) return null;
 		const triH = this.options.handleTriangleH;
 		const triW = this.options.handleTriangleW;
 		const tol  = this.options.handleHitTolerance;
@@ -505,6 +556,11 @@ class WaveformView extends EventTarget {
 				this._dragMoved = false;
 				return;
 			}
+			// Empty source — the canvas doubles as the "pick a file" affordance.
+			if (!this.channelData) {
+				this.dispatchEvent(new CustomEvent('emptyfileclick'));
+				return;
+			}
 			const rect   = this.canvas.getBoundingClientRect();
 			const x      = e.clientX - rect.left;
 			const y      = e.clientY - rect.top;
@@ -518,6 +574,63 @@ class WaveformView extends EventTarget {
 					const rel = (x - startX) / (endX - startX);
 					this.dispatchEvent(new CustomEvent('waveformjump', { detail: { rel } }));
 				}
+			}
+		});
+	}
+
+	// Drop target on the waveform. Works whether the source is empty (initial load)
+	// or already has a buffer (drop-to-replace). Supports .wav / .mp3; validated
+	// on drop (types + name), since dragover only exposes MIME categories.
+	// HTML5 DnD here doesn't conflict with the tile row's pointer-driven reorder.
+	_bindDragDropEvents() {
+		const isSupported = (file) => !!file && (
+			/\.(wav|mp3)$/i.test(file.name) ||
+			file.type === 'audio/wav'  || file.type === 'audio/x-wav' ||
+			file.type === 'audio/wave' || file.type === 'audio/mp3'   ||
+			file.type === 'audio/mpeg'
+		);
+		// A file drag exposes the 'Files' type in dataTransfer.types; internal drags
+		// (tile reorder, etc.) don't, so we only preventDefault on real file drags.
+		const hasFiles = (e) => {
+			const t = e.dataTransfer && e.dataTransfer.types;
+			if (!t) return false;
+			for (let i = 0; i < t.length; i++) if (t[i] === 'Files') return true;
+			return false;
+		};
+
+		this.canvas.addEventListener('dragenter', (e) => {
+			if (!hasFiles(e)) return;
+			e.preventDefault();
+			if (!this._isDragOver) {
+				this._isDragOver = true;
+				this._scheduleDraw();
+			}
+		});
+		this.canvas.addEventListener('dragover', (e) => {
+			if (!hasFiles(e)) return;
+			e.preventDefault();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+			if (!this._isDragOver) {
+				this._isDragOver = true;
+				this._scheduleDraw();
+			}
+		});
+		this.canvas.addEventListener('dragleave', (e) => {
+			if (!this._isDragOver) return;
+			// Only clear when the pointer actually leaves the canvas box.
+			const rt = e.relatedTarget;
+			if (rt && this.canvas.contains(rt)) return;
+			this._isDragOver = false;
+			this._scheduleDraw();
+		});
+		this.canvas.addEventListener('drop', (e) => {
+			if (!hasFiles(e)) return;
+			e.preventDefault();
+			this._isDragOver = false;
+			this._scheduleDraw();
+			const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+			if (isSupported(file)) {
+				this.dispatchEvent(new CustomEvent('filedrop', { detail: { file } }));
 			}
 		});
 	}
