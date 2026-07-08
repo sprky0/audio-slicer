@@ -1426,7 +1426,12 @@ function createSlicer(savedState = null) {
 	// below the sub-step grain, or would overhang the bar after rescale, are dropped
 	// rather than truncated. On downsize collisions the earlier run wins.
 	const isMarked   = (t) => !!t && !t.gap && (t.locked || t.muted);
-	const sameMarks  = (a, b) => !!a.locked === !!b.locked && !!a.muted === !!b.muted;
+	// Coalescing also requires matching reverse/fade settings — merging two runs
+	// that differ in those would smear one tile's envelope/direction over both.
+	const sameMarks  = (a, b) => !!a.locked === !!b.locked && !!a.muted === !!b.muted
+		&& !!a.reversed === !!b.reversed
+		&& (a.fadeIn  || 0) === (b.fadeIn  || 0)
+		&& (a.fadeOut || 0) === (b.fadeOut || 0);
 	const preserveMarkedTilesFromPrevGrid = (oldTiles) => {
 		const U_new = unitCount();
 		if (!(U_new > 0) || !oldTiles || oldTiles.length === 0) return false;
@@ -1456,6 +1461,9 @@ function createSlicer(savedState = null) {
 						locked:   !!t.locked,
 						muted:    !!t.muted,
 						colorIdx: t.colorIdx,
+						reversed: !!t.reversed,
+						fadeIn:   t.fadeIn  || 0,
+						fadeOut:  t.fadeOut || 0,
 					};
 					runs.push(cur);
 				}
@@ -1492,6 +1500,9 @@ function createSlicer(savedState = null) {
 				colorIdx: run.colorIdx,
 				locked:   run.locked,
 				muted:    run.muted,
+				reversed: run.reversed,
+				fadeIn:   run.fadeIn,
+				fadeOut:  run.fadeOut,
 			};
 			for (let k = 0; k < wCells; k++) {
 				cells[startCell + k] = { clip, srcSub: srcCell + k };
