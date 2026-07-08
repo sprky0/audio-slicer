@@ -19,7 +19,7 @@
  *   engine        AudioEngine instance (owns the AudioContext + scheduleBuffer)
  *   getTiles      () => tile[]   live array of tiles to play
  *   getStepSec       () => number   seconds per unit/step (from BPM + division)
- *   getTilePlayback  (tile, stepSec) => { buffer, playbackRate, dur, fill } | null
+ *   getTilePlayback  (tile, stepSec) => { buffer, playbackRate, dur, fill, env } | null
  *                    The fill/pitch policy (lives in main.js): resolves a tile to
  *                    a ready-to-play region buffer + rate (time-stretch + pitch
  *                    shift, cached), or null for a silent slot. The engine just
@@ -131,7 +131,7 @@ class Transport {
 			return;
 		}
 		if (r.buffer) {
-			this.engine.scheduleBuffer(r.buffer, when, when + dur, r.playbackRate || 1, { declick: !!r.fill });
+			this.engine.scheduleBuffer(r.buffer, when, when + dur, r.playbackRate || 1, { declick: !!r.fill, env: r.env || null });
 		}
 		this.noteQueue.push({ tileIndex: i, src, w, time: when, stopAt: when + dur });
 	}

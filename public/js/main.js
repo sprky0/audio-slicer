@@ -768,6 +768,41 @@ function createSlicer(savedState = null) {
 		renderSequencer();
 		scheduleSave();
 	});
+	// Reverse: flip the selected slice's sample order (played back-to-front).
+	// The flip is baked into the tile's region buffer (getRegionBuffer), so stretch
+	// builds and export hear it too.
+	const reverseToggle = document.createElement('button');
+	reverseToggle.className = 'toggle-btn';
+	reverseToggle.textContent = 'Rev';
+	reverseToggle.title = 'Reverse the selected slice (plays its audio back-to-front)';
+	reverseToggle.setAttribute('aria-pressed', 'false');
+	reverseToggle.addEventListener('click', () => {
+		const sel = seq.tiles.includes(selectedTile) ? selectedTile : null;
+		if (!sel || sel.gap) return;
+		sel.reversed = !sel.reversed;
+		schedulePrescan();       // reversed stretch variants may need building
+		renderSequencer();       // repaint the (mirrored) waveform + refresh controls
+		scheduleSave();
+	});
+	// Fade in/out: per-slice envelope, stored as a fraction of the slice's length
+	// (0 = off, 1 = the whole slice) so it survives resize and tempo changes.
+	// Fades are gain automation on the scheduled voice — no re-render or stretch
+	// rebuild needed, just repaint the tile's envelope guides.
+	const fadeFromTile  = (v) => Math.round(Math.max(0, Math.min(1, v || 0)) * 100);
+	const makeFadeControl = (label, prop) => new DragControl({
+		label, min: 0, max: 100, step: 1, value: 0,
+		format: (v) => (v > 0 ? `${Math.round(v)}%` : 'off'),
+		onChange: (v) => {
+			const sel = seq.tiles.includes(selectedTile) ? selectedTile : null;
+			if (!sel || sel.gap) return;
+			sel[prop] = Math.max(0, Math.min(100, v)) / 100;
+			redrawTileWaves();
+			scheduleSave();
+		},
+	});
+	const fadeInControl  = makeFadeControl('F.In',  'fadeIn');
+	const fadeOutControl = makeFadeControl('F.Out', 'fadeOut');
+
 	// Duplicate the selected slice into the adjacent cells (◀ before / ▶ after),
 	// overwriting what's under. duplicateSlice() lives with the tile-edit helpers.
 	const dupBeforeBtn = document.createElement('button');
@@ -807,6 +842,13 @@ function createSlicer(savedState = null) {
 		lockToggle.disabled = !clip;
 		lockToggle.classList.toggle('active', clip && !!sel.locked);
 		lockToggle.setAttribute('aria-pressed', String(clip && !!sel.locked));
+		reverseToggle.disabled = !clip;
+		reverseToggle.classList.toggle('active', clip && !!sel.reversed);
+		reverseToggle.setAttribute('aria-pressed', String(clip && !!sel.reversed));
+		fadeInControl.setDisabled(!clip);
+		fadeOutControl.setDisabled(!clip);
+		fadeInControl.setValue(clip ? fadeFromTile(sel.fadeIn) : 0);
+		fadeOutControl.setValue(clip ? fadeFromTile(sel.fadeOut) : 0);
 		dupBeforeBtn.disabled = !clip;
 		dupAfterBtn.disabled  = !clip;
 		refillBtn.disabled    = !canRefill;
@@ -840,6 +882,9 @@ function createSlicer(savedState = null) {
 	seqToolbar.appendChild(setSpan(sliceLabel, 1));                  // Slice settings ↓
 	seqToolbar.appendChild(setSpan(muteToggle, 1));
 	seqToolbar.appendChild(setSpan(lockToggle, 1));
+	seqToolbar.appendChild(setSpan(reverseToggle, 1));
+	seqToolbar.appendChild(setSpan(fadeInControl.getElement(), 2));   // Fade in
+	seqToolbar.appendChild(setSpan(fadeOutControl.getElement(), 2));  // Fade out
 	seqToolbar.appendChild(setSpan(dupBeforeBtn, 1));
 	seqToolbar.appendChild(setSpan(dupAfterBtn, 1));
 	seqToolbar.appendChild(setSpan(refillBtn, 1));
@@ -853,13 +898,17 @@ function createSlicer(savedState = null) {
 	container.appendChild(seqEl);
 
 	// Sequencer state — an ordered list of variable-width tiles.
-	//   tile = { src, w, offset, muted, colorIdx }
+	//   tile = { src, w, offset, muted, colorIdx, reversed, fadeIn, fadeOut }
 	//     src      : start unit (0..U-1) this tile reads source from
 	//     w        : width in units (also its playback duration = w steps)
 	//     offset   : per-tile pitch offset (semitones), stacks on master
 	//     muted    : silent slot (keeps its timing)
 	//     colorIdx : stable palette index — does NOT change on resize, so a slice's
 	//                colour stays put while you drag its length.
+	//     reversed : play this slice's audio back-to-front
+	//     fadeIn / fadeOut : envelope, as 0..1 fractions of the slice's length
+	//                (0 = off, 1 = the whole slice); linear today (fadeCurve is the
+	//                future hook — see envelope.js).
 	// Resizing conserves Σ w (a drag deducts from the play-order neighbour), so the
 	// overall sequence length is fixed once set.
 	const seq = {
@@ -964,13 +1013,15 @@ function createSlicer(savedState = null) {
 	// the original buffer over the current selection (advances roadmap Tier 1c —
 	// no reliance on the equal-segment copies). Unit positions clamp to [0, U] so a
 	// tile that overhangs the selection (possible after reorder+resize) reads only
-	// what's inside it. Cached by `src:w`, cleared on re-slice.
+	// what's inside it. `reversed` bakes a sample-order flip into the copy (a
+	// backwards voice can't be expressed via playbackRate). Cached by `src:w[:r]`,
+	// cleared on re-slice.
 	const regionCache = new Map();
-	const getRegionBuffer = (src, w) => {
+	const getRegionBuffer = (src, w, reversed = false) => {
 		const buf = slicer.engine.audioBuffer;
 		if (!buf) return null;
 		const U   = unitCount();
-		const key = `${src}:${w}`;
+		const key = `${src}:${w}${reversed ? ':r' : ''}`;
 		const hit = regionCache.get(key);
 		if (hit) return hit;
 
@@ -988,7 +1039,11 @@ function createSlicer(savedState = null) {
 		for (let c = 0; c < buf.numberOfChannels; c++) {
 			const dst = out.getChannelData(c);
 			const srcData = buf.getChannelData(c);
-			for (let j = 0; j < len; j++) dst[j] = srcData[startSample + j];
+			if (reversed) {
+				for (let j = 0; j < len; j++) dst[j] = srcData[endSample - 1 - j];
+			} else {
+				for (let j = 0; j < len; j++) dst[j] = srcData[startSample + j];
+			}
 		}
 		regionCache.set(key, out);
 		return out;
@@ -997,8 +1052,8 @@ function createSlicer(savedState = null) {
 	// Build a stretched buffer incrementally across event-loop ticks, reporting
 	// sample-accurate progress to the overlay. Aborts if the slice generation
 	// changes mid-build (the region/cache it targets went stale).
-	const runStretchBuild = (src, w, factor, key) => {
-		const region = getRegionBuffer(src, w);
+	const runStretchBuild = (src, w, factor, key, reversed) => {
+		const region = getRegionBuffer(src, w, reversed);
 		if (!region) { stretchPending.delete(key); return; }
 		const channels = [];
 		for (let c = 0; c < region.numberOfChannels; c++) channels.push(region.getChannelData(c));
@@ -1043,14 +1098,15 @@ function createSlicer(savedState = null) {
 	};
 
 	// Return a cached stretched buffer, or null (and kick a chunked build off the
-	// scheduler tick) on a miss.
-	const getStretched = (src, w, factor) => {
-		const key = `${src}:${w}:${factor}`;
+	// scheduler tick) on a miss. Reversed tiles stretch the reversed region, so
+	// they get their own cache entries.
+	const getStretched = (src, w, factor, reversed = false) => {
+		const key = `${src}:${w}:${factor}${reversed ? ':r' : ''}`;
 		const hit = cacheGet(key);
 		if (hit) return hit;
 		if (!stretchPending.has(key)) {
 			stretchPending.add(key);
-			runStretchBuild(src, w, factor, key);
+			runStretchBuild(src, w, factor, key, reversed);
 		}
 		return null;
 	};
@@ -1071,6 +1127,17 @@ function createSlicer(savedState = null) {
 		const U   = unitCount();
 		if (!buf || U <= 0) return { buffer: null, playbackRate: 1, dur: playDur, fill: false };
 
+		// Fade descriptor: the tile stores fades as 0..1 fractions of its own length,
+		// converted here to seconds of the slot it occupies (so they track BPM and
+		// resize). Applied per voice at schedule time (envelope.js), never baked into
+		// buffers — the caches stay envelope-agnostic.
+		const rev = !!tile.reversed;
+		const env = ((tile.fadeIn > 0) || (tile.fadeOut > 0)) ? {
+			fadeInSec:  Math.max(0, Math.min(1, tile.fadeIn  || 0)) * playDur,
+			fadeOutSec: Math.max(0, Math.min(1, tile.fadeOut || 0)) * playDur,
+			curve: tile.fadeCurve || 'linear',
+		} : null;
+
 		const unitDur     = ((selEndFrac - selStartFrac) * buf.duration) / U;
 		const naturalDur  = tile.w * unitDur;
 		const fillStretch = naturalDur > 0 ? playDur / naturalDur : 1;   // = stepSec/unitDur
@@ -1080,16 +1147,16 @@ function createSlicer(savedState = null) {
 
 		// No stretch and no pitch shift → play the raw region (natural tempo).
 		if (Math.abs(rawFactor - 1) < 0.01 && Math.abs(P - 1) < 1e-6) {
-			return { buffer: getRegionBuffer(tile.src, tile.w), playbackRate: 1, dur: playDur, fill: false };
+			return { buffer: getRegionBuffer(tile.src, tile.w, rev), playbackRate: 1, dur: playDur, fill: false, env };
 		}
 
-		const buffer = getStretched(tile.src, tile.w, quantStretch(rawFactor));
+		const buffer = getStretched(tile.src, tile.w, quantStretch(rawFactor), rev);
 		if (buffer) {
-			return { buffer, playbackRate: P, dur: playDur, fill: true };
+			return { buffer, playbackRate: P, dur: playDur, fill: true, env };
 		}
 		// Cache miss: repitch-fill the raw region for this one pass (rate fills the
 		// slot), snaps to pitch-preserving once the async build lands.
-		return { buffer: getRegionBuffer(tile.src, tile.w), playbackRate: fillStretch > 0 ? 1 / fillStretch : 1, dur: playDur, fill: false };
+		return { buffer: getRegionBuffer(tile.src, tile.w, rev), playbackRate: fillStretch > 0 ? 1 / fillStretch : 1, dur: playDur, fill: false, env };
 	};
 
 	// Eagerly enumerate every tile's stretch need at the current tempo/pitch so all
@@ -1302,7 +1369,7 @@ function createSlicer(savedState = null) {
 				const clip = c.clip, base = c.srcSub;
 				let j = k;
 				while (j < cells.length && cells[j] && cells[j].clip === clip && cells[j].srcSub === base + (j - k)) j++;
-				out.push({ src: base / RES, w: (j - k) / RES, offset: clip.offset || 0, muted: !!clip.muted, colorIdx: clip.colorIdx, locked: !!clip.locked });
+				out.push({ src: base / RES, w: (j - k) / RES, offset: clip.offset || 0, muted: !!clip.muted, colorIdx: clip.colorIdx, locked: !!clip.locked, reversed: !!clip.reversed, fadeIn: clip.fadeIn || 0, fadeOut: clip.fadeOut || 0 });
 				k = j;
 			}
 		}
@@ -1360,7 +1427,7 @@ function createSlicer(savedState = null) {
 		if (start + w > cells.length) w = cells.length - start;         // …and bar end
 		if (w <= 0) return;                                             // no room to place a copy
 		if (rangeHasLocked(cells, start, w, sel)) return;               // don't overwrite a locked slice
-		const copy = { src: sel.src, w: selCount / RES, offset: sel.offset || 0, muted: !!sel.muted, colorIdx: sel.colorIdx };
+		const copy = { src: sel.src, w: selCount / RES, offset: sel.offset || 0, muted: !!sel.muted, colorIdx: sel.colorIdx, reversed: !!sel.reversed, fadeIn: sel.fadeIn || 0, fadeOut: sel.fadeOut || 0 };
 		paintCells(cells, copy, start, w, Math.round((sel.src || 0) * RES));
 		seq.tiles = rebuildFromCells(cells);
 		selectedTile = tileStartingAtCell(start);                       // keep the copy selected
@@ -1451,22 +1518,26 @@ function createSlicer(savedState = null) {
 	};
 
 	// Split tile i in half on the unit grid (needs w ≥ 2) — the way back up to more
-	// slices. Left half keeps the colour; right half gets a fresh one.
+	// slices. Left half keeps the colour; right half gets a fresh one. The envelope
+	// splits with it (fade-in stays on the left half, fade-out on the right), so the
+	// pair still reads roughly as the original slice's shape.
 	const splitTile = (i) => {
 		const t = seq.tiles[i];
 		if (!t || t.w < 2) return;
 		const left = Math.floor(t.w / 2);
 		seq.tiles.splice(i, 1,
-			{ src: t.src,        w: left,        offset: t.offset, muted: t.muted, colorIdx: t.colorIdx },
-			{ src: t.src + left, w: t.w - left,  offset: t.offset, muted: t.muted, colorIdx: nextColorIdx++ });
+			{ src: t.src,        w: left,        offset: t.offset, muted: t.muted, colorIdx: t.colorIdx,   reversed: !!t.reversed, fadeIn: t.fadeIn || 0, fadeOut: 0 },
+			{ src: t.src + left, w: t.w - left,  offset: t.offset, muted: t.muted, colorIdx: nextColorIdx++, reversed: !!t.reversed, fadeIn: 0, fadeOut: t.fadeOut || 0 });
 		renderSequencer();
 	};
 
 	// Draw a tile's own slice waveform (the source region [src, src+w) it reads)
 	// into its backdrop canvas, in the slice's palette colour. Laid edge-to-edge,
 	// the tiles read as one continuous waveform that rearranges with the slices —
-	// each tile sits 1:1 over the audio it plays.
-	const drawTileWave = (canvas, src, w, color) => {
+	// each tile sits 1:1 over the audio it plays. A reversed tile draws its wave
+	// mirrored (what you see is what plays); fades overlay as envelope guide lines.
+	const drawTileWave = (canvas, tile, color) => {
+		const { src, w } = tile;
 		if (!canvas) return;
 		const cssW = canvas.clientWidth;
 		const cssH = canvas.clientHeight;
@@ -1505,6 +1576,16 @@ function createSlicer(savedState = null) {
 			if (a < s0) a = s0;
 			if (b > s1) b = s1;
 			if (b <= a) b = a + 1;
+			// Reversed: mirror the sample window around the region's centre. min/max
+			// over a window is order-independent, so scanning the mirrored range gives
+			// exactly the reversed wave.
+			if (tile.reversed) {
+				const a2 = s0 + s1 - b;
+				const b2 = s0 + s1 - a;
+				a = Math.max(s0, a2);
+				b = Math.min(s1, b2);
+				if (b <= a) b = a + 1;
+			}
 			let min = 1.0, max = -1.0;
 			for (let j = a; j < b; j++) {
 				const v = data[j];
@@ -1517,6 +1598,21 @@ function createSlicer(savedState = null) {
 			ctx.lineTo(x, mid + max * amp);
 		}
 		ctx.stroke();
+
+		// Envelope guides: a line rising over the fade-in span and falling over the
+		// fade-out span. Same proportional scale-down playback uses when the two
+		// would overlap, so the picture matches what's heard.
+		let fi = Math.max(0, Math.min(1, tile.fadeIn  || 0));
+		let fo = Math.max(0, Math.min(1, tile.fadeOut || 0));
+		if (fi + fo > 1) { const s = 1 / (fi + fo); fi *= s; fo *= s; }
+		if (fi > 0 || fo > 0) {
+			ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+			ctx.lineWidth   = 1;
+			ctx.beginPath();
+			if (fi > 0) { ctx.moveTo(0.5, cssH - 0.5); ctx.lineTo(fi * cssW, 0.5); }
+			if (fo > 0) { ctx.moveTo(cssW - fo * cssW, 0.5); ctx.lineTo(cssW - 0.5, cssH - 0.5); }
+			ctx.stroke();
+		}
 	};
 
 	// Redraw every tile's backdrop. Children may include gaps (no _tile), so read the
@@ -1528,7 +1624,7 @@ function createSlicer(savedState = null) {
 			if (!t) continue;
 			// Selected slice's wave is drawn white to pop against its tinted background.
 			const color = (t === selectedTile) ? '#ffffff' : tileColor(t);
-			drawTileWave(el.querySelector('.seq-tile-wave'), t.src, t.w, color);
+			drawTileWave(el.querySelector('.seq-tile-wave'), t, color);
 		}
 	};
 
@@ -1587,6 +1683,16 @@ function createSlicer(savedState = null) {
 				lock.textContent = '🔒';
 				lock.title       = 'Locked — protected from overwrite + randomize';
 				el.appendChild(lock);
+			}
+
+			// Reverse indicator (top-left badge) — the mirrored wave alone can be easy
+			// to miss on short slices.
+			if (tile.reversed) {
+				const rev = document.createElement('span');
+				rev.className   = 'seq-tile-rev';
+				rev.textContent = '◀';
+				rev.title       = 'Reversed — plays back-to-front';
+				el.appendChild(rev);
 			}
 
 			const label = document.createElement('span');
@@ -2071,7 +2177,7 @@ function createSlicer(savedState = null) {
 		seq:            {
 			tiles: seq.tiles.map((t) => (t.gap
 				? { gap: true, w: t.w }
-				: { src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: t.colorIdx, locked: !!t.locked })),
+				: { src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: t.colorIdx, locked: !!t.locked, reversed: !!t.reversed, fadeIn: t.fadeIn || 0, fadeOut: t.fadeOut || 0 })),
 			loop:  seq.loop,
 		},
 	});
@@ -2164,7 +2270,13 @@ function createSlicer(savedState = null) {
 					.filter((t) => t && Number.isFinite(t.w) && t.w > 0 && (t.gap || Number.isFinite(t.src)))
 					.map((t, i) => (t.gap
 						? { gap: true, w: t.w, src: 0 }
-						: { src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: Number.isFinite(t.colorIdx) ? t.colorIdx : i, locked: !!t.locked }))
+						: {
+							src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted,
+							colorIdx: Number.isFinite(t.colorIdx) ? t.colorIdx : i, locked: !!t.locked,
+							reversed: !!t.reversed,
+							fadeIn:  Number.isFinite(t.fadeIn)  ? Math.max(0, Math.min(1, t.fadeIn))  : 0,
+							fadeOut: Number.isFinite(t.fadeOut) ? Math.max(0, Math.min(1, t.fadeOut)) : 0,
+						}))
 				: [];
 			nextColorIdx = seq.tiles.reduce((m, t) => Math.max(m, t.gap ? -1 : t.colorIdx), -1) + 1;
 			seq.loop  = !!savedState.seq.loop;

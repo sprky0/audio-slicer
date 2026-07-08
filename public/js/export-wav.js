@@ -12,10 +12,14 @@
  * — so the export is bit-faithful to playback (time-stretch + pitch included).
  */
 
-// Replicates AudioEngine.scheduleBuffer's per-voice declick: fade to 0 ending at
-// `stopAt` and hard-stop there when the voice is a stretched fill OR would ring
-// past its slot — otherwise let a short slice ring out naturally.
-function scheduleVoice(ctx, dest, buffer, when, stopAt, playbackRate, declick) {
+import { applyEnvelope } from './envelope.js';
+
+// Replicates AudioEngine.scheduleBuffer's per-voice envelope + declick: tile
+// fades come from the same envelope module the live engine uses; the declick
+// fades to 0 ending at `stopAt` and hard-stops there when the voice is a
+// stretched fill OR would ring past its slot — otherwise let a short slice ring
+// out naturally.
+function scheduleVoice(ctx, dest, buffer, when, stopAt, playbackRate, declick, env) {
 	if (!buffer || !(when >= 0)) return;
 	const source = ctx.createBufferSource();
 	source.buffer = buffer;
@@ -28,10 +32,16 @@ function scheduleVoice(ctx, dest, buffer, when, stopAt, playbackRate, declick) {
 
 	const DECLICK = 0.005;
 	const effDur  = source.buffer.duration / source.playbackRate.value;
+	const audibleEnd = (typeof stopAt === 'number' && stopAt > when)
+		? Math.min(stopAt, when + effDur)
+		: when + effDur;
+	const fadesOut = applyEnvelope(voiceGain.gain, when, audibleEnd, env);
 	source.start(when);
 	if (typeof stopAt === 'number' && stopAt > when && (declick || stopAt < when + effDur)) {
-		voiceGain.gain.setValueAtTime(1, Math.max(when, stopAt - DECLICK));
-		voiceGain.gain.linearRampToValueAtTime(0, stopAt);
+		if (!fadesOut) {
+			voiceGain.gain.setValueAtTime(1, Math.max(when, stopAt - DECLICK));
+			voiceGain.gain.linearRampToValueAtTime(0, stopAt);
+		}
 		source.stop(stopAt + DECLICK);
 	}
 }
@@ -62,7 +72,7 @@ function normalize(buf, target = 0.99) {
  *
  * track = { volume, pan, tiles, stepSec, getTilePlayback }
  *   stepSec         seconds per unit/step at the master tempo (a number)
- *   getTilePlayback (tile, stepSec) => { buffer, playbackRate, dur, fill } | null
+ *   getTilePlayback (tile, stepSec) => { buffer, playbackRate, dur, fill, env } | null
  */
 export async function renderMix({ tracks, masterBpm, lengthBeats, sampleRate }) {
 	if (!(masterBpm > 0) || !(lengthBeats > 0) || !(sampleRate > 0)) {
@@ -101,7 +111,7 @@ export async function renderMix({ tracks, masterBpm, lengthBeats, sampleRate }) 
 			const r    = track.getTilePlayback(tile, stepSec);
 			if (r && r.buffer) {
 				// Hard-cut at endTime so the render tail matches a seamless loop.
-				scheduleVoice(ctx, node, r.buffer, t, Math.min(t + dur, endTime), r.playbackRate || 1, !!r.fill);
+				scheduleVoice(ctx, node, r.buffer, t, Math.min(t + dur, endTime), r.playbackRate || 1, !!r.fill, r.env || null);
 			}
 			t += dur;
 			i++;

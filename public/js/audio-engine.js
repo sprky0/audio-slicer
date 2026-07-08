@@ -1,4 +1,5 @@
 import { getAudioContext } from './audio-context.js';
+import { applyEnvelope } from './envelope.js';
 
 /**
  * AudioEngine: Handles audio loading, slicing, playback, segment enable/disable, and state.
@@ -154,8 +155,11 @@ class AudioEngine extends EventTarget {
 	 *
 	 * `playbackRate` resamples (repitches). For stretched buffers it carries the
 	 * pitch-shift ratio; for raw buffers it's 1 (or a fill ratio in fallback).
+	 *
+	 * `env`: optional fade descriptor ({ fadeInSec, fadeOutSec, curve }) applied
+	 * on this voice's own gain — see envelope.js.
 	 */
-	scheduleBuffer(buffer, when, stopAt, playbackRate = 1, { declick = false } = {}) {
+	scheduleBuffer(buffer, when, stopAt, playbackRate = 1, { declick = false, env = null } = {}) {
 		if (!buffer) return null;
 		const source = this.audioContext.createBufferSource();
 		source.buffer = buffer;
@@ -168,10 +172,21 @@ class AudioEngine extends EventTarget {
 
 		const DECLICK = 0.005;
 		const effDur  = source.buffer.duration / source.playbackRate.value;
+		// The voice is audible until its slot cut or its buffer runs out, whichever
+		// comes first — fades anchor to that, not the slot, so a ring-out slice's
+		// fade-out isn't scheduled past its last sample.
+		const audibleEnd = (typeof stopAt === 'number' && stopAt > when)
+			? Math.min(stopAt, when + effDur)
+			: when + effDur;
+		const fadesOut = applyEnvelope(voiceGain.gain, when, audibleEnd, env);
 		source.start(when);
 		if (typeof stopAt === 'number' && stopAt > when && (declick || stopAt < when + effDur)) {
-			voiceGain.gain.setValueAtTime(1, Math.max(when, stopAt - DECLICK));
-			voiceGain.gain.linearRampToValueAtTime(0, stopAt);
+			// A fade-out already reaches silence at the cut — the declick ramp's
+			// setValueAtTime(1, …) would fight it, so only declick without one.
+			if (!fadesOut) {
+				voiceGain.gain.setValueAtTime(1, Math.max(when, stopAt - DECLICK));
+				voiceGain.gain.linearRampToValueAtTime(0, stopAt);
+			}
 			source.stop(stopAt + DECLICK);
 		}
 
