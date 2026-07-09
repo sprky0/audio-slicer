@@ -1567,10 +1567,12 @@ function createSlicer(savedState = null) {
 		renderSequencer();
 	};
 
-	// Gaps-mode edge resize (pure — takes a snapshot list, returns a new list). END
-	// pins the front (src fixed): shrinking leaves a gap, growing overwrites the cells
-	// ahead. START pins the end (src+w fixed): shrinking leaves a front gap, growing
-	// back overwrites cells behind. Bounded to the bar [0,U] and the source [0,U].
+	// Gaps-mode edge resize (pure — takes a snapshot list, returns a new list). The
+	// clip's src is PINNED on both edges (wave data left-aligned; length trades at the
+	// clip's tail). END: shrinking leaves a gap, growing overwrites the cells ahead.
+	// START: shrinking leaves a front gap (the clip starts later, truncated at its
+	// tail), growing back overwrites cells behind (revealing more source after the
+	// clip). Bounded to the bar [0,U] and the source [0,U].
 	const computeResizeGaps = (tiles, i, edge, dU) => {
 		const clip = tiles[i];
 		if (!clip || clip.gap) return tiles;
@@ -1593,17 +1595,15 @@ function createSlicer(savedState = null) {
 				if (c && c.clip && c.clip.locked && c.clip !== clip) { wCells = Math.max(count, k); break; }
 			}
 		} else {
-			const end = first + count;                 // end pinned
+			const end = first + count;                 // end pinned in the bar
 			start = Math.max(0, Math.min(first + dCells, end - minC));
-			srcBase = base + (start - first);
-			if (srcBase < 0) { start -= srcBase; srcBase = 0; }
 			// Don't grow back over a locked slice: start no earlier than just past the
 			// rightmost locked-other cell in the range.
 			for (let p = end - 1; p >= start; p--) {
 				const c = cells[p];
 				if (c && c.clip && c.clip.locked && c.clip !== clip) { start = p + 1; break; }
 			}
-			srcBase = base + (start - first);
+			srcBase = base;    // src pinned — data left-aligned, length trades at the tail
 			wCells = Math.min(end - start, n - start, n - srcBase);
 		}
 		paintCells(cells, clip, start, Math.round(wCells), srcBase);
@@ -1966,9 +1966,11 @@ function createSlicer(savedState = null) {
 			// tiles on the drag side, CASCADING nearest-first. Donors shrink and, once
 			// emptied, are fully ABSORBED (w → 0, dropped on release) — so even a freshly
 			// sliced all-width-1 grid (where no tile has spare units to lend) can still
-			// grow a step by swallowing its neighbours. Donors give/receive from their
-			// TAIL (src anchored), so their leading audio never jumps, and every window
-			// stays inside the cut [0, U]. Each handle exists only where there's a region
+			// grow a step by swallowing its neighbours. EVERY window (dragged tile and
+			// donors alike) keeps its src pinned — wave data is left-aligned, and a
+			// resize only trades length at the window's TAIL: shrinking truncates a
+			// clip's end, growing reveals more source after it. Every window stays
+			// inside the cut [0, U]. Each handle exists only where there's a region
 			// to trade with (start: i>0, end: i<last); the outer edges are pinned to the
 			// cut. Loop length is unchanged; the step count drops as steps are absorbed.
 			{
@@ -2049,12 +2051,16 @@ function createSlicer(savedState = null) {
 							seq.tiles[i].w = w0[i] + moved;        // i.src pinned (front anchored)
 						};
 
-						// START drag: pin tile i's END, move its FRONT, trading units with
-						// the tiles before it. dU<0 extends back, pulling from i-1, i-2, …
+						// START drag: move tile i's FRONT in the bar, trading units with the
+						// tiles before it. dU<0 extends back, pulling from i-1, i-2, …
 						// (donors absorbed to w → 0); dU>0 retracts the front (hands units
-						// back to the preceding tiles' tails).
+						// back to the preceding tiles' tails). Tile i's source stays PINNED
+						// at src (its wave data is left-aligned): growing reveals more
+						// source at its tail, shrinking truncates its tail — the donor's
+						// lost audio is genuinely gone, never re-surfacing on i's front.
+						// Growth is bounded by the source remaining after i's window.
 						const cascadeStart = (dU) => {
-							let want = Math.min(Math.max(dU, -src0[i]), w0[i] - MIN_W);
+							let want = Math.min(Math.max(dU, -(U - src0[i] - w0[i])), w0[i] - MIN_W);
 							let moved = 0;
 							if (want < 0) {
 								let need = -want;
@@ -2073,8 +2079,7 @@ function createSlicer(savedState = null) {
 								}
 								moved = want - surplus;
 							}
-							seq.tiles[i].src = src0[i] + moved;    // end pinned: src+w constant
-							seq.tiles[i].w   = w0[i]  - moved;
+							seq.tiles[i].w = w0[i] - moved;    // src pinned: length trades at the tail
 						};
 
 						const onMove = (e2) => {
