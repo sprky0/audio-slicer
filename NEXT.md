@@ -1,6 +1,6 @@
 # Where we are / next steps
 
-Working notes for jsloop. Updated 2026-07-04, branch
+Working notes for jsloop. Updated 2026-07-10, branch
 `feature-slice-drag-sequencer`. (Completed work lives in git history; this file is
 the current shape + what's next.)
 
@@ -21,14 +21,30 @@ locked to one master clock.
   selection highlights via background tint + white waveform (no border/movement)
   and shows a clip's length handles. A **"Slice" settings** group (right of Step,
   disabled when nothing is selected) acts on the selection:
+  - **All** — broadcast toggle: while lit, Mute/Rev/Fades/Refill act on EVERY
+    slice (fill-up semantics: mixed → all on; all on → all off). Lock/Dup stay
+    per-slice (positional). Transient UI, not persisted.
   - **Mute** / **Lock** (clip only) — Lock protects a slice from being overwritten
     (moves/dups blocked, resize-grow clamps) and from Randomize (stays pinned); it
     shows an orange ring + 🔒. `tile.locked`, persisted.
+  - **Rev** — reverse the slice (sample flip baked into the region buffer;
+    rev-aware region/stretch cache keys; mirrored tile wave + ◀ badge).
+    `tile.reversed`, persisted, export-faithful.
+  - **F.In / F.Out** — per-slice fade envelope, stored as 0..1 fractions of the
+    slice's length, applied as per-voice gain automation at schedule time
+    (`envelope.js` — shared curve registry, linear today; live engine + WAV
+    export use the same code). `tile.fadeIn/fadeOut`, persisted.
   - **Dup ◀ / Dup ▶** (clip only) — stamp a clone before/after, overwriting under it.
-  - **Refill** (gap OR moved clip) — set the entry's `src` to its grid position so
-    it reads the source audio native to that spot (fills a gap, or resets a
-    moved/duplicated slice). Enabled only when there's work to do.
+  - **Refill** (anything non-pristine) — set the entry's `src` to its grid
+    position + default settings (fills a gap; resets a moved slice; clears
+    offset/mute/rev/fades). With All: restores everything except locked slices.
   - (Removed: the old per-tile mute dot and the redundant details-panel "Slice" button.)
+  - **Resize semantics — the boundary EATS what it moves over.** Drag right →
+    the next clip's head is overwritten (`src` advances); drag left → the
+    previous clip's tail truncates. The growing clip keeps its own `src` pinned
+    and reveals more of its own source at its tail, so eaten audio is genuinely
+    gone (never migrates onto a neighbour). Same rule in both edit modes; on a
+    fresh grid it reads as sliding a cut point through continuous source.
   - **Packed reorder** = live reflow: the dragged tile is shuffled through seq.tiles +
     the DOM as you drag (no drop line); the ghost snaps over its live slot; release
     just re-renders + saves. Drop index excludes the dragged tile + counts midpoints
@@ -41,10 +57,18 @@ locked to one master clock.
   280↔96) for tile-row height (`--tile-h`, 7u↔16u). `applyEditMode()` in main.js.
   Newly-added (empty) slicers open in **edit**; restored/duplicated (already
   configured) open in **perform** — `detailsShown = !savedState`.
-- **Master transport (Tier 1c done).** Shared AudioContext singleton
-  (`audio-context.js`); every engine shares it (own gain/panner → shared
-  destination; `dispose()` disconnects, never closes). `Transport.start(atTime)` +
-  `startAllAligned()` anchor all tracks to one clock instant → sample-locked.
+- **Master transport + BeatGrid (drift-free lock).** Shared AudioContext
+  singleton (`audio-context.js`) + shared **BeatGrid** (`beat-grid.js`): one
+  beat↔audio-time mapping every Transport schedules against ABSOLUTELY (no
+  accumulated seconds). Tempo changes re-anchor the grid once,
+  phase-continuously → all tracks correct identically, zero relative drift.
+  When the grid moves under a transport it skips tiles wholly in the past and
+  starts a partial tile late with an offset INTO its audio (`offsetSec` on
+  `scheduleBuffer`). Individual start while others play joins IN PHASE
+  (anchors to the current loop boundary, skips in mid-bar). External MIDI is
+  PHASE-locked via a per-pulse PLL (midi-clock emits (beat, timestamp); main.js
+  slews the grid, snaps on gross error) — verified ~1.6 ms mean phase error
+  against a jittered synthetic 116 BPM clock. Debug handle: `window.__jsloop`.
 - **Per-slicer actions** — Add / **Duplicate** (clones a slicer via its `getState()`
   snapshot + a copied audio blob, slotted in right after) / Remove.
 - **Unified DragControl** everywhere (`drag-control.js`); fluid relative-unit grid
@@ -61,54 +85,27 @@ locked to one master clock.
   disabled) the controller doesn't emit 'stopped', so the floating transport could
   linger. Play-All-dismiss works; the self-end path is unexercised.
 - **Manual passes not yet done headlessly:** MIDI device hot-plug with real
-  hardware; the gaps-mode START (green) handle + pack-mode cascade absorbing a
-  pre-existing gap (both share verified code paths).
+  hardware; the external-clock PHASE lock against a real device (verified with
+  synthetic pulses through the real handler chain); the gaps-mode START (green)
+  handle + pack-mode cascade absorbing a pre-existing gap (both share verified
+  code paths).
 - **Decision left open:** Vol/Pan/Pitch live in the always-visible header (they
   affect sequenced output), not the details panel. Move if you'd prefer.
 
-## Export WAV — agreed design (2026-07-04, not yet built)
+## Export WAV — shipped (export-wav.js)
 
-Render the mix offline to a downloadable stereo WAV. No new deps
-(OfflineAudioContext + hand-rolled WAV header + Blob download).
-
-**UI:** an "Export WAV" button in the top Master bar opens a small panel:
-- a checkbox per slicer (label + filename), default all enabled — chooses which
-  slicers render into the mix;
-- a **Length (beats)** control, default = **LCM of the enabled slicers' beat
-  counts** (so every loop lands on the boundary), freely overridable longer OR
-  shorter;
-- an **Export** button.
-
-**Render:**
-- `OfflineAudioContext(2, frames, sampleRate)`, sampleRate = shared-ctx rate,
-  `frames = round(N · (60/masterBPM) · sampleRate)`. masterBPM = the effective
-  master tempo (what plays). Output = exactly N beats.
-- Per enabled slicer: build a gain(→panner)→destination graph on the offline ctx
-  mirroring the engine (apply the slicer's Vol/Pan). Walk its tiles accumulating
-  the master `stepSec`; resolve each tile via `getTilePlayback(tile, stepSec)` and
-  schedule its buffer at the cumulative time through the slicer's gain, at its
-  `playbackRate`. Loop the tile list (advancing time) until N beats; skip
-  gaps/muted (silent slots).
-- **Hard-cut at N beats:** don't schedule any voice start ≥ endTime; `source.stop`
-  at endTime; truncate the rendered buffer to exactly `frames` → seamless loop.
-- **Peak-normalize:** after render, scale all samples so the max abs peak hits
-  ~0.99 (never clips; per-slicer Vol still sets the balance).
-- Encode: interleave 2 channels → 16-bit PCM → RIFF/WAV `Blob` →
-  `URL.createObjectURL` → `<a download="jsloop-export.wav">`.
-
-**Implementation notes / risks:**
-- Buffers created on the online ctx are reused in the offline ctx (same rate) — OK.
-- Time-stretch readiness: `getTilePlayback` returns a null/repitch-fallback buffer
-  on a stretch-cache miss. For a pitch-preserving export, prescan + await the WSOLA
-  builds before rendering (else accept the repitch fallback). Decide at build time.
-- Needs each slicer to expose its `beats` (for the LCM) — `getState().beats` or a
-  small accessor on the `slicers[]` entry.
-- 16-bit for now; 24-bit is a possible later option.
+Offline render of the master mix → normalized stereo 16-bit WAV, as designed:
+Master-bar button → panel (per-slicer checkboxes, Length default = LCM of the
+chosen beat counts) → OfflineAudioContext render through the same
+`getTilePlayback` policy as live playback (WSOLA builds prescanned + awaited →
+pitch-correct; per-slice fades/reverse included), hard-cut at N beats,
+peak-normalized to ~0.99, RIFF/WAV blob download. 24-bit remains a later option.
 
 ## Next: bigger bets
 
-- **Tier 2 leftovers** — per-step reverse/gain/probability; transient detection +
-  draggable non-uniform slice markers.
+- **Tier 2 leftovers** — per-step gain/probability (reverse + fades shipped);
+  fade curve shapes beyond linear (drop into `envelope.js`'s FADE_CURVES);
+  transient detection + draggable non-uniform slice markers.
 - **Richer meter** (future, per discussion) — selectable beat unit (dotted values,
   e.g. 1.5 = dotted quarter) or an odd/compound time-signature editor, building on
   the Beats model.
@@ -119,5 +116,6 @@ Render the mix offline to a downloadable stereo WAV. No new deps
 
 - Per-track BPM is hidden (master governs); the element still exists in memory so
   `setMidiBpm`'s value/lock writes stay harmless.
-- A track added mid-playback isn't phase-aligned until the next Play All (it
-  self-anchors on individual start; Play All re-aligns everything).
+- Start-handle GROW is bounded by the source remaining after the clip's window,
+  so a slice whose window already ends at the cut can't grow via its start
+  handle (a silent-tail "sampler-style" overgrow is a possible follow-up).
