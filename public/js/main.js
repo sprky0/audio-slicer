@@ -746,19 +746,47 @@ function createSlicer(savedState = null) {
 	const seqStatus = document.createElement('span');
 	seqStatus.className = 'seq-status';
 
-	// --- Slice settings: act on the currently SELECTED tile (click a tile to select).
-	// Sits to the right of Step. Disabled while nothing is selected. Mute replaces the
-	// old per-tile mute dot.
+	// --- Slice settings: act on the currently SELECTED tile (click a tile to select),
+	// or on EVERY slice at once while the All toggle is engaged. Sits to the right of
+	// Step. Disabled while nothing is targeted. Mute replaces the old per-tile mute dot.
 	const sliceLabel = makeLabel('Slice');
+
+	// All: broadcast the slice settings (Mute, Rev, Fades, Refill) to every slice.
+	// Transient UI like the selection — not persisted. Lock and Dup stay per-slice
+	// (they're positional: pinning or cloning one specific slice).
+	let allSlices = false;
+	const allToggle = document.createElement('button');
+	allToggle.className = 'toggle-btn';
+	allToggle.textContent = 'All';
+	allToggle.title = 'Apply the slice settings (Mute, Rev, Fades, Refill) to every slice at once';
+	allToggle.setAttribute('aria-pressed', 'false');
+	allToggle.addEventListener('click', () => {
+		allSlices = !allSlices;
+		allToggle.classList.toggle('active', allSlices);
+		allToggle.setAttribute('aria-pressed', String(allSlices));
+		updateSliceSettings();
+	});
+
+	// The clips a slice-settings control acts on: every clip when All is engaged,
+	// else just the selected one. Gaps carry no audio → nothing to mute/reverse/fade.
+	const targetClips = () => {
+		if (allSlices) return seq.tiles.filter((t) => !t.gap);
+		const sel = seq.tiles.includes(selectedTile) ? selectedTile : null;
+		return (sel && !sel.gap) ? [sel] : [];
+	};
+
 	const muteToggle = document.createElement('button');
 	muteToggle.className = 'toggle-btn';
 	muteToggle.textContent = 'Mute';
 	muteToggle.setAttribute('aria-pressed', 'false');
 	muteToggle.addEventListener('click', () => {
-		const sel = seq.tiles.includes(selectedTile) ? selectedTile : null;
-		if (!sel) return;
-		sel.muted = !sel.muted;
-		renderSequencer();       // repaint the tile's muted state + refresh these controls
+		// Toggle-all semantics: if every target is already muted, unmute them all;
+		// otherwise mute them all. With a single target this is a plain toggle.
+		const clips = targetClips();
+		if (!clips.length) return;
+		const on = !clips.every((t) => t.muted);
+		clips.forEach((t) => { t.muted = on; });
+		renderSequencer();       // repaint the tiles' muted state + refresh these controls
 		scheduleSave();
 	});
 	// Lock: protect the selected slice from being overwritten (gaps-mode paints flow
@@ -774,20 +802,21 @@ function createSlicer(savedState = null) {
 		renderSequencer();
 		scheduleSave();
 	});
-	// Reverse: flip the selected slice's sample order (played back-to-front).
+	// Reverse: flip the targeted slices' sample order (played back-to-front).
 	// The flip is baked into the tile's region buffer (getRegionBuffer), so stretch
-	// builds and export hear it too.
+	// builds and export hear it too. Same toggle-all semantics as Mute.
 	const reverseToggle = document.createElement('button');
 	reverseToggle.className = 'toggle-btn';
 	reverseToggle.textContent = 'Rev';
-	reverseToggle.title = 'Reverse the selected slice (plays its audio back-to-front)';
+	reverseToggle.title = 'Reverse the targeted slice(s) — plays the audio back-to-front';
 	reverseToggle.setAttribute('aria-pressed', 'false');
 	reverseToggle.addEventListener('click', () => {
-		const sel = seq.tiles.includes(selectedTile) ? selectedTile : null;
-		if (!sel || sel.gap) return;
-		sel.reversed = !sel.reversed;
+		const clips = targetClips();
+		if (!clips.length) return;
+		const on = !clips.every((t) => t.reversed);
+		clips.forEach((t) => { t.reversed = on; });
 		schedulePrescan();       // reversed stretch variants may need building
-		renderSequencer();       // repaint the (mirrored) waveform + refresh controls
+		renderSequencer();       // repaint the (mirrored) waveforms + refresh controls
 		scheduleSave();
 	});
 	// Fade in/out: per-slice envelope, stored as a fraction of the slice's length
@@ -799,9 +828,10 @@ function createSlicer(savedState = null) {
 		label, min: 0, max: 100, step: 1, value: 0,
 		format: (v) => (v > 0 ? `${Math.round(v)}%` : 'off'),
 		onChange: (v) => {
-			const sel = seq.tiles.includes(selectedTile) ? selectedTile : null;
-			if (!sel || sel.gap) return;
-			sel[prop] = Math.max(0, Math.min(100, v)) / 100;
+			const clips = targetClips();
+			if (!clips.length) return;
+			const frac = Math.max(0, Math.min(100, v)) / 100;
+			clips.forEach((t) => { t[prop] = frac; });
 			redrawTileWaves();
 			scheduleSave();
 		},
@@ -825,7 +855,7 @@ function createSlicer(savedState = null) {
 	// drifted from its position).
 	const refillBtn = document.createElement('button');
 	refillBtn.textContent = 'Refill';
-	refillBtn.title = 'Fill the selected empty space — or reset the selected slice — to the source audio native to its position';
+	refillBtn.title = 'Fill the selected empty space — or reset the selected slice — to the source audio native to its position. With All: restore every slice (locked ones stay put)';
 	refillBtn.addEventListener('click', () => refillSelected());
 
 	// Start position (in units) of an entry within the bar, or -1 if not found.
@@ -835,42 +865,83 @@ function createSlicer(savedState = null) {
 		return -1;
 	};
 
-	// Reflect the selection into the slice-settings controls.
+	// A pristine entry is a clip sitting at its native source position with default
+	// settings — nothing for Refill to restore. (Lock is deliberately ignored: it's
+	// a protection flag, not audio state.)
+	const isPristine = (t, start) => !t.gap
+		&& Math.abs((t.src || 0) - start) <= 1e-6
+		&& !t.offset && !t.muted && !t.reversed && !(t.fadeIn > 0) && !(t.fadeOut > 0);
+
+	// Reflect the current target (selection, or every slice in All mode) into the
+	// slice-settings controls. In All mode the toggles read as "on when ALL slices
+	// are on", and the fade controls display the selected slice if any, else the
+	// first clip.
 	const updateSliceSettings = () => {
-		const sel  = seq.tiles.includes(selectedTile) ? selectedTile : null;
-		const clip = !!(sel && !sel.gap);
+		const sel   = seq.tiles.includes(selectedTile) ? selectedTile : null;
+		const clip  = !!(sel && !sel.gap);
+		const clips = seq.tiles.filter((t) => !t.gap);
 		const start = sel ? entryStartUnit(sel) : -1;
-		// Refill possible for a gap, or a clip that isn't already native to its slot.
-		const canRefill = !!sel && (sel.gap || Math.abs((sel.src || 0) - start) > 1e-6);
-		muteToggle.disabled = !clip;
-		muteToggle.classList.toggle('active', clip && !!sel.muted);
-		muteToggle.setAttribute('aria-pressed', String(clip && !!sel.muted));
+		const act   = allSlices ? clips.length > 0 : clip;
+		// Refill: enabled when any target has something to restore. All mode skips
+		// locked slices (they're protected — see refillTargets), so they don't count.
+		let canRefill;
+		if (allSlices) {
+			let s = 0;
+			canRefill = seq.tiles.some((t) => {
+				const p = t.locked || isPristine(t, s);
+				s += t.w;
+				return !p;
+			});
+		} else {
+			canRefill = !!sel && !isPristine(sel, start);
+		}
+		const muteOn = allSlices ? (clips.length > 0 && clips.every((t) => t.muted))    : (clip && !!sel.muted);
+		const revOn  = allSlices ? (clips.length > 0 && clips.every((t) => t.reversed)) : (clip && !!sel.reversed);
+		muteToggle.disabled = !act;
+		muteToggle.classList.toggle('active', muteOn);
+		muteToggle.setAttribute('aria-pressed', String(muteOn));
 		lockToggle.disabled = !clip;
 		lockToggle.classList.toggle('active', clip && !!sel.locked);
 		lockToggle.setAttribute('aria-pressed', String(clip && !!sel.locked));
-		reverseToggle.disabled = !clip;
-		reverseToggle.classList.toggle('active', clip && !!sel.reversed);
-		reverseToggle.setAttribute('aria-pressed', String(clip && !!sel.reversed));
-		fadeInControl.setDisabled(!clip);
-		fadeOutControl.setDisabled(!clip);
-		fadeInControl.setValue(clip ? fadeFromTile(sel.fadeIn) : 0);
-		fadeOutControl.setValue(clip ? fadeFromTile(sel.fadeOut) : 0);
+		reverseToggle.disabled = !act;
+		reverseToggle.classList.toggle('active', revOn);
+		reverseToggle.setAttribute('aria-pressed', String(revOn));
+		const fadeSrc = clip ? sel : (allSlices ? clips[0] : null);
+		fadeInControl.setDisabled(!act);
+		fadeOutControl.setDisabled(!act);
+		fadeInControl.setValue(fadeSrc ? fadeFromTile(fadeSrc.fadeIn) : 0);
+		fadeOutControl.setValue(fadeSrc ? fadeFromTile(fadeSrc.fadeOut) : 0);
 		dupBeforeBtn.disabled = !clip;
 		dupAfterBtn.disabled  = !clip;
 		refillBtn.disabled    = !canRefill;
-		sliceLabel.classList.toggle('disabled', !sel);
+		sliceLabel.classList.toggle('disabled', !sel && !allSlices);
 	};
 
-	// Replace the selected entry (gap or clip) with the default slice for its position:
+	// Replace an entry (gap or clip) with the default slice for its position:
 	// src = its start unit, so it reads the source region that naturally sits there.
-	const refillSelected = () => {
-		const idx = seq.tiles.indexOf(selectedTile);
-		if (idx < 0) return;
-		const start = entryStartUnit(selectedTile);
-		if (start < 0) return;
+	const refillEntry = (idx, start) => {
 		const fresh = { src: start, w: seq.tiles[idx].w, offset: 0, muted: false, colorIdx: Math.round(start) };
 		seq.tiles[idx] = fresh;
-		selectedTile   = fresh;    // keep the (now refilled) entry selected
+		return fresh;
+	};
+	const refillSelected = () => {
+		if (allSlices) {
+			// Restore every entry to its native slice — except locked ones, which
+			// stay protected exactly as they are.
+			let s = 0;
+			for (let i = 0; i < seq.tiles.length; i++) {
+				const w = seq.tiles[i].w;
+				if (!seq.tiles[i].locked) refillEntry(i, s);
+				s += w;
+			}
+			selectedTile = null;      // old selection object was replaced
+		} else {
+			const idx = seq.tiles.indexOf(selectedTile);
+			if (idx < 0) return;
+			const start = entryStartUnit(selectedTile);
+			if (start < 0) return;
+			selectedTile = refillEntry(idx, start);   // keep the refilled entry selected
+		}
 		renderSequencer();
 		scheduleSave();
 	};
@@ -886,6 +957,7 @@ function createSlicer(savedState = null) {
 	// stay in memory so setMidiBpm's value/lock writes are harmless).
 	seqToolbar.appendChild(setSpan(stepControl.getElement(), 1));    // Step
 	seqToolbar.appendChild(setSpan(sliceLabel, 1));                  // Slice settings ↓
+	seqToolbar.appendChild(setSpan(allToggle, 1));
 	seqToolbar.appendChild(setSpan(muteToggle, 1));
 	seqToolbar.appendChild(setSpan(lockToggle, 1));
 	seqToolbar.appendChild(setSpan(reverseToggle, 1));
