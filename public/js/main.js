@@ -1,5 +1,6 @@
 import AudioSlicerController from './audio-slicer-controller.js';
 import Transport from './transport.js';
+import grid from './beat-grid.js';
 import DragControl from './drag-control.js';
 import PALETTE from './palette.js';
 import midiClock from './midi-clock.js';
@@ -2259,8 +2260,9 @@ function createSlicer(savedState = null) {
 
 	const transport = new Transport({
 		engine:          slicer.engine,
+		grid,                                          // shared beat↔time mapping (lock-in)
 		getTiles:        () => seq.tiles,
-		getStepSec:      stepSec,
+		getStepBeats:    () => 4 / divisionDenom,      // a 1/D-note step is 4/D quarter-notes
 		getTilePlayback: getTilePlayback,
 		isLooping:       () => seq.loop,
 		onTileVisual: (tileIndex, src, w, frac) => {
@@ -2301,10 +2303,23 @@ function createSlicer(savedState = null) {
 	let playOrder = -1;
 
 	// `atTime`: shared-clock anchor from the master so every track starts aligned
-	// (Tier 1c). Undefined for individual play → the transport self-anchors.
-	const startSeqPlayback = async (atTime) => {
+	// (Tier 1c). `anchorBeat`: absolute grid beat for loop position 0 (may lie in
+	// the past — the transport skips forward into the bar). Neither given
+	// (individual Play): if other tracks are already running, JOIN IN PHASE by
+	// anchoring to the current iteration of this loop on the shared grid;
+	// otherwise self-anchor and play from the top.
+	const startSeqPlayback = async (atTime, anchorBeat) => {
 		if (seq.isPlaying) return;
 		if (seq.tiles.length === 0) return;
+
+		if (typeof anchorBeat !== 'number' && typeof atTime !== 'number' && grid.running) {
+			const othersPlaying = slicers.some((s) => s.id !== id && s.getClockInfo && s.getClockInfo().playing);
+			if (othersPlaying) {
+				const L = beatCount();
+				const nowBeat = grid.beatAtTime(slicer.engine.audioContext.currentTime + 0.05);
+				anchorBeat = Math.floor(nowBeat / L) * L;   // this loop's current iteration start
+			}
+		}
 
 		playOrder       = playSeqCounter++;
 		seq.isPlaying   = true;
@@ -2314,7 +2329,7 @@ function createSlicer(savedState = null) {
 		renderSequencer();    // reflect playing state (disables drag/resize)
 
 		prescanStretches();   // enqueue all needed stretch builds up front (one smooth bar)
-		await transport.start(atTime);
+		await transport.start(atTime, { anchorBeat: typeof anchorBeat === 'number' ? anchorBeat : undefined });
 	};
 
 	// transport.stop() cancels scheduled audio + both timers, then fires onStop
@@ -2468,6 +2483,7 @@ function createSlicer(savedState = null) {
 
 	slicers.push({
 		id, getState, setMidiBpm, getClockInfo,
+		_transport: transport,       // debug/verification only — not app API
 		seqStart: startSeqPlayback,
 		seqStop:  stopSeqPlayback,
 		hasTiles: () => seq.tiles.length > 0,
@@ -2612,9 +2628,12 @@ const clampMasterBpm = (v) => Math.max(MASTER_BPM_MIN, Math.min(MASTER_BPM_MAX, 
 // True when the internal master owns the tempo (no external MIDI clock engaged).
 function masterDriving() { return !midiClock.isEnabled(); }
 
-// Push the master tempo to every slicer (locks each slicer's BPM to it).
+// Push the master tempo to every slicer (locks each slicer's BPM to it) and
+// re-anchor the shared beat grid — phase-continuous at "now", so every running
+// transport adopts the new tempo from the SAME instant and stays locked.
 function applyMasterTempo() {
 	if (!masterDriving() || masterClock.bpm == null) return;
+	grid.setTempo(masterClock.bpm, getAudioContext().currentTime);
 	for (const s of slicers) s.setMidiBpm && s.setMidiBpm(masterClock.bpm);
 }
 
@@ -2637,10 +2656,18 @@ async function startAllAligned() {
 	const ctx = getAudioContext();
 	if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (err) { /* gesture needed */ } }
 	const when = ctx.currentTime + 0.12;
+	// Internal master: fresh grid — bar 0 for the whole rack lands at `when`.
+	// External MIDI: the grid is already phase-locked to the device (PLL below);
+	// anchor every track to grid beat 0 (the external Start). That instant may
+	// already be in the past — the transports skip forward into the bar, so
+	// Start AND Continue both land in phase with the device.
+	const driving = masterDriving();
+	if (driving) grid.restart(when);
+	const anchor  = driving ? undefined : 0;
 	for (const s of slicers) {
 		if (!(s.hasTiles && s.hasTiles())) continue;
 		s.seqStop  && s.seqStop();    // restart from the top
-		s.seqStart && s.seqStart(when);
+		s.seqStart && s.seqStart(when, anchor);
 	}
 }
 
@@ -2652,6 +2679,7 @@ function masterPlayAll() {
 function masterStopAll() {
 	masterClock.running = false;
 	for (const s of slicers) s.seqStop && s.seqStop();
+	grid.stop();   // next solo start re-anchors instead of joining a stale phase
 }
 
 // --- WAV export -------------------------------------------------------------
@@ -3099,9 +3127,10 @@ function updateClockIndicator() {
 	requestAnimationFrame(updateClockIndicator);
 }
 
-// Derived tempo → every slicer follows the master clock.
+// Derived tempo → the shared grid (phase-continuous) + every slicer's display.
 midiClock.onBpm((bpm) => {
 	if (!midiClock.isEnabled()) return;
+	grid.setTempo(bpm, getAudioContext().currentTime);
 	for (const s of slicers) s.setMidiBpm && s.setMidiBpm(bpm);
 	updateMidiStatus();
 });
@@ -3112,10 +3141,45 @@ midiClock.onTransport((ev) => {
 	if (ev === 'stop') {
 		for (const s of slicers) s.seqStop && s.seqStop();
 	} else {
-		// start/continue: (re)start every track on one shared anchor → aligned.
+		// start: the device's beat 0 is (approximately) now — hard-anchor the grid
+		// there; the PLL below trims the residual within a few pulses. continue:
+		// the pulse count carries on, so the existing grid phase stays valid.
+		if (ev === 'start') {
+			grid.syncPhase(0, getAudioContext().currentTime, midiClock.getBpm() || grid.bpm);
+		}
+		// (Re)start every track anchored to grid beat 0 → all in phase with the device.
 		startAllAligned();
 	}
 	updateMidiStatus();
+});
+
+// --- External-clock phase lock (PLL) ------------------------------------------
+// Tempo-matching alone still drifts: any error in the averaged BPM integrates
+// into phase, and the estimate lags real tempo changes by its window. So every
+// MIDI pulse is also treated as a PHASE observation: pulse n says beat n/24
+// happened at its timestamp. Mapped onto the audio clock, the difference from
+// grid.timeAtBeat(beat) is the grid's phase error. We smooth it over pulses
+// (event delivery jitters by a few ms) and slew the grid gently toward zero,
+// snapping outright on a gross error (backgrounded tab, song-position jump).
+// Running transports chase the grid every scheduler tick — skipping forward
+// inside a slice when the grid moves under them — so playback stays LOCKED to
+// the device, not just at a matching tempo.
+const PLL_SNAP = 0.08;    // s — error beyond this: hard resync
+const PLL_DEAD = 0.002;   // s — error under this: leave it (sub-audible)
+const PLL_SLEW = 0.1;     // fraction of the smoothed error corrected per pulse
+let pllSmoothedErr = 0;
+midiClock.onPhase(({ beat, timeMs }) => {
+	if (!midiClock.isEnabled() || !midiClock.isRunning() || !grid.running) return;
+	const ctx    = getAudioContext();
+	const audioT = ctx.currentTime + (timeMs - performance.now()) / 1000;
+	const err    = grid.timeAtBeat(beat) - audioT;   // >0 → the grid is running late
+	pllSmoothedErr = pllSmoothedErr * 0.8 + err * 0.2;
+	if (Math.abs(err) > PLL_SNAP) {
+		grid.nudge(-err);
+		pllSmoothedErr = 0;
+	} else if (Math.abs(pllSmoothedErr) > PLL_DEAD) {
+		grid.nudge(-pllSmoothedErr * PLL_SLEW);
+	}
 });
 // Device hot-plug / enable changes → refresh the dropdown and status line.
 midiClock.onState(() => { populateMidiDevices(); updateMidiStatus(); });
@@ -3166,3 +3230,7 @@ if (savedAll && savedAll.midi) {
 		onMidiEnableToggle();
 	}
 }
+
+// Debug/inspection handle (console + automated verification): the shared beat
+// grid, the MIDI clock, and the live slicer registry. Read-only by convention.
+window.__jsloop = { grid, midiClock, slicers };

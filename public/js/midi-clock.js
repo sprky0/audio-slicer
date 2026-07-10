@@ -38,7 +38,7 @@ class MidiClock {
 		this._clocks    = 0;       // 0xF8 pulses since the last Start (24 per beat)
 		this._stamps    = [];      // recent pulse timestamps (ms) for averaging
 		this._onMessage = (e) => this._handle(e);
-		this._listeners = { bpm: new Set(), transport: new Set(), state: new Set() };
+		this._listeners = { bpm: new Set(), transport: new Set(), state: new Set(), phase: new Set() };
 	}
 
 	get isSupported() {
@@ -105,6 +105,11 @@ class MidiClock {
 	onBpm(cb)       { return this._sub('bpm', cb); }
 	onTransport(cb) { return this._sub('transport', cb); }
 	onState(cb)     { return this._sub('state', cb); }
+	// Per-pulse phase observation: { beat, timeMs } — beat position since the last
+	// Start (24 pulses/beat) and the pulse's performance.now()-domain timestamp.
+	// The app's beat-grid PLL consumes these to keep playback PHASE-locked to the
+	// external clock, not just tempo-matched.
+	onPhase(cb)     { return this._sub('phase', cb); }
 
 	_sub(kind, cb) {
 		this._listeners[kind].add(cb);
@@ -128,6 +133,7 @@ class MidiClock {
 
 	_onPulse(now) {
 		this._clocks++;
+		this._emit('phase', { beat: this._clocks / 24, timeMs: now });
 		const stamps = this._stamps;
 		const last   = stamps[stamps.length - 1];
 		// A long silence means the previous window is stale (clock was paused).

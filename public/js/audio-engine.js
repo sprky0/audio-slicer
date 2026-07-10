@@ -158,8 +158,12 @@ class AudioEngine extends EventTarget {
 	 *
 	 * `env`: optional fade descriptor ({ fadeInSec, fadeOutSec, curve }) applied
 	 * on this voice's own gain — see envelope.js.
+	 *
+	 * `offsetSec`: start playback this far INTO the buffer (buffer-time seconds)
+	 * — the transport's skip-forward path, used when a voice starts late so its
+	 * material stays aligned to the beat grid.
 	 */
-	scheduleBuffer(buffer, when, stopAt, playbackRate = 1, { declick = false, env = null } = {}) {
+	scheduleBuffer(buffer, when, stopAt, playbackRate = 1, { declick = false, env = null, offsetSec = 0 } = {}) {
 		if (!buffer) return null;
 		const source = this.audioContext.createBufferSource();
 		source.buffer = buffer;
@@ -171,7 +175,8 @@ class AudioEngine extends EventTarget {
 		voiceGain.connect(this.gainNode);
 
 		const DECLICK = 0.005;
-		const effDur  = source.buffer.duration / source.playbackRate.value;
+		const skip    = Math.max(0, Math.min(offsetSec || 0, source.buffer.duration));
+		const effDur  = (source.buffer.duration - skip) / source.playbackRate.value;
 		// The voice is audible until its slot cut or its buffer runs out, whichever
 		// comes first — fades anchor to that, not the slot, so a ring-out slice's
 		// fade-out isn't scheduled past its last sample.
@@ -179,7 +184,7 @@ class AudioEngine extends EventTarget {
 			? Math.min(stopAt, when + effDur)
 			: when + effDur;
 		const fadesOut = applyEnvelope(voiceGain.gain, when, audibleEnd, env);
-		source.start(when);
+		source.start(when, skip);
 		if (typeof stopAt === 'number' && stopAt > when && (declick || stopAt < when + effDur)) {
 			// A fade-out already reaches silence at the cut — the declick ramp's
 			// setValueAtTime(1, …) would fight it, so only declick without one.
