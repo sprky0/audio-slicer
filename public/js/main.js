@@ -1568,11 +1568,13 @@ function createSlicer(savedState = null) {
 	};
 
 	// Gaps-mode edge resize (pure — takes a snapshot list, returns a new list). The
-	// clip's src is PINNED on both edges (wave data left-aligned; length trades at the
-	// clip's tail). END: shrinking leaves a gap, growing overwrites the cells ahead.
-	// START: shrinking leaves a front gap (the clip starts later, truncated at its
-	// tail), growing back overwrites cells behind (revealing more source after the
-	// clip). Bounded to the bar [0,U] and the source [0,U].
+	// boundary EATS the data it moves over (same rule as pack mode). END: growing
+	// overwrites the cells ahead (the next clip's head goes under the paint);
+	// shrinking truncates this clip's tail and leaves a gap. START: growing back
+	// overwrites the previous clip's tail cells while this clip's src stays pinned
+	// (its head plays earlier, more source revealed at its tail); shrinking eats this
+	// clip's own head (src advances, tail kept) and leaves a front gap. Bounded to
+	// the bar [0,U] and the source [0,U].
 	const computeResizeGaps = (tiles, i, edge, dU) => {
 		const clip = tiles[i];
 		if (!clip || clip.gap) return tiles;
@@ -1603,7 +1605,9 @@ function createSlicer(savedState = null) {
 				const c = cells[p];
 				if (c && c.clip && c.clip.locked && c.clip !== clip) { start = p + 1; break; }
 			}
-			srcBase = base;    // src pinned — data left-aligned, length trades at the tail
+			// Grow (start ≤ first): src pinned — data left-aligned, tail reveals.
+			// Shrink (start > first): the boundary ate the clip's head — src advances.
+			srcBase = base + Math.max(0, start - first);
 			wCells = Math.min(end - start, n - start, n - srcBase);
 		}
 		paintCells(cells, clip, start, Math.round(wCells), srcBase);
@@ -1966,20 +1970,24 @@ function createSlicer(savedState = null) {
 			// tiles on the drag side, CASCADING nearest-first. Donors shrink and, once
 			// emptied, are fully ABSORBED (w → 0, dropped on release) — so even a freshly
 			// sliced all-width-1 grid (where no tile has spare units to lend) can still
-			// grow a step by swallowing its neighbours. EVERY window (dragged tile and
-			// donors alike) keeps its src pinned — wave data is left-aligned, and a
-			// resize only trades length at the window's TAIL: shrinking truncates a
-			// clip's end, growing reveals more source after it. Every window stays
-			// inside the cut [0, U]. Each handle exists only where there's a region
-			// to trade with (start: i>0, end: i<last); the outer edges are pinned to the
-			// cut. Loop length is unchanged; the step count drops as steps are absorbed.
+			// grow a step by swallowing its neighbours. The boundary EATS the data it
+			// moves over: dragging RIGHT overwrites the following clip's head (its src
+			// advances), dragging LEFT overwrites the preceding clip's tail (its w
+			// truncates). The growing clip always keeps its own src pinned and reveals
+			// more of its own source at its tail, so eaten audio is genuinely gone —
+			// it never migrates onto a neighbour. On a fresh source-ordered grid this
+			// reads as sliding the cut point through one continuous waveform. Every
+			// window stays inside the cut [0, U]. Each handle exists only where there's
+			// a region to trade with (start: i>0, end: i<last); the outer edges are
+			// pinned to the cut. Loop length is unchanged; the step count drops as
+			// steps are absorbed.
 			{
 				const addHandle = (edge) => {
 					const handle = document.createElement('span');
 					handle.className = `seq-tile-resize ${edge}`;
 					handle.title     = edge === 'start'
-						? 'Drag this slice’s start back/forward (borrows from the previous slice)'
-						: 'Drag this slice’s end forward/back (borrows from the next slice)';
+						? 'Drag the start: left grows this slice over the previous slice’s end; right trims this slice’s own start'
+						: 'Drag the end: right grows this slice over the next slice’s start; left trims this slice’s own end';
 					handle.draggable = false;
 					handle.addEventListener('pointerdown', (ev) => {
 						ev.preventDefault();
@@ -2021,10 +2029,13 @@ function createSlicer(savedState = null) {
 						const src0 = seq.tiles.map((t) => t.src);
 
 						// END drag: grow/shrink tile i's TAIL, trading units with the tiles
-						// after it. dU>0 extends forward, pulling from i+1, i+2, … — donors
-						// shrink and are fully ABSORBED (w → 0, dropped on release) once
-						// consumed, so even an all-width-1 grid has slack to give. dU<0
-						// retracts (hands units back to the following tiles' tails). Bounded
+						// after it. dU>0 extends forward — the boundary eats the following
+						// clips' HEADS (src advances, tail kept), i reveals more of its own
+						// source at its tail; donors fully consumed are ABSORBED (w → 0,
+						// dropped on release), so even an all-width-1 grid has slack to
+						// give. dU<0 retracts i's tail (truncating its own data) and hands
+						// the width to the following tiles' tails — never their fronts, so
+						// i's discarded audio doesn't re-surface on the neighbour. Bounded
 						// so i's window and every donor stay inside the cut [0, U].
 						const cascadeEnd = (dU) => {
 							let want = dU > 0
@@ -2035,7 +2046,8 @@ function createSlicer(savedState = null) {
 								let need = want;
 								for (let k = i + 1; k <= lastIdx && need > 0; k++) {
 									const give = Math.min(need, w0[k]);   // donor may vanish (w → 0)
-									seq.tiles[k].w = w0[k] - give;
+									seq.tiles[k].src = src0[k] + give;    // head overwritten: start eaten
+									seq.tiles[k].w   = w0[k] - give;
 									need -= give;
 								}
 								moved = want - need;
@@ -2052,13 +2064,14 @@ function createSlicer(savedState = null) {
 						};
 
 						// START drag: move tile i's FRONT in the bar, trading units with the
-						// tiles before it. dU<0 extends back, pulling from i-1, i-2, …
-						// (donors absorbed to w → 0); dU>0 retracts the front (hands units
-						// back to the preceding tiles' tails). Tile i's source stays PINNED
-						// at src (its wave data is left-aligned): growing reveals more
-						// source at its tail, shrinking truncates its tail — the donor's
-						// lost audio is genuinely gone, never re-surfacing on i's front.
-						// Growth is bounded by the source remaining after i's window.
+						// tiles before it. The boundary EATS whatever it moves over:
+						// dU<0 grows i backward over the preceding clips' TAILS (donors
+						// truncate, absorbed to w → 0 when consumed) while i keeps its src
+						// pinned and reveals more of its own source at its tail — the
+						// donors' lost audio is genuinely gone, never re-surfacing on i's
+						// front. dU>0 moves the boundary right over i's own HEAD (src
+						// advances, tail kept), handing the width to the preceding tiles'
+						// tails. Growth is bounded by the source remaining after i's window.
 						const cascadeStart = (dU) => {
 							let want = Math.min(Math.max(dU, -(U - src0[i] - w0[i])), w0[i] - MIN_W);
 							let moved = 0;
@@ -2079,7 +2092,8 @@ function createSlicer(savedState = null) {
 								}
 								moved = want - surplus;
 							}
-							seq.tiles[i].w = w0[i] - moved;    // src pinned: length trades at the tail
+							if (moved > 0) seq.tiles[i].src = src0[i] + moved;   // shrink: head eaten
+							seq.tiles[i].w = w0[i] - moved;                       // grow: src pinned, tail reveals
 						};
 
 						const onMove = (e2) => {
