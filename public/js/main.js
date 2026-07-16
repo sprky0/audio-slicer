@@ -925,16 +925,22 @@ function createSlicer(savedState = null) {
 		seq.tiles[idx] = fresh;
 		return fresh;
 	};
+	// Pristine pattern: restore every non-locked entry (in place) to the default
+	// slice for its grid position — Refill-All semantics. Pure over `tiles` (also
+	// fired by 'reset' step modifiers, live and in export).
+	const resetPatternTiles = (tiles) => {
+		let s = 0;
+		for (let i = 0; i < tiles.length; i++) {
+			const w = tiles[i].w;
+			if (!tiles[i].locked) tiles[i] = { src: s, w, offset: 0, muted: false, colorIdx: Math.round(s) };
+			s += w;
+		}
+	};
 	const refillSelected = () => {
 		if (allSlices) {
 			// Restore every entry to its native slice — except locked ones, which
 			// stay protected exactly as they are.
-			let s = 0;
-			for (let i = 0; i < seq.tiles.length; i++) {
-				const w = seq.tiles[i].w;
-				if (!seq.tiles[i].locked) refillEntry(i, s);
-				s += w;
-			}
+			resetPatternTiles(seq.tiles);
 			selectedTile = null;      // old selection object was replaced
 		} else {
 			const idx = seq.tiles.indexOf(selectedTile);
@@ -972,8 +978,15 @@ function createSlicer(savedState = null) {
 	const seqStepsRow = document.createElement('div');
 	seqStepsRow.className = 'seq-steps';
 
+	// Modifier lane: one cell per grid step under the tile row. Click an empty
+	// cell to place a modifier; click a chip for its settings; drag a chip to
+	// move it. (Rendered by renderModsRow, wired further below.)
+	const seqModsRow = document.createElement('div');
+	seqModsRow.className = 'seq-mods';
+
 	seqEl.appendChild(seqToolbar);
 	seqEl.appendChild(seqStepsRow);
+	seqEl.appendChild(seqModsRow);
 	container.appendChild(seqEl);
 
 	// Sequencer state — an ordered list of variable-width tiles.
@@ -990,8 +1003,22 @@ function createSlicer(savedState = null) {
 	//                future hook — see envelope.js).
 	// Resizing conserves Σ w (a drag deducts from the play-order neighbour), so the
 	// overall sequence length is fixed once set.
+	//
+	// Modifier lane — at most one modifier per STEP (grid cell), pinned to the
+	// grid: tiles reorder/resize underneath, the modifier affects whatever sounds
+	// at its step. A modifier applies to the whole tile whose span covers its
+	// step, decided once when that tile is scheduled.
+	//   mod = { step, action, fireMode, fireValue }
+	//     step      : integer grid cell 0..U-1
+	//     action    : 'mute' | 'rev'   — one-shot per-voice override (never
+	//                 written back to the tile); rev TOGGLES tile.reversed
+	//                 'rand' | 'reset' — virtual Randomize press / pristine
+	//                 pattern (Refill-All), fired live against seq.tiles
+	//     fireMode  : 'prob'  → fireValue = 0..100 (% chance per pass)
+	//                 'every' → fireValue = N (fires on the 1st of every N loops)
 	const seq = {
 		tiles:        [],
+		mods:         [],
 		isPlaying:    false,
 		currentTile:  -1,
 		loop:         false,
@@ -1028,6 +1055,28 @@ function createSlicer(savedState = null) {
 	const snapU   = (u) => Math.round(u * SUBSTEP) / SUBSTEP;
 	// Tidy display of a (possibly fractional) unit count: "2", "1.25", "1.5".
 	const fmtW    = (w) => String(snapU(w));
+
+	// --- Modifier-lane resolution helpers (shared by live transport + export) ---
+	const MOD_EPS = 1e-6;
+	// Integer steps covered by the tile span [startStep, startStep + w).
+	const modsInSpan = (mods, startStep, w) => {
+		const from = Math.ceil(startStep - MOD_EPS);
+		const to   = startStep + w - MOD_EPS;
+		return mods.filter((m) => m.step >= from && m.step < to);
+	};
+	// Does this modifier fire on this pass? 'every' counts loops from the run's
+	// start (fires on the 1st, then every Nth); 'prob' rolls fresh each pass.
+	const modFires = (m, loopIdx) => (m.fireMode === 'every')
+		? (loopIdx % Math.max(1, Math.round(m.fireValue))) === 0
+		: (Math.random() * 100) < m.fireValue;
+	// Split a monotonic step position into (loopIdx, stepInBar) on the U-step bar.
+	// posSteps accumulates fractional widths, so snap float dust to the SUBSTEP
+	// lattice before flooring.
+	const barPos = (posSteps, U) => {
+		const p       = Math.round(posSteps * SUBSTEP) / SUBSTEP;
+		const loopIdx = Math.floor((p + MOD_EPS) / U);
+		return { loopIdx, stepInBar: p - loopIdx * U };
+	};
 
 	// --- Transport tempo state ---
 	// The sliced selection is treated as one bar (4 beats). On (re)slice we
@@ -1195,10 +1244,14 @@ function createSlicer(savedState = null) {
 	// (`naturalDur = w * unitDur`). At the natural BPM stepSec == unitDur, so the
 	// region fills its slot raw (no stretch). The stretch factor is global
 	// (stepSec/unitDur × pitch) and only departs from 1 when BPM/pitch deviate.
-	const getTilePlayback = (tile, stepSecVal) => {
+	// `ov` = optional one-shot modifier overrides for THIS voice only:
+	// { mute, rev } — mute silences the slot, rev toggles the tile's own reversed
+	// flag ("reverse the step" of an already-reversed slice plays it forward).
+	// Persisted tile state is never touched.
+	const getTilePlayback = (tile, stepSecVal, ov) => {
 		if (!tile) return null;
 		const playDur = (tile.w > 0 ? tile.w : 1) * stepSecVal;
-		if (tile.gap || tile.muted) {
+		if (tile.gap || tile.muted || (ov && ov.mute)) {
 			// A gap (leave-gaps mode) is a silent slot that still occupies its time.
 			return { buffer: null, playbackRate: 1, dur: playDur, fill: false };
 		}
@@ -1210,7 +1263,7 @@ function createSlicer(savedState = null) {
 		// converted here to seconds of the slot it occupies (so they track BPM and
 		// resize). Applied per voice at schedule time (envelope.js), never baked into
 		// buffers — the caches stay envelope-agnostic.
-		const rev = !!tile.reversed;
+		const rev = (ov && ov.rev) ? !tile.reversed : !!tile.reversed;
 		const env = ((tile.fadeIn > 0) || (tile.fadeOut > 0)) ? {
 			fadeInSec:  Math.max(0, Math.min(1, tile.fadeIn  || 0)) * playDur,
 			fadeOutSec: Math.max(0, Math.min(1, tile.fadeOut || 0)) * playDur,
@@ -1238,6 +1291,71 @@ function createSlicer(savedState = null) {
 		return { buffer: getRegionBuffer(tile.src, tile.w, rev), playbackRate: fillStretch > 0 ? 1 / fillStretch : 1, dur: playDur, fill: false, env };
 	};
 
+	// --- Live modifier firing (the transport calls these each scheduled slot) ---
+
+	// Flash a fired modifier chip at its audible time (scheduling runs ~100ms
+	// ahead of the sound).
+	const flashMod = (m, when) => {
+		const actx  = slicer.engine.audioContext;
+		const delay = actx ? Math.max(0, (when - actx.currentTime) * 1000) : 0;
+		setTimeout(() => {
+			const el = seqModsRow.querySelector(`[data-step="${m.step}"] .seq-mod`);
+			if (!el) return;
+			el.classList.add('fired');
+			setTimeout(() => el.classList.remove('fired'), 180);
+		}, delay);
+	};
+
+	// Voice-level resolution for one scheduled slot: collect mute/rev modifiers
+	// covering the tile's span, roll each, and hand getTilePlayback a one-shot
+	// override. Two rev modifiers under one wide tile cancel out (toggle twice).
+	const resolveVoiceMods = (tile, posSteps, when) => {
+		if (!seq.mods.length) return null;
+		const { loopIdx, stepInBar } = barPos(posSteps, unitCount());
+		const w = (tile && tile.w > 0) ? tile.w : 1;
+		let mute = false, rev = false;
+		for (const m of modsInSpan(seq.mods, stepInBar, w)) {
+			if (m.action !== 'mute' && m.action !== 'rev') continue;
+			if (!modFires(m, loopIdx)) continue;
+			if (m.action === 'mute') mute = true; else rev = !rev;
+			flashMod(m, when);
+		}
+		return (mute || rev) ? { mute, rev } : null;
+	};
+
+	// Pattern-action modifiers (rand/reset) fire just before their covering tile
+	// is scheduled (Transport.beforeTile), so a modifier on the loop's first step
+	// reshapes the loop INCLUDING that first slot. Mutates seq.tiles live —
+	// exactly like pressing the button.
+	const firePatternMods = (posSteps, when) => {
+		if (!seq.mods.length) return;
+		const { loopIdx, stepInBar } = barPos(posSteps, unitCount());
+		// Span of the tile about to be scheduled: it starts at stepInBar (the
+		// transport walks tile-aligned), find it to learn its width.
+		let s = 0, w = 1;
+		for (const t of seq.tiles) {
+			if (s + t.w > stepInBar + MOD_EPS) { w = (t.w > 0) ? t.w : 1; break; }
+			s += t.w;
+		}
+		let changed = false;
+		for (const m of modsInSpan(seq.mods, stepInBar, w)) {
+			if (m.action !== 'rand' && m.action !== 'reset') continue;
+			if (!modFires(m, loopIdx)) continue;
+			if (m.action === 'rand') {
+				const rebuilt = randomizePattern(seq.tiles, randLevel / 100);
+				if (rebuilt) { seq.tiles = rebuilt; changed = true; }
+			} else {
+				resetPatternTiles(seq.tiles);
+				changed = true;
+			}
+			flashMod(m, when);
+		}
+		if (changed) {
+			if (selectedTile && !seq.tiles.includes(selectedTile)) selectedTile = null;
+			renderSequencer();   // also schedules a save
+		}
+	};
+
 	// Eagerly enumerate every tile's stretch need at the current tempo/pitch so all
 	// builds are enqueued up front — the overlay's total is then known immediately
 	// and the bar fills monotonically 0→100% instead of bouncing as the scheduler
@@ -1247,7 +1365,22 @@ function createSlicer(savedState = null) {
 	let prescanTimer = null;
 	const prescanStretches = () => {
 		const ss = stepSec();
-		for (const tile of seq.tiles) getTilePlayback(tile, ss);
+		// A 'rev' modifier can flip any tile it covers at schedule time — enqueue
+		// the flipped stretch variant too, so the first probabilistic flip isn't a
+		// cache miss (which would repitch-fill for one pass). If a pattern-action
+		// modifier (rand/reset) is also present, ANY tile may drift under the rev
+		// step, so cover them all.
+		const hasRev     = seq.mods.some((m) => m.action === 'rev');
+		const hasPattern = seq.mods.some((m) => m.action === 'rand' || m.action === 'reset');
+		let s = 0;
+		for (const tile of seq.tiles) {
+			getTilePlayback(tile, ss);
+			if (!tile.gap && hasRev
+				&& (hasPattern || modsInSpan(seq.mods, s, tile.w).some((m) => m.action === 'rev'))) {
+				getTilePlayback(tile, ss, { rev: true });
+			}
+			s += tile.w;
+		}
 	};
 	const schedulePrescan = () => {
 		clearTimeout(prescanTimer);
@@ -1272,6 +1405,16 @@ function createSlicer(savedState = null) {
 		regionCache.clear();
 		const n = (slicer.engine.getSegments() || []).length;
 		if (n !== lastSegCount) {
+			// Modifiers are pinned to grid steps: rescale them onto the new grid
+			// (first occupant of a collided step wins). On restore / first slice
+			// there's no previous grid to scale from — just drop out-of-range steps.
+			if (seq.mods.length && n > 0) {
+				const ratio = (lastSegCount > 0 && restoreCount === 0) ? n / lastSegCount : 1;
+				const taken = new Set();
+				seq.mods = seq.mods
+					.map((m) => ({ ...m, step: Math.round(m.step * ratio) }))
+					.filter((m) => m.step < n && (taken.has(m.step) ? false : (taken.add(m.step), true)));
+			}
 			lastSegCount = n;
 			if (restoreCount === 0 && n > 0) {
 				seq.tiles = defaultTiles(n);
@@ -1823,6 +1966,243 @@ function createSlicer(savedState = null) {
 
 	const TILE_TITLE = 'Click: select (show handles) · drag: reorder · drag green/red edges: resize · dbl-click: split · shift-click: merge · scroll: pitch';
 
+	// --- Modifier lane UI --------------------------------------------------------
+	// One .seq-mod-cell per grid step; an occupied cell holds a coloured .seq-mod
+	// chip. Click an empty cell to place a modifier (opens its settings), click a
+	// chip to select it (toggles the settings overlay), drag a chip sideways to
+	// move it to another step (occupied steps are skipped over).
+	const MOD_GLYPH = { mute: 'M', rev: '◀', rand: '⚂', reset: '↺' };
+	const MOD_NAME  = { mute: 'Mute', rev: 'Reverse', rand: 'Randomize', reset: 'Reset' };
+	let selectedMod = null;
+
+	const modTitle = (m) => `${MOD_NAME[m.action]} — ${m.fireMode === 'every'
+		? `every ${Math.max(1, Math.round(m.fireValue))} loops`
+		: `${Math.round(m.fireValue)}% chance`}. Click for settings, drag to move.`;
+
+	// Settings overlay: a small popover anchored under the selected chip.
+	const modOverlay = document.createElement('div');
+	modOverlay.className = 'mod-overlay';
+	modOverlay.hidden = true;
+	seqEl.appendChild(modOverlay);
+	let overlayMod = null;
+
+	const modActionRow = document.createElement('div');
+	modActionRow.className = 'mod-overlay-row';
+	const modActionBtns = {};
+	for (const a of ['mute', 'rev', 'rand', 'reset']) {
+		const b = document.createElement('button');
+		b.className = 'toggle-btn mod-action-btn';
+		b.dataset.action = a;
+		b.textContent = MOD_NAME[a];
+		b.title = {
+			mute:  'Silence the step (the whole tile covering it) when this fires',
+			rev:   'Reverse the step when this fires (toggles an already-reversed slice back)',
+			rand:  'Virtual press of Randomize (uses the Amt level, respects locks)',
+			reset: 'Restore the pristine pattern (Refill-All, respects locks)',
+		}[a];
+		b.addEventListener('click', () => {
+			if (!overlayMod) return;
+			overlayMod.action = a;
+			refreshModOverlay();
+			renderModsRow();
+			schedulePrescan();   // 'rev' needs the flipped stretch variants cached
+			scheduleSave();
+		});
+		modActionBtns[a] = b;
+		modActionRow.appendChild(b);
+	}
+
+	const modFireRow = document.createElement('div');
+	modFireRow.className = 'mod-overlay-row';
+	const modProbBtn  = document.createElement('button');
+	modProbBtn.className = 'toggle-btn';
+	modProbBtn.textContent = 'Prob';
+	modProbBtn.title = 'Fire by chance: rolled fresh on every pass';
+	const modEveryBtn = document.createElement('button');
+	modEveryBtn.className = 'toggle-btn';
+	modEveryBtn.textContent = 'Every';
+	modEveryBtn.title = 'Fire on the 1st of every N loops (counted from play start)';
+	const modProbCtrl = new DragControl({
+		min: 0, max: 100, step: 1, value: 100, label: 'Chance',
+		format: (v) => `${Math.round(v)}%`,
+		onChange: (v) => { if (overlayMod) { overlayMod.fireValue = Math.round(v); scheduleSave(); } },
+	});
+	const modEveryCtrl = new DragControl({
+		min: 1, max: 16, step: 1, value: 2, label: 'Loops',
+		format: (v) => `1 : ${Math.round(v)}`,
+		onChange: (v) => { if (overlayMod) { overlayMod.fireValue = Math.round(v); scheduleSave(); } },
+	});
+	const setFireMode = (mode) => {
+		if (!overlayMod || overlayMod.fireMode === mode) return;
+		overlayMod.fireMode  = mode;
+		// Sensible default when flipping representation.
+		overlayMod.fireValue = mode === 'every' ? 2 : 100;
+		refreshModOverlay();
+		renderModsRow();
+		scheduleSave();
+	};
+	modProbBtn.addEventListener('click', () => setFireMode('prob'));
+	modEveryBtn.addEventListener('click', () => setFireMode('every'));
+	modFireRow.appendChild(modProbBtn);
+	modFireRow.appendChild(modEveryBtn);
+	modFireRow.appendChild(modProbCtrl.getElement());
+	modFireRow.appendChild(modEveryCtrl.getElement());
+
+	const modDeleteBtn = document.createElement('button');
+	modDeleteBtn.className = 'mod-delete-btn';
+	modDeleteBtn.textContent = 'Remove modifier';
+	modDeleteBtn.addEventListener('click', () => {
+		if (!overlayMod) return;
+		seq.mods = seq.mods.filter((m) => m !== overlayMod);
+		selectedMod = null;
+		hideModOverlay();
+		renderModsRow();
+		scheduleSave();
+	});
+
+	modOverlay.appendChild(modActionRow);
+	modOverlay.appendChild(modFireRow);
+	modOverlay.appendChild(modDeleteBtn);
+
+	const refreshModOverlay = () => {
+		if (!overlayMod) return;
+		for (const [a, b] of Object.entries(modActionBtns)) {
+			b.classList.toggle('active', overlayMod.action === a);
+			b.setAttribute('aria-pressed', String(overlayMod.action === a));
+		}
+		const every = overlayMod.fireMode === 'every';
+		modProbBtn.classList.toggle('active', !every);
+		modEveryBtn.classList.toggle('active', every);
+		modProbCtrl.getElement().style.display  = every ? 'none' : '';
+		modEveryCtrl.getElement().style.display = every ? '' : 'none';
+		if (every) modEveryCtrl.setValue(Math.max(1, Math.round(overlayMod.fireValue)));
+		else       modProbCtrl.setValue(Math.max(0, Math.min(100, overlayMod.fireValue)));
+	};
+
+	const positionModOverlay = () => {
+		if (modOverlay.hidden || !selectedMod) return;
+		const cell = seqModsRow.querySelector(`[data-step="${selectedMod.step}"]`);
+		if (!cell) return;
+		const hostRect = seqEl.getBoundingClientRect();
+		const cellRect = cell.getBoundingClientRect();
+		const top  = cellRect.bottom - hostRect.top + 4;
+		let   left = cellRect.left - hostRect.left + cellRect.width / 2 - modOverlay.offsetWidth / 2;
+		left = Math.max(0, Math.min(hostRect.width - modOverlay.offsetWidth, left));
+		modOverlay.style.top  = `${top}px`;
+		modOverlay.style.left = `${left}px`;
+	};
+
+	const showModOverlay = (m) => {
+		overlayMod = m;
+		refreshModOverlay();
+		modOverlay.hidden = false;
+		positionModOverlay();
+	};
+	const hideModOverlay = () => {
+		modOverlay.hidden = true;
+		overlayMod = null;
+	};
+
+	// Dismiss on a click anywhere outside the overlay/lane, or on Escape.
+	document.addEventListener('pointerdown', (e) => {
+		if (modOverlay.hidden || !container.isConnected) return;
+		if (modOverlay.contains(e.target) || e.target.closest('.seq-mod-cell')) return;
+		selectedMod = null;
+		hideModOverlay();
+		renderModsRow();
+	});
+	document.addEventListener('keydown', (e) => {
+		if (modOverlay.hidden || !container.isConnected || e.key !== 'Escape') return;
+		selectedMod = null;
+		hideModOverlay();
+		renderModsRow();
+	});
+
+	// Chip pointer wiring: <5px of horizontal travel = click (select/toggle the
+	// overlay); more = drag. Dragging moves the chip live between cells. The
+	// move/up listeners go on window (the codebase's drag pattern) — re-parenting
+	// the chip mid-drag would silently kill a pointer capture on it.
+	const wireModPointer = (chip, m) => {
+		chip.addEventListener('pointerdown', (e) => {
+			if (e.button !== 0) return;
+			e.preventDefault();
+			e.stopPropagation();   // don't reach the empty-cell click handler
+			const startX = e.clientX;
+			let dragged  = false;
+			const move = (ev) => {
+				if (!dragged && Math.abs(ev.clientX - startX) < 5) return;
+				dragged = true;
+				chip.classList.add('dragging');
+				const rect = seqModsRow.getBoundingClientRect();
+				const U    = unitCount();
+				const idx  = Math.max(0, Math.min(U - 1,
+					Math.floor((ev.clientX - rect.left) / rect.width * U)));
+				if (idx !== m.step && !seq.mods.some((x) => x !== m && x.step === idx)) {
+					m.step = idx;
+					const cell = seqModsRow.querySelector(`[data-step="${idx}"]`);
+					if (cell) cell.appendChild(chip);
+					positionModOverlay();
+				}
+			};
+			const up = () => {
+				window.removeEventListener('pointermove', move);
+				window.removeEventListener('pointerup',   up);
+				chip.classList.remove('dragging');
+				if (dragged) {
+					renderModsRow();
+					scheduleSave();
+				} else if (selectedMod === m) {
+					selectedMod = null;
+					hideModOverlay();
+					renderModsRow();
+				} else {
+					selectedMod = m;
+					renderModsRow();
+					showModOverlay(m);
+				}
+			};
+			window.addEventListener('pointermove', move);
+			window.addEventListener('pointerup',   up);
+		});
+	};
+
+	const renderModsRow = () => {
+		seqModsRow.innerHTML = '';
+		const U = unitCount();
+		if (selectedMod && !seq.mods.includes(selectedMod)) {
+			selectedMod = null;
+			hideModOverlay();
+		}
+		for (let s = 0; s < U; s++) {
+			const cell = document.createElement('div');
+			cell.className = 'seq-mod-cell';
+			cell.dataset.step = String(s);
+			const m = seq.mods.find((x) => x.step === s);
+			if (m) {
+				const chip = document.createElement('div');
+				chip.className = 'seq-mod';
+				chip.dataset.action = m.action;
+				chip.textContent = MOD_GLYPH[m.action];
+				chip.title = modTitle(m);
+				if (m === selectedMod) chip.classList.add('selected');
+				wireModPointer(chip, m);
+				cell.appendChild(chip);
+			} else {
+				cell.title = 'Add a step modifier';
+				cell.addEventListener('click', () => {
+					const nm = { step: s, action: 'mute', fireMode: 'prob', fireValue: 100 };
+					seq.mods.push(nm);
+					selectedMod = nm;
+					renderModsRow();
+					showModOverlay(nm);
+					scheduleSave();
+				});
+			}
+			seqModsRow.appendChild(cell);
+		}
+		positionModOverlay();   // keep an open overlay anchored after a rebuild
+	};
+
 	const renderSequencer = () => {
 		seqStepsRow.innerHTML = '';
 		const U    = unitCount() || 1;
@@ -2237,6 +2617,8 @@ function createSlicer(savedState = null) {
 		// ResizeObserver below.)
 		redrawTileWaves();
 
+		renderModsRow();   // the modifier lane tracks the same grid
+
 		scheduleSave();
 	};
 
@@ -2263,7 +2645,12 @@ function createSlicer(savedState = null) {
 		grid,                                          // shared beat↔time mapping (lock-in)
 		getTiles:        () => seq.tiles,
 		getStepBeats:    () => 4 / divisionDenom,      // a 1/D-note step is 4/D quarter-notes
-		getTilePlayback: getTilePlayback,
+		// Step modifiers resolve per scheduled slot: pattern actions (rand/reset)
+		// fire in beforeTile so they land on the very slot that triggered them;
+		// mute/rev become one-shot overrides on the voice.
+		beforeTile:      firePatternMods,
+		getTilePlayback: (tile, ss, ctx) =>
+			getTilePlayback(tile, ss, ctx ? resolveVoiceMods(tile, ctx.posSteps, ctx.when) : null),
 		isLooping:       () => seq.loop,
 		onTileVisual: (tileIndex, src, w, frac) => {
 			setPlayingTile(tileIndex);   // a gap child isn't a .seq-tile → no highlight
@@ -2371,16 +2758,18 @@ function createSlicer(savedState = null) {
 	//      shuffles.
 	// Buckets that don't match any other bucket's width can still shuffle internally
 	// but never swap out; that's the sub-set constraint that keeps the locks anchored.
-	const randomizeTiles = () => {
-		const level = Math.max(0, Math.min(1, randLevel / 100));
+	// Pure over `tiles` (also fired by 'rand' step modifiers, live and in export):
+	// returns the rebuilt array, or null when no swap fired.
+	const randomizePattern = (tiles, level) => {
+		level = Math.max(0, Math.min(1, level));
 
-		// Partition seq.tiles into buckets (non-locked runs) interleaved with locks:
+		// Partition the tiles into buckets (non-locked runs) interleaved with locks:
 		// [bucket0, lock0, bucket1, lock1, ..., bucketN]. Bucket .w is the invariant
 		// each swap has to respect; we key equality by RES-scaled integer so fractional
 		// widths compare exactly.
 		const buckets = [{ tiles: [], w: 0 }];
 		const locks   = [];
-		for (const t of seq.tiles) {
+		for (const t of tiles) {
 			if (t.locked) {
 				locks.push(t);
 				buckets.push({ tiles: [], w: 0 });
@@ -2426,7 +2815,7 @@ function createSlicer(savedState = null) {
 			}
 		}
 
-		if (!swapped) return;
+		if (!swapped) return null;
 
 		// Interleave buckets and locks back into a flat tile row.
 		const rebuilt = [];
@@ -2434,6 +2823,11 @@ function createSlicer(savedState = null) {
 			for (const t of buckets[i].tiles) rebuilt.push(t);
 			if (i < locks.length) rebuilt.push(locks[i]);
 		}
+		return rebuilt;
+	};
+	const randomizeTiles = () => {
+		const rebuilt = randomizePattern(seq.tiles, randLevel / 100);
+		if (!rebuilt) return;
 		seq.tiles = rebuilt;
 		renderSequencer();   // also schedules a save
 	};
@@ -2463,6 +2857,7 @@ function createSlicer(savedState = null) {
 			tiles: seq.tiles.map((t) => (t.gap
 				? { gap: true, w: t.w }
 				: { src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: t.colorIdx, locked: !!t.locked, reversed: !!t.reversed, fadeIn: t.fadeIn || 0, fadeOut: t.fadeOut || 0 })),
+			mods:  seq.mods.map((m) => ({ step: m.step, action: m.action, fireMode: m.fireMode, fireValue: m.fireValue })),
 			loop:  seq.loop,
 		},
 	});
@@ -2505,14 +2900,53 @@ function createSlicer(savedState = null) {
 		exportPending: () => stretchPending.size,
 		// Snapshot the render inputs: mix + a tile-list copy + stepSec at the master
 		// tempo + the live tile→buffer policy (returns cached stretched buffers now
-		// that exportPrescan's builds have landed).
-		exportTrack: () => ({
-			volume:  volumeKnob.value,
-			pan:     panKnob.value,
-			tiles:   seq.tiles.slice(),
-			stepSec: stepSec(),
-			getTilePlayback,
-		}),
+		// that exportPrescan's builds have landed). Step modifiers apply in the
+		// render too: mute/rev as voice overrides, rand/reset against the render's
+		// working tile copy — the bounce evolves like a live take (probability is
+		// rolled fresh, so probabilistic bounces differ take to take, by design).
+		exportTrack: () => {
+			const mods = seq.mods.map((m) => ({ ...m }));
+			const U    = unitCount();
+			return {
+				volume:  volumeKnob.value,
+				pan:     panKnob.value,
+				tiles:   seq.tiles.slice(),
+				stepSec: stepSec(),
+				getTilePlayback,
+				modHooks: mods.length ? {
+					beforeTile: (posSteps, tiles) => {
+						const { loopIdx, stepInBar } = barPos(posSteps, U);
+						let s = 0, w = 1;
+						for (const t of tiles) {
+							if (s + t.w > stepInBar + MOD_EPS) { w = (t.w > 0) ? t.w : 1; break; }
+							s += t.w;
+						}
+						let out = tiles;
+						for (const m of modsInSpan(mods, stepInBar, w)) {
+							if (m.action === 'rand' && modFires(m, loopIdx)) {
+								const rebuilt = randomizePattern(out, randLevel / 100);
+								if (rebuilt) out = rebuilt;
+							} else if (m.action === 'reset' && modFires(m, loopIdx)) {
+								if (out === tiles) out = out.slice();
+								resetPatternTiles(out);
+							}
+						}
+						return out;
+					},
+					voiceOverrides: (tile, posSteps) => {
+						const { loopIdx, stepInBar } = barPos(posSteps, U);
+						const w = (tile && tile.w > 0) ? tile.w : 1;
+						let mute = false, rev = false;
+						for (const m of modsInSpan(mods, stepInBar, w)) {
+							if (m.action !== 'mute' && m.action !== 'rev') continue;
+							if (!modFires(m, loopIdx)) continue;
+							if (m.action === 'mute') mute = true; else rev = !rev;
+						}
+						return (mute || rev) ? { mute, rev } : null;
+					},
+				} : null,
+			};
+		},
 	});
 	// A slicer added while sync is already live adopts the current tempo at once —
 	// the external MIDI clock if it's driving, otherwise the internal master.
@@ -2566,6 +3000,21 @@ function createSlicer(savedState = null) {
 						}))
 				: [];
 			nextColorIdx = seq.tiles.reduce((m, t) => Math.max(m, t.gap ? -1 : t.colorIdx), -1) + 1;
+			// Step modifiers: validate + dedupe by step (first wins). Out-of-range
+			// steps for the restored grid are dropped after the re-slice below.
+			const modSteps = new Set();
+			seq.mods = Array.isArray(savedState.seq.mods)
+				? savedState.seq.mods
+					.filter((m) => m && Number.isFinite(m.step) && m.step >= 0
+						&& ['mute', 'rev', 'rand', 'reset'].includes(m.action))
+					.map((m) => ({
+						step:      Math.round(m.step),
+						action:    m.action,
+						fireMode:  m.fireMode === 'every' ? 'every' : 'prob',
+						fireValue: Number.isFinite(m.fireValue) ? m.fireValue : 100,
+					}))
+					.filter((m) => (modSteps.has(m.step) ? false : (modSteps.add(m.step), true)))
+				: [];
 			seq.loop  = !!savedState.seq.loop;
 			seqLoopBtn.classList.toggle('active', seq.loop);
 			seqLoopBtn.setAttribute('aria-pressed', String(seq.loop));

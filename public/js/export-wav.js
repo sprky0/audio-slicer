@@ -70,9 +70,17 @@ function normalize(buf, target = 0.99) {
  * Render selected tracks to a normalized stereo AudioBuffer of exactly
  * `lengthBeats` beats at `masterBpm`.
  *
- * track = { volume, pan, tiles, stepSec, getTilePlayback }
+ * track = { volume, pan, tiles, stepSec, getTilePlayback, modHooks? }
  *   stepSec         seconds per unit/step at the master tempo (a number)
- *   getTilePlayback (tile, stepSec) => { buffer, playbackRate, dur, fill, env } | null
+ *   getTilePlayback (tile, stepSec, ov) => { buffer, playbackRate, dur, fill, env } | null
+ *                   ov = optional one-shot { mute, rev } overrides for the voice
+ *   modHooks        optional step-modifier callbacks (main.js closes over the
+ *                   slicer's modifier lane; the export evolves like a live take):
+ *     beforeTile(posSteps, tiles) => tiles   pattern actions (rand/reset) fire
+ *                   against the render's WORKING COPY — may return a replacement
+ *                   list (same length); the live pattern is untouched
+ *     voiceOverrides(tile, posSteps) => { mute, rev } | null
+ *   (posSteps = steps of render time elapsed, monotonic across loop passes.)
  */
 export async function renderMix({ tracks, masterBpm, lengthBeats, sampleRate }) {
 	if (!(masterBpm > 0) || !(lengthBeats > 0) || !(sampleRate > 0)) {
@@ -96,24 +104,30 @@ export async function renderMix({ tracks, masterBpm, lengthBeats, sampleRate }) 
 		}
 		node.connect(ctx.destination);
 
-		const tiles   = track.tiles || [];
+		let tiles     = (track.tiles || []).slice();   // working copy — modHooks may reshape it
 		const stepSec = track.stepSec;
+		const hooks   = track.modHooks || null;
 		if (tiles.length === 0 || !(stepSec > 0)) continue;
 
 		// Walk the tile list, looping, until we cover N beats. A tile occupies
 		// w·stepSec of time; one full pass of the list is exactly the slicer's
 		// `beats`, so if N is a multiple of that the loop lands on the boundary.
-		let t = 0, i = 0;
+		// posSteps mirrors the live transport's step position, so step modifiers
+		// fire identically (pattern actions land on the slot that triggered them).
+		let t = 0, i = 0, posSteps = 0;
 		while (t < endTime) {
+			if (hooks && hooks.beforeTile) tiles = hooks.beforeTile(posSteps, tiles) || tiles;
 			const tile = tiles[i % tiles.length];
 			const w    = (tile && tile.w > 0) ? tile.w : 1;
 			const dur  = w * stepSec;
-			const r    = track.getTilePlayback(tile, stepSec);
+			const ov   = (hooks && hooks.voiceOverrides) ? hooks.voiceOverrides(tile, posSteps) : null;
+			const r    = track.getTilePlayback(tile, stepSec, ov);
 			if (r && r.buffer) {
 				// Hard-cut at endTime so the render tail matches a seamless loop.
 				scheduleVoice(ctx, node, r.buffer, t, Math.min(t + dur, endTime), r.playbackRate || 1, !!r.fill, r.env || null);
 			}
 			t += dur;
+			posSteps += w;
 			i++;
 		}
 	}

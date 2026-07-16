@@ -30,11 +30,19 @@
  *   grid          BeatGrid singleton — the shared beat↔time mapping
  *   getTiles      () => tile[]   live array of tiles to play
  *   getStepBeats  () => number   beats per unit/step (4 / step division)
- *   getTilePlayback  (tile, stepSec) => { buffer, playbackRate, dur, fill, env } | null
+ *   getTilePlayback  (tile, stepSec, ctx) => { buffer, playbackRate, dur, fill, env } | null
  *                    The fill/pitch policy (lives in main.js): resolves a tile to
  *                    a ready-to-play region buffer + rate (time-stretch + pitch
  *                    shift, cached), or null for a silent slot. The engine just
- *                    plays it, so all DSP stays outside the Transport.
+ *                    plays it, so all DSP stays outside the Transport. `ctx` =
+ *                    { posSteps, when }: the slot's position in steps since this
+ *                    run began and its audible start time — the policy uses it to
+ *                    resolve step modifiers (mute/reverse overrides).
+ *   beforeTile       (posSteps, when) => void   optional; called just before a
+ *                    slot that WILL sound is scheduled (never for skipped-past
+ *                    tiles). The policy may mutate/replace the tile list here
+ *                    (pattern-action modifiers) — the slot's tile is re-read
+ *                    afterwards, so a change lands on this very slot.
  *   isLooping        () => boolean  whether to wrap at the end
  *   onTileVisual     (tileIndex, src, w, frac) => void   per-frame visual update
  *   onStop           () => void     fired once when playback ends/stops
@@ -51,6 +59,7 @@ class Transport {
 		this.getTiles        = opts.getTiles;
 		this.getStepBeats    = opts.getStepBeats;
 		this.getTilePlayback = opts.getTilePlayback;
+		this.beforeTile      = opts.beforeTile || null;
 		this.isLooping       = opts.isLooping;
 		this.onTileVisual    = opts.onTileVisual;
 		this.onStop          = opts.onStop;
@@ -135,11 +144,11 @@ class Transport {
 				}
 			}
 			const stepBeats = this.getStepBeats();
-			const tile      = tiles[this.tileIndex];
-			const w         = (tile && tile.w > 0) ? tile.w : 1;
-			const tileBeats = w * stepBeats;
+			let tile        = tiles[this.tileIndex];
+			let w           = (tile && tile.w > 0) ? tile.w : 1;
+			let tileBeats   = w * stepBeats;
 			const startT    = this.grid.timeAtBeat(this.anchorBeat + this.posBeats);
-			const stopT     = this.grid.timeAtBeat(this.anchorBeat + this.posBeats + tileBeats);
+			let stopT       = this.grid.timeAtBeat(this.anchorBeat + this.posBeats + tileBeats);
 
 			if (startT >= now + this.scheduleAheadTime) break;   // beyond the lookahead window
 
@@ -151,10 +160,26 @@ class Transport {
 				continue;
 			}
 
+			// This slot will sound: give the policy a chance to fire pattern-action
+			// modifiers first. The hook may replace/reorder the tile list, so re-read
+			// this slot afterwards — a randomize on the loop's first step reshapes the
+			// loop INCLUDING that first slot.
+			const posSteps = stepBeats > 0 ? this.posBeats / stepBeats : 0;
+			if (this.beforeTile) {
+				this.beforeTile(posSteps, startT);
+				const fresh = this.getTiles();
+				if (this.tileIndex < fresh.length) {
+					tile      = fresh[this.tileIndex];
+					w         = (tile && tile.w > 0) ? tile.w : 1;
+					tileBeats = w * stepBeats;
+					stopT     = this.grid.timeAtBeat(this.anchorBeat + this.posBeats + tileBeats);
+				}
+			}
+
 			// Late partial tile: start it now-ish, offset INTO its audio by how much
 			// of it the grid says has already elapsed, so material stays in place.
 			const lateBy = Math.max(0, (now + MIN_LEAD) - startT);
-			this._scheduleTile(this.tileIndex, tile, startT, stopT, w, lateBy);
+			this._scheduleTile(this.tileIndex, tile, startT, stopT, w, lateBy, posSteps);
 			this.posBeats += tileBeats;
 			this.tileIndex++;
 		}
@@ -162,7 +187,7 @@ class Transport {
 		this.schedulerTimerId = setTimeout(() => this._scheduler(), this.lookahead);
 	}
 
-	_scheduleTile(i, tile, when, stopAt, w, lateBy) {
+	_scheduleTile(i, tile, when, stopAt, w, lateBy, posSteps) {
 		// The policy resolves the tile to a ready buffer + rate (or null = silent).
 		// We always record the time slot so visuals + timing advance even on silence
 		// (a muted or out-of-range tile is a silent slot, not a skipped one). The
@@ -173,7 +198,7 @@ class Transport {
 		// the fill/stretch policy always fills exactly the time the grid allotted
 		// (even if tempo changed since the previous tile).
 		const stepSec = (stopAt - when) / w;
-		const r = tile ? this.getTilePlayback(tile, stepSec) : null;
+		const r = tile ? this.getTilePlayback(tile, stepSec, { posSteps, when }) : null;
 		if (r && r.buffer) {
 			// A late start plays the buffer from the equivalent position inside it:
 			// wall-clock lateness × playbackRate = buffer seconds already elapsed.

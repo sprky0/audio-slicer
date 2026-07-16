@@ -39,6 +39,21 @@ locked to one master clock.
     position + default settings (fills a gap; resets a moved slice; clears
     offset/mute/rev/fades). With All: restores everything except locked slices.
   - (Removed: the old per-tile mute dot and the redundant details-panel "Slice" button.)
+  - **Modifier lane** (below the tile row) — one optional modifier per STEP,
+    pinned to the grid (tiles reorder/resize underneath). Click an empty cell to
+    place one, click a chip for its settings popover, drag to move it. Each mod
+    has an action — **Mute** / **Rev** (one-shot per-voice overrides at schedule
+    time; rev TOGGLES an already-reversed slice) or **Rand** / **Reset** (virtual
+    Randomize press at the Amt level / pristine Refill-All, both respect locks) —
+    and a fire mode: **Prob** (0–100%, rolled per pass) or **Every N** (1st of
+    every N loops, counted from play start). A modifier applies to the whole tile
+    covering its step, decided when that tile is scheduled; pattern actions fire
+    via Transport.beforeTile so a rand on step 0 reshapes the loop INCLUDING its
+    first slot. Chips flash at their audible moment. Persisted (`seq.mods`),
+    rescaled on grid changes, applied in WAV export too (rand/reset against the
+    render's working copy — a bounce evolves like a take; prob is unseeded by
+    design). Prescan covers reversed stretch variants for tiles under rev mods
+    (all tiles when a pattern mod could shuffle them).
   - **Resize semantics — the boundary EATS what it moves over.** Drag right →
     the next clip's head is overwritten (`src` advances); drag left → the
     previous clip's tail truncates. The growing clip keeps its own `src` pinned
@@ -100,9 +115,14 @@ peak-normalized to ~0.99, RIFF/WAV blob download. 24-bit remains a later option.
 
 ## Next: bigger bets
 
-- **Tier 2 leftovers** — per-step gain/probability (reverse + fades shipped);
-  fade curve shapes beyond linear (drop into `envelope.js`'s FADE_CURVES);
-  transient detection + draggable non-uniform slice markers.
+- **Tier 2 leftovers** — per-step gain (probability shipped via the modifier
+  lane; reverse + fades shipped); fade curve shapes beyond linear (drop into
+  `envelope.js`'s FADE_CURVES); transient detection + draggable non-uniform
+  slice markers.
+- **Modifier lane follow-ups** — true per-step chop (mute/reverse just the
+  step's slice of a wider tile — needs mid-voice splitting); more actions
+  (gain, pitch nudge, retrigger); seeded export probability if reproducible
+  bounces are ever wanted.
 - **Richer meter** (future, per discussion) — selectable beat unit (dotted values,
   e.g. 1.5 = dotted quarter) or an odd/compound time-signature editor, building on
   the Beats model.

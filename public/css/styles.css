@@ -609,6 +609,7 @@ input[type="checkbox"]:disabled {
 
 /* --- Sequencer --- */
 .sequencer {
+	position: relative;   /* anchors the modifier-settings overlay */
 	margin-top: var(--space-xl);
 	padding: var(--space-md) 0 0;
 	border-radius: var(--radius-md);
@@ -989,6 +990,88 @@ input[type="checkbox"]:disabled {
 	opacity: 0.9;
 	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
 }
+
+/* --- Modifier lane: one cell per grid step under the tile row. --------------
+   A chip in a cell is a step modifier; its colour encodes the action. */
+.seq-mods {
+	display: flex;
+	gap: 0;
+	margin-top: 2px;
+	min-height: calc(var(--grid-unit) * 3.5);
+}
+
+.seq-mod-cell {
+	position: relative;
+	flex: 1 1 0;
+	min-width: 6px;
+	height: calc(var(--grid-unit) * 3.5);
+	border: 1px dashed transparent;
+	border-radius: var(--radius-sm);
+	box-sizing: border-box;
+	cursor: pointer;
+}
+.seq-mod-cell:hover {
+	border-color: var(--color-border);
+	background: rgba(255, 255, 255, 0.04);
+}
+
+/* The modifier chip. Colour = action intent: mute=red, reverse=violet (echoes
+   the ◀ badge), randomize=orange (the label accent), reset=blue. */
+.seq-mod {
+	position: absolute;
+	inset: 1px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 11px;
+	font-weight: bold;
+	border-radius: var(--radius-sm);
+	cursor: grab;
+	user-select: none;
+	color: var(--color-text-primary);
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+	transition: filter var(--transition-fast), box-shadow var(--transition-fast);
+}
+.seq-mod[data-action="mute"]  { background: var(--color-danger-active); }
+.seq-mod[data-action="rev"]   { background: #7d3cb8; }
+.seq-mod[data-action="rand"]  { background: var(--color-label-text); color: #221a05; text-shadow: none; }
+.seq-mod[data-action="reset"] { background: var(--color-accent-active); }
+.seq-mod:hover    { filter: brightness(1.15); }
+.seq-mod.selected { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85); }
+.seq-mod.dragging { opacity: 0.75; cursor: grabbing; }
+/* Fired flash at the modifier's audible moment (class pulsed from JS). */
+.seq-mod.fired    { filter: brightness(2); transition: none; }
+
+/* Modifier settings overlay: a popover anchored under the selected chip. */
+.mod-overlay {
+	position: absolute;
+	z-index: 20;
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--gap) / 2);
+	padding: var(--gap);
+	width: calc(var(--col-min) * 4);   /* 4 action buttons need the elbow room */
+	background: var(--color-bg-secondary);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+.mod-overlay[hidden] { display: none; }
+
+.mod-overlay-row {
+	display: flex;
+	gap: calc(var(--gap) / 2);
+}
+.mod-overlay-row > * {
+	flex: 1 1 0;
+	min-width: 0;
+}
+
+.mod-delete-btn {
+	background-color: var(--color-danger);
+}
+.mod-delete-btn:hover:not(:disabled)  { background-color: var(--color-danger-hover); }
+.mod-delete-btn:active:not(:disabled) { background-color: var(--color-danger-active); }
 
 /* Resize handles: a coloured line + flag on each slice edge, echoing the
    waveform canvas — green = start (drag back), red = end (drag forward).
