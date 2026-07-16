@@ -77,13 +77,10 @@ locked to one master clock.
 
 ## Open follow-ups (small)
 
-- **Dead file:** `public/js/audio-slicer.js` (old monolithic `AudioSlicer`) is not
-  an ES module and never loaded — safe to delete.
-- **favicon 404:** browser requests `/favicon.ico` (none served) → one console
-  404. Add a favicon (even empty) to silence it.
-- **Preview self-ending linger:** if a waveform preview ends on its own (segments
-  disabled) the controller doesn't emit 'stopped', so the floating transport could
-  linger. Play-All-dismiss works; the self-end path is unexercised.
+- (Done 2026-07-15: dead `audio-slicer.js` deleted; favicon 404 silenced via
+  `<link rel="icon" href="data:,">`; preview self-end now emits 'stopped' via
+  `stop()` so the floating transport dismisses — verified headlessly. Slicer
+  registry gained a debug-only `_slicer` handle alongside `_transport`.)
 - **Manual passes not yet done headlessly:** MIDI device hot-plug with real
   hardware; the external-clock PHASE lock against a real device (verified with
   synthetic pulses through the real handler chain); the gaps-mode START (green)

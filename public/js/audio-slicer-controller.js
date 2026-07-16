@@ -283,13 +283,8 @@ class AudioSlicerController {
 			if (next !== null && next !== e.detail.index) {
 				this.playSegmentAtPosition(next, 0);
 			} else {
-				this.view.setPlayingRegion(null);
-				if (this._playheadAnimId) {
-					cancelAnimationFrame(this._playheadAnimId);
-					this._playheadAnimId = null;
-				}
-				this.view.setIsPlaying(false);
-				this.view.setPlayheadPosition(0);
+				// stop() also emits 'stopped' so preview UI (floating transport) dismisses
+				this.stop();
 			}
 		});
 		this.engine.addEventListener('segmentenable', (e) => {

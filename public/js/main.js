@@ -2484,6 +2484,7 @@ function createSlicer(savedState = null) {
 	slicers.push({
 		id, getState, setMidiBpm, getClockInfo,
 		_transport: transport,       // debug/verification only — not app API
+		_slicer: slicer,             // debug/verification only — not app API
 		seqStart: startSeqPlayback,
 		seqStop:  stopSeqPlayback,
 		hasTiles: () => seq.tiles.length > 0,
