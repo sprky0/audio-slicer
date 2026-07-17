@@ -11,6 +11,10 @@ Load an audio file, chop it into slices on a waveform, and sequence those slices
 - **Zoom & trim** — zoom into a selection and "Trim" to make it the new working view.
 - **Tile sequencer** — arrange slices into a per-slicer loop of variable-width tiles: drag to reorder, drag the edges to resize (sub-step precision), double-click to split, shift-click to merge — all live while the loop plays.
   - **Packed vs Gaps** — a global mode toggle: *Packed* keeps tiles contiguous (resize borrows from the neighbour); *Gaps* is free placement — moving/shrinking a clip leaves silence, dropping/growing overwrites.
+  - **Reset Order / Reset All** — put the slices back in native play order (each keeps its fades/reverse/pitch; locks and gaps stay anchored), or rebuild the pristine default pattern.
+- **Slice settings** — per-slice mute, lock, reverse, fade in/out envelope, duplicate, and refill, with an **All** broadcast toggle; per-slice pitch offset via mouse-wheel.
+- **Modifier lane** — one optional step modifier per grid cell, firing by probability or every-N-loops: **Mute**, **Reverse**, **Randomize** (virtual shuffle press), **Reset** (restore native order, settings kept), and **Ratchet** (retrigger the step 1–8× per step across a 1–16-step length; the span absorbs the tiles it covers). Live feedback: the chip and its span brace light while a ratchet sounds, the waveform playhead restarts on every hit, and modifiers swallowed by the span grey out.
+- **WAV export** — offline render of the master mix (any subset of slicers, any length in beats) to a normalized 16-bit stereo WAV, bit-faithful to live playback — time-stretch, fades, and step modifiers included.
 - **Edit / perform layout** — Show/Hide details trades vertical space between a big waveform (edit) and a big tile row (perform).
 - **Master transport** — one Master tempo + Play All / Stop All drive every slicer. All slicers share a single AudioContext and start on one clock instant, so multi-track loops are sample-locked.
 - **MIDI clock sync** — sync to an external MIDI clock (Web MIDI): the incoming clock sets the master tempo, and MIDI Start/Continue/Stop drive the sequencers. A clock indicator shows the active source, tempo, and a 4-beat pulse.
@@ -41,11 +45,14 @@ public/
     audio-slicer-controller.js  connects the engine and the waveform view
     audio-engine.js             audio loading, slicing, playback (no DOM)
     audio-context.js            the shared AudioContext singleton (Tier 1c)
+    beat-grid.js                shared beat↔time mapping (drift-free master clock)
     waveform-view.js            canvas drawing and interaction
     transport.js                lookahead sequencer scheduler
     drag-control.js             the unified button-shaped control
     midi-clock.js               Web MIDI clock receiver → master tempo + transport
     timestretch.js              WSOLA time-stretch DSP
+    envelope.js                 per-voice fade envelope (shared by live + export)
+    export-wav.js               offline mix render → 16-bit RIFF/WAV download
     palette.js                  shared slice colors
     storage.js                  localStorage + IndexedDB persistence
 ```
