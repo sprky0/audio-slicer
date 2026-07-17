@@ -43,8 +43,19 @@
  *                    tiles). The policy may mutate/replace the tile list here
  *                    (pattern-action modifiers) — the slot's tile is re-read
  *                    afterwards, so a change lands on this very slot.
+ *   resolveRatchet   (tile, posSteps, when) => { subdiv, lenSteps } | null
+ *                    optional; rolled once per sounding slot. Non-null turns the
+ *                    slot into a ratchet: the tile RETRIGGERS `subdiv` times per
+ *                    step across `lenSteps` steps of grid time, and the span
+ *                    absorbs every following tile that starts inside it.
  *   isLooping        () => boolean  whether to wrap at the end
- *   onTileVisual     (tileIndex, src, w, frac) => void   per-frame visual update
+ *   onTileVisual     (tileIndex, src, w, frac, ratchet) => void   per-frame
+ *                    visual update. `ratchet` is null for normal slots; for a
+ *                    ratchet span it carries { step, hits, hitIndex, hitFrac,
+ *                    wTile, hitRegionFrac, posSteps } so the UI can restart its
+ *                    playhead per hit, light the firing modifier, and grey out
+ *                    modifiers superseded by the span (w = consumed steps;
+ *                    steps beyond wTile never resolve their own modifiers).
  *   onStop           () => void     fired once when playback ends/stops
  */
 
@@ -60,6 +71,7 @@ class Transport {
 		this.getStepBeats    = opts.getStepBeats;
 		this.getTilePlayback = opts.getTilePlayback;
 		this.beforeTile      = opts.beforeTile || null;
+		this.resolveRatchet  = opts.resolveRatchet || null;
 		this.isLooping       = opts.isLooping;
 		this.onTileVisual    = opts.onTileVisual;
 		this.onStop          = opts.onStop;
@@ -176,6 +188,20 @@ class Transport {
 				}
 			}
 
+			// Ratchet slot: the policy rolled a retrigger for this tile — it replaces
+			// the single voice with subdiv-per-step retriggers and may consume the
+			// tiles that follow (they start inside the ratchet's span).
+			if (this.resolveRatchet) {
+				const rt = this.resolveRatchet(tile, posSteps, startT);
+				if (rt) {
+					const { consumedBeats, nextIndex } =
+						this._scheduleRatchet(this.tileIndex, tile, w, stepBeats, rt, posSteps);
+					this.posBeats += consumedBeats;
+					this.tileIndex = nextIndex;
+					continue;
+				}
+			}
+
 			// Late partial tile: start it now-ish, offset INTO its audio by how much
 			// of it the grid says has already elapsed, so material stays in place.
 			const lateBy = Math.max(0, (now + MIN_LEAD) - startT);
@@ -185,6 +211,69 @@ class Transport {
 		}
 
 		this.schedulerTimerId = setTimeout(() => this._scheduler(), this.lookahead);
+	}
+
+	// Ratchet slot: schedule `subdiv` grid-locked retriggers per step across
+	// `lenSteps` steps (clamped to the end of the bar, so the span never crosses
+	// the loop wrap). Each hit replays the tile's audio from the top and is cut at
+	// the next hit. The span absorbs every following tile that STARTS inside it —
+	// their time belongs to this slot. Returns the beats consumed + the next tile
+	// index, so the caller advances past the absorbed tiles.
+	_scheduleRatchet(i, tile, w, stepBeats, rt, posSteps) {
+		const EPS   = 1e-6;
+		const now   = this.engine.audioContext.currentTime;
+		const tiles = this.getTiles();
+		let remaining = 0;
+		for (let k = i; k < tiles.length; k++) remaining += (tiles[k].w > 0 ? tiles[k].w : 1);
+		const subdiv    = Math.max(1, Math.round(rt.subdiv || 1));
+		const spanSteps = Math.min(rt.lenSteps > 0 ? rt.lenSteps : 1, remaining);
+		const base      = this.anchorBeat + this.posBeats;
+		const startT    = this.grid.timeAtBeat(base);
+		const tileStopT = this.grid.timeAtBeat(base + w * stepBeats);
+		const spanEndT  = this.grid.timeAtBeat(base + spanSteps * stepBeats);
+		// Same stretch policy as a normal slot (stepSec from the tile's own grid
+		// span); the envelope is scaled to ONE HIT so per-slice fades shape each
+		// retrigger instead of stretching across the whole span.
+		const stepSec  = (tileStopT - startT) / w;
+		const hits     = Math.max(1, Math.floor(spanSteps * subdiv + EPS));
+		const hitBeats = stepBeats / subdiv;
+		const r = this.getTilePlayback(tile, stepSec, {
+			posSteps, when: startT, envDurSec: (spanEndT - startT) / hits,
+		});
+		if (r && r.buffer) {
+			for (let k = 0; k < hits; k++) {
+				const h0 = this.grid.timeAtBeat(base + k * hitBeats);
+				const h1 = Math.min(this.grid.timeAtBeat(base + (k + 1) * hitBeats), spanEndT);
+				if (h1 <= now + MIN_LEAD) continue;   // this hit's moment is already gone
+				const lateBy = Math.max(0, (now + MIN_LEAD) - h0);
+				this.engine.scheduleBuffer(r.buffer, h0 + lateBy, h1, r.playbackRate || 1, {
+					declick:   true,   // retrigger cuts are hard by design — always declick
+					env:       r.env || null,
+					offsetSec: lateBy > 0 ? lateBy * (r.playbackRate || 1) : 0,
+				});
+			}
+		}
+		// Absorb the tiles that start inside the span.
+		let consumedSteps = w, j = i + 1;
+		while (j < tiles.length && consumedSteps < spanSteps - EPS) {
+			consumedSteps += (tiles[j].w > 0 ? tiles[j].w : 1);
+			j++;
+		}
+		const stopAt = this.grid.timeAtBeat(base + consumedSteps * stepBeats);
+		// Tag the note so the visual loop can derive the current hit per frame:
+		// wTile/hitRegionFrac let the playhead sweep only the source a hit
+		// actually consumes (hitSteps of the tile's w-step region) then restart.
+		this.noteQueue.push({
+			tileIndex: i, src: tile ? tile.src : 0, w: consumedSteps, time: startT, stopAt,
+			ratchet: {
+				hits,
+				step:          Number.isFinite(rt.step) ? rt.step : -1,
+				wTile:         w,
+				hitRegionFrac: Math.min(1, (spanSteps / hits) / w),
+				posSteps,
+			},
+		});
+		return { consumedBeats: consumedSteps * stepBeats, nextIndex: j };
 	}
 
 	_scheduleTile(i, tile, when, stopAt, w, lateBy, posSteps) {
@@ -231,7 +320,21 @@ class Transport {
 		if (current) {
 			const dur  = current.stopAt - current.time;
 			const frac = dur > 0 ? Math.min(1, Math.max(0, (now - current.time) / dur)) : 0;
-			this.onTileVisual(current.tileIndex, current.src, current.w, frac);
+			let rt = null;
+			if (current.ratchet) {
+				const hits     = current.ratchet.hits;
+				const hitIndex = Math.min(hits - 1, Math.floor(frac * hits));
+				rt = {
+					step:          current.ratchet.step,
+					hits,
+					hitIndex,
+					hitFrac:       frac * hits - hitIndex,
+					wTile:         current.ratchet.wTile,
+					hitRegionFrac: current.ratchet.hitRegionFrac,
+					posSteps:      current.ratchet.posSteps,
+				};
+			}
+			this.onTileVisual(current.tileIndex, current.src, current.w, frac, rt);
 		}
 
 		// Done: scheduling is finished and the tail has played out.

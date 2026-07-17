@@ -994,6 +994,7 @@ input[type="checkbox"]:disabled {
 /* --- Modifier lane: one cell per grid step under the tile row. --------------
    A chip in a cell is a step modifier; its colour encodes the action. */
 .seq-mods {
+	position: relative;   /* anchors the .mod-brace span overlays */
 	display: flex;
 	gap: 0;
 	margin-top: 2px;
@@ -1036,11 +1037,36 @@ input[type="checkbox"]:disabled {
 .seq-mod[data-action="rev"]   { background: #7d3cb8; }
 .seq-mod[data-action="rand"]  { background: var(--color-label-text); color: #221a05; text-shadow: none; }
 .seq-mod[data-action="reset"] { background: var(--color-accent-active); }
+.seq-mod[data-action="ratchet"] { background: #2e9e5b; }
 .seq-mod:hover    { filter: brightness(1.15); }
 .seq-mod.selected { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85); }
 .seq-mod.dragging { opacity: 0.75; cursor: grabbing; }
 /* Fired flash at the modifier's audible moment (class pulsed from JS). */
 .seq-mod.fired    { filter: brightness(2); transition: none; }
+/* Sustained highlight while a ratchet span is sounding (per-frame from JS). */
+.seq-mod.firing   { filter: brightness(1.7); box-shadow: 0 0 6px rgba(46, 158, 91, 0.8); }
+/* A modifier swallowed by an active ratchet span: it won't fire this pass. */
+.seq-mod.superseded {
+	filter: grayscale(1) brightness(0.55);
+	outline: 1px dashed #999;
+	outline-offset: -1px;
+	box-shadow: none;
+}
+
+/* Ratchet span brace: bottom edge = duration, right edge = endpoint. Runs from
+   the end of the modifier's step to the end of the last covered step; a
+   single-step ratchet gets none. */
+.mod-brace {
+	position: absolute;
+	bottom: 1px;
+	height: 40%;
+	border-bottom: 2px solid #2e9e5b;
+	border-right: 2px solid #2e9e5b;
+	border-bottom-right-radius: 3px;
+	opacity: 0.65;
+	pointer-events: none;   /* clicks fall through to the cells beneath */
+}
+.mod-brace.firing { opacity: 1; filter: brightness(1.5); }
 
 /* Modifier settings overlay: a popover anchored under the selected chip. */
 .mod-overlay {

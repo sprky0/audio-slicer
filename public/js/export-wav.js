@@ -80,6 +80,9 @@ function normalize(buf, target = 0.99) {
  *                   against the render's WORKING COPY — may return a replacement
  *                   list (same length); the live pattern is untouched
  *     voiceOverrides(tile, posSteps) => { mute, rev } | null
+ *     resolveRatchet(tile, posSteps) => { subdiv, lenSteps } | null
+ *                   non-null turns the slot into a ratchet: subdiv retriggers
+ *                   per step across lenSteps steps (mirrors the live transport)
  *   (posSteps = steps of render time elapsed, monotonic across loop passes.)
  */
 export async function renderMix({ tracks, masterBpm, lengthBeats, sampleRate }) {
@@ -117,11 +120,47 @@ export async function renderMix({ tracks, masterBpm, lengthBeats, sampleRate }) 
 		let t = 0, i = 0, posSteps = 0;
 		while (t < endTime) {
 			if (hooks && hooks.beforeTile) tiles = hooks.beforeTile(posSteps, tiles) || tiles;
-			const tile = tiles[i % tiles.length];
+			const idx  = i % tiles.length;
+			const tile = tiles[idx];
 			const w    = (tile && tile.w > 0) ? tile.w : 1;
 			const dur  = w * stepSec;
 			const ov   = (hooks && hooks.voiceOverrides) ? hooks.voiceOverrides(tile, posSteps) : null;
-			const r    = track.getTilePlayback(tile, stepSec, ov);
+
+			// Ratchet slot — mirror the live transport: subdiv retriggers per step
+			// across lenSteps steps (clamped to the end of the bar), the envelope
+			// scaled to one hit, and the span absorbing every tile that starts
+			// inside it.
+			const rt = (hooks && hooks.resolveRatchet) ? hooks.resolveRatchet(tile, posSteps) : null;
+			if (rt) {
+				const EPS = 1e-6;
+				let remaining = 0;
+				for (let k = idx; k < tiles.length; k++) remaining += (tiles[k].w > 0 ? tiles[k].w : 1);
+				const subdiv    = Math.max(1, Math.round(rt.subdiv || 1));
+				const spanSteps = Math.min(rt.lenSteps > 0 ? rt.lenSteps : 1, remaining);
+				const hits      = Math.max(1, Math.floor(spanSteps * subdiv + EPS));
+				const hitSec    = stepSec / subdiv;
+				const spanEndT  = t + spanSteps * stepSec;
+				const rr = track.getTilePlayback(tile, stepSec, { ...ov, envDurSec: hitSec });
+				if (rr && rr.buffer) {
+					for (let k = 0; k < hits; k++) {
+						const h0 = t + k * hitSec;
+						if (h0 >= endTime) break;
+						const h1 = Math.min(h0 + hitSec, spanEndT, endTime);
+						scheduleVoice(ctx, node, rr.buffer, h0, h1, rr.playbackRate || 1, true, rr.env || null);
+					}
+				}
+				let consumed = w, j = idx + 1;
+				while (j < tiles.length && consumed < spanSteps - EPS) {
+					consumed += (tiles[j].w > 0 ? tiles[j].w : 1);
+					j++;
+				}
+				t += consumed * stepSec;
+				posSteps += consumed;
+				i += j - idx;
+				continue;
+			}
+
+			const r = track.getTilePlayback(tile, stepSec, ov);
 			if (r && r.buffer) {
 				// Hard-cut at endTime so the render tail matches a seamless loop.
 				scheduleVoice(ctx, node, r.buffer, t, Math.min(t + dur, endTime), r.playbackRate || 1, !!r.fill, r.env || null);

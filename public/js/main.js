@@ -680,9 +680,15 @@ function createSlicer(savedState = null) {
 	seqStopBtn.textContent = 'Stop';
 	seqStopBtn.className   = 'seq-stop-btn';
 
+	const seqResetOrderBtn = document.createElement('button');
+	seqResetOrderBtn.textContent = 'Reset Order';
+	seqResetOrderBtn.className   = 'seq-reset-order-btn';
+	seqResetOrderBtn.title       = 'Restore the native play order — every slice keeps its fades, reverse, pitch & mute (locks and gaps stay put)';
+
 	const seqClearBtn = document.createElement('button');
-	seqClearBtn.textContent = 'Reset Tiles';
+	seqClearBtn.textContent = 'Reset All';
 	seqClearBtn.className   = 'seq-clear-btn';
+	seqClearBtn.title       = 'Rebuild the default one-unit-per-tile pattern — clears fades, reverse, pitch, mutes and locks';
 
 	const seqLoopBtn = document.createElement('button');
 	seqLoopBtn.textContent = 'Loop';
@@ -926,8 +932,7 @@ function createSlicer(savedState = null) {
 		return fresh;
 	};
 	// Pristine pattern: restore every non-locked entry (in place) to the default
-	// slice for its grid position — Refill-All semantics. Pure over `tiles` (also
-	// fired by 'reset' step modifiers, live and in export).
+	// slice for its grid position — Refill-All semantics (wipes per-slice settings).
 	const resetPatternTiles = (tiles) => {
 		let s = 0;
 		for (let i = 0; i < tiles.length; i++) {
@@ -935,6 +940,26 @@ function createSlicer(savedState = null) {
 			if (!tiles[i].locked) tiles[i] = { src: s, w, offset: 0, muted: false, colorIdx: Math.round(s) };
 			s += w;
 		}
+	};
+	// Order-only reset: put the clips back in native (ascending src) play order
+	// while each tile KEEPS its own settings — width, pitch offset, mute, reverse,
+	// fades, colour. Locked tiles and gaps stay anchored: each run of plain clips
+	// between anchors re-sorts internally, so run totals (and thus every anchor's
+	// apparent start) are preserved. In-place over `tiles` (also fired by 'reset'
+	// step modifiers, live and in export).
+	const resetOrderTiles = (tiles) => {
+		let runStart = 0;
+		const sortRun = (end) => {
+			if (end - runStart > 1) {
+				const run = tiles.slice(runStart, end).sort((a, b) => a.src - b.src);
+				for (let k = 0; k < run.length; k++) tiles[runStart + k] = run[k];
+			}
+			runStart = end + 1;
+		};
+		for (let i = 0; i < tiles.length; i++) {
+			if (tiles[i].locked || tiles[i].gap) sortRun(i);
+		}
+		sortRun(tiles.length);
 	};
 	const refillSelected = () => {
 		if (allSlices) {
@@ -957,6 +982,7 @@ function createSlicer(savedState = null) {
 	// master-only, so the per-slicer Play/Stop are not shown here.
 	seqToolbar.appendChild(setSpan(seqLabel, 1));
 	seqToolbar.appendChild(setSpan(seqLoopBtn, 1));
+	seqToolbar.appendChild(setSpan(seqResetOrderBtn, 1));
 	seqToolbar.appendChild(setSpan(seqClearBtn, 1));
 	seqToolbar.appendChild(setSpan(randomizeBtn, 1));
 	seqToolbar.appendChild(setSpan(amountControl.getElement(), 2));  // Amount
@@ -1012,10 +1038,16 @@ function createSlicer(savedState = null) {
 	//     step      : integer grid cell 0..U-1
 	//     action    : 'mute' | 'rev'   — one-shot per-voice override (never
 	//                 written back to the tile); rev TOGGLES tile.reversed
-	//                 'rand' | 'reset' — virtual Randomize press / pristine
-	//                 pattern (Refill-All), fired live against seq.tiles
+	//                 'rand' | 'reset' — virtual Randomize press / order-only
+	//                 reset (native order, settings kept), fired live against
+	//                 seq.tiles
+	//                 'ratchet' — retrigger the covered tile `subdiv` times per
+	//                 step across `lenSteps` steps of grid time; the span absorbs
+	//                 tiles that start inside it (clamped to the end of the bar)
 	//     fireMode  : 'prob'  → fireValue = 0..100 (% chance per pass)
 	//                 'every' → fireValue = N (fires on the 1st of every N loops)
+	//     subdiv    : ratchet only — retriggers per step (1..8)
+	//     lenSteps  : ratchet only — steps the ratchet occupies (1..16)
 	const seq = {
 		tiles:        [],
 		mods:         [],
@@ -1264,9 +1296,12 @@ function createSlicer(savedState = null) {
 		// resize). Applied per voice at schedule time (envelope.js), never baked into
 		// buffers — the caches stay envelope-agnostic.
 		const rev = (ov && ov.rev) ? !tile.reversed : !!tile.reversed;
+		// Envelope window: normally the whole slot; a ratchet hit passes its own
+		// hit length (ov.envDurSec) so the fades shape each retrigger.
+		const envDur = (ov && ov.envDurSec > 0) ? ov.envDurSec : playDur;
 		const env = ((tile.fadeIn > 0) || (tile.fadeOut > 0)) ? {
-			fadeInSec:  Math.max(0, Math.min(1, tile.fadeIn  || 0)) * playDur,
-			fadeOutSec: Math.max(0, Math.min(1, tile.fadeOut || 0)) * playDur,
+			fadeInSec:  Math.max(0, Math.min(1, tile.fadeIn  || 0)) * envDur,
+			fadeOutSec: Math.max(0, Math.min(1, tile.fadeOut || 0)) * envDur,
 			curve: tile.fadeCurve || 'linear',
 		} : null;
 
@@ -1306,6 +1341,30 @@ function createSlicer(savedState = null) {
 		}, delay);
 	};
 
+	// Sustained "firing" highlight for a ratchet in progress: the chip (and its
+	// span brace) stay lit for the whole ratchet span, driven per frame from
+	// onTileVisual — no timers to drift when the grid slews. Re-queries the DOM
+	// each frame so a mid-span renderModsRow rebuild can't strand the classes.
+	// `superseded` = steps whose modifiers the active span swallowed (their
+	// tiles were absorbed, so they never resolve) — shown greyed/dashed.
+	const setFiringMod = (step, superseded = []) => {
+		const sel = String(step);
+		for (const el of seqModsRow.querySelectorAll('.seq-mod.firing, .mod-brace.firing')) {
+			const s = el.classList.contains('mod-brace') ? el.dataset.braceStep : el.parentElement.dataset.step;
+			if (s !== sel) el.classList.remove('firing');
+		}
+		const sup = new Set(superseded.map(String));
+		for (const el of seqModsRow.querySelectorAll('.seq-mod.superseded')) {
+			if (!sup.has(el.parentElement.dataset.step)) el.classList.remove('superseded');
+		}
+		for (const s of sup) {
+			seqModsRow.querySelector(`[data-step="${s}"] .seq-mod`)?.classList.add('superseded');
+		}
+		if (step < 0) return;
+		seqModsRow.querySelector(`[data-step="${step}"] .seq-mod`)?.classList.add('firing');
+		seqModsRow.querySelector(`.mod-brace[data-brace-step="${step}"]`)?.classList.add('firing');
+	};
+
 	// Voice-level resolution for one scheduled slot: collect mute/rev modifiers
 	// covering the tile's span, roll each, and hand getTilePlayback a one-shot
 	// override. Two rev modifiers under one wide tile cancel out (toggle twice).
@@ -1321,6 +1380,27 @@ function createSlicer(savedState = null) {
 			flashMod(m, when);
 		}
 		return (mute || rev) ? { mute, rev } : null;
+	};
+
+	// Ratchet resolution for one scheduled slot: the first FIRING ratchet modifier
+	// covering the tile's span wins (one mod per step, but a wide tile can span
+	// several). Rolled once per slot — the transport asks before scheduling the
+	// voice. Gaps and muted tiles don't ratchet: retriggering silence is
+	// meaningless, and the slot plays normally instead.
+	const resolveRatchet = (tile, posSteps, when) => {
+		if (!seq.mods.length || !tile || tile.gap || tile.muted) return null;
+		const { loopIdx, stepInBar } = barPos(posSteps, unitCount());
+		const w = (tile.w > 0) ? tile.w : 1;
+		for (const m of modsInSpan(seq.mods, stepInBar, w)) {
+			if (m.action !== 'ratchet' || !modFires(m, loopIdx)) continue;
+			flashMod(m, when);
+			return {
+				subdiv:   Math.max(1, Math.round(m.subdiv || 1)),
+				lenSteps: Math.max(1, Math.round(m.lenSteps || 1)),
+				step:     m.step,   // for the live visuals (firing chip + brace)
+			};
+		}
+		return null;
 	};
 
 	// Pattern-action modifiers (rand/reset) fire just before their covering tile
@@ -1345,7 +1425,7 @@ function createSlicer(savedState = null) {
 				const rebuilt = randomizePattern(seq.tiles, randLevel / 100);
 				if (rebuilt) { seq.tiles = rebuilt; changed = true; }
 			} else {
-				resetPatternTiles(seq.tiles);
+				resetOrderTiles(seq.tiles);
 				changed = true;
 			}
 			flashMod(m, when);
@@ -1971,11 +2051,13 @@ function createSlicer(savedState = null) {
 	// chip. Click an empty cell to place a modifier (opens its settings), click a
 	// chip to select it (toggles the settings overlay), drag a chip sideways to
 	// move it to another step (occupied steps are skipped over).
-	const MOD_GLYPH = { mute: 'M', rev: '◀', rand: '⚂', reset: '↺' };
-	const MOD_NAME  = { mute: 'Mute', rev: 'Reverse', rand: 'Randomize', reset: 'Reset' };
+	const MOD_GLYPH = { mute: 'M', rev: '◀', rand: '⚂', reset: '↺', ratchet: '≣' };
+	const MOD_NAME  = { mute: 'Mute', rev: 'Reverse', rand: 'Randomize', reset: 'Reset', ratchet: 'Ratchet' };
 	let selectedMod = null;
 
-	const modTitle = (m) => `${MOD_NAME[m.action]} — ${m.fireMode === 'every'
+	const modTitle = (m) => `${MOD_NAME[m.action]}${m.action === 'ratchet'
+		? ` ×${Math.max(1, Math.round(m.subdiv || 1))}/step over ${Math.max(1, Math.round(m.lenSteps || 1))} step(s)`
+		: ''} — ${m.fireMode === 'every'
 		? `every ${Math.max(1, Math.round(m.fireValue))} loops`
 		: `${Math.round(m.fireValue)}% chance`}. Click for settings, drag to move.`;
 
@@ -1989,20 +2071,25 @@ function createSlicer(savedState = null) {
 	const modActionRow = document.createElement('div');
 	modActionRow.className = 'mod-overlay-row';
 	const modActionBtns = {};
-	for (const a of ['mute', 'rev', 'rand', 'reset']) {
+	for (const a of ['mute', 'rev', 'rand', 'reset', 'ratchet']) {
 		const b = document.createElement('button');
 		b.className = 'toggle-btn mod-action-btn';
 		b.dataset.action = a;
 		b.textContent = MOD_NAME[a];
 		b.title = {
-			mute:  'Silence the step (the whole tile covering it) when this fires',
-			rev:   'Reverse the step when this fires (toggles an already-reversed slice back)',
-			rand:  'Virtual press of Randomize (uses the Amt level, respects locks)',
-			reset: 'Restore the pristine pattern (Refill-All, respects locks)',
+			mute:    'Silence the step (the whole tile covering it) when this fires',
+			rev:     'Reverse the step when this fires (toggles an already-reversed slice back)',
+			rand:    'Virtual press of Randomize (uses the Amt level, respects locks)',
+			reset:   'Restore the native play order — slices keep their fades/reverse/pitch (respects locks)',
+			ratchet: 'Retrigger the step: N hits per step, across a length in steps',
 		}[a];
 		b.addEventListener('click', () => {
 			if (!overlayMod) return;
 			overlayMod.action = a;
+			if (a === 'ratchet') {   // seed sensible params the first time
+				if (!(overlayMod.subdiv >= 1))   overlayMod.subdiv = 2;
+				if (!(overlayMod.lenSteps >= 1)) overlayMod.lenSteps = 1;
+			}
 			refreshModOverlay();
 			renderModsRow();
 			schedulePrescan();   // 'rev' needs the flipped stretch variants cached
@@ -2048,6 +2135,25 @@ function createSlicer(savedState = null) {
 	modFireRow.appendChild(modProbCtrl.getElement());
 	modFireRow.appendChild(modEveryCtrl.getElement());
 
+	// Ratchet parameters (shown only when the action is 'ratchet'): hits per step
+	// + how many steps of the bar the ratchet occupies.
+	const modRatchetRow = document.createElement('div');
+	modRatchetRow.className = 'mod-overlay-row';
+	const modSubdivCtrl = new DragControl({
+		min: 1, max: 8, step: 1, value: 2, label: 'Hits',
+		format: (v) => `×${Math.round(v)}`,
+		onChange: (v) => { if (overlayMod) { overlayMod.subdiv = Math.round(v); scheduleSave(); } },
+	});
+	modSubdivCtrl.getElement().title = 'Retriggers per step';
+	const modLenCtrl = new DragControl({
+		min: 1, max: 16, step: 1, value: 1, label: 'Len',
+		format: (v) => `${Math.round(v)} step${Math.round(v) === 1 ? '' : 's'}`,
+		onChange: (v) => { if (overlayMod) { overlayMod.lenSteps = Math.round(v); renderModsRow(); scheduleSave(); } },
+	});
+	modLenCtrl.getElement().title = 'Steps the ratchet occupies — beyond the tile it swallows what follows (clamped to the end of the bar)';
+	modRatchetRow.appendChild(modSubdivCtrl.getElement());
+	modRatchetRow.appendChild(modLenCtrl.getElement());
+
 	const modDeleteBtn = document.createElement('button');
 	modDeleteBtn.className = 'mod-delete-btn';
 	modDeleteBtn.textContent = 'Remove modifier';
@@ -2062,6 +2168,7 @@ function createSlicer(savedState = null) {
 
 	modOverlay.appendChild(modActionRow);
 	modOverlay.appendChild(modFireRow);
+	modOverlay.appendChild(modRatchetRow);
 	modOverlay.appendChild(modDeleteBtn);
 
 	const refreshModOverlay = () => {
@@ -2077,6 +2184,12 @@ function createSlicer(savedState = null) {
 		modEveryCtrl.getElement().style.display = every ? '' : 'none';
 		if (every) modEveryCtrl.setValue(Math.max(1, Math.round(overlayMod.fireValue)));
 		else       modProbCtrl.setValue(Math.max(0, Math.min(100, overlayMod.fireValue)));
+		const ratchet = overlayMod.action === 'ratchet';
+		modRatchetRow.style.display = ratchet ? '' : 'none';
+		if (ratchet) {
+			modSubdivCtrl.setValue(Math.max(1, Math.round(overlayMod.subdiv || 2)));
+			modLenCtrl.setValue(Math.max(1, Math.round(overlayMod.lenSteps || 1)));
+		}
 	};
 
 	const positionModOverlay = () => {
@@ -2199,6 +2312,21 @@ function createSlicer(savedState = null) {
 				});
 			}
 			seqModsRow.appendChild(cell);
+		}
+		// Ratchet span braces: a thin bottom+right outline running from the END
+		// of the modifier's step to the end of the last step its length covers —
+		// duration and endpoint at a glance. A single-step ratchet needs none.
+		for (const m of seq.mods) {
+			if (m.action !== 'ratchet') continue;
+			const len = Math.max(1, Math.round(m.lenSteps || 1));
+			const end = Math.min(m.step + len, U);   // span clamps at the bar end
+			if (end <= m.step + 1) continue;
+			const brace = document.createElement('div');
+			brace.className = 'mod-brace';
+			brace.dataset.braceStep = String(m.step);
+			brace.style.left  = `${((m.step + 1) / U) * 100}%`;
+			brace.style.width = `${((end - m.step - 1) / U) * 100}%`;
+			seqModsRow.appendChild(brace);
 		}
 		positionModOverlay();   // keep an open overlay anchored after a rebuild
 	};
@@ -2649,11 +2777,26 @@ function createSlicer(savedState = null) {
 		// fire in beforeTile so they land on the very slot that triggered them;
 		// mute/rev become one-shot overrides on the voice.
 		beforeTile:      firePatternMods,
-		getTilePlayback: (tile, ss, ctx) =>
-			getTilePlayback(tile, ss, ctx ? resolveVoiceMods(tile, ctx.posSteps, ctx.when) : null),
+		resolveRatchet,
+		getTilePlayback: (tile, ss, ctx) => {
+			const ov = ctx ? resolveVoiceMods(tile, ctx.posSteps, ctx.when) : null;
+			// A ratchet slot passes envDurSec through ctx so the fades scale per hit.
+			return getTilePlayback(tile, ss,
+				(ctx && ctx.envDurSec > 0) ? { ...ov, envDurSec: ctx.envDurSec } : ov);
+		},
 		isLooping:       () => seq.loop,
-		onTileVisual: (tileIndex, src, w, frac) => {
+		onTileVisual: (tileIndex, src, w, frac, rt) => {
 			setPlayingTile(tileIndex);   // a gap child isn't a .seq-tile → no highlight
+			// Modifiers in the ABSORBED part of a ratchet span (beyond the
+			// ratcheted tile's own width, which did resolve its mods) never fire
+			// this pass — mark them superseded while the span sounds.
+			let superseded = [];
+			if (rt && w > rt.wTile + MOD_EPS) {
+				const { stepInBar } = barPos(rt.posSteps, unitCount());
+				superseded = modsInSpan(seq.mods, stepInBar + rt.wTile, w - rt.wTile)
+					.map((m) => m.step);
+			}
+			setFiringMod(rt && rt.step >= 0 ? rt.step : -1, superseded);
 			const cur = seq.tiles[tileIndex];
 			if (seq.currentTile !== tileIndex) {
 				seq.currentTile = tileIndex;
@@ -2667,6 +2810,16 @@ function createSlicer(savedState = null) {
 				slicer.view.setIsPlaying(false);
 				return;
 			}
+			// A ratchet span shows the TILE's own region with the playhead
+			// restarting from its top on every hit, sweeping only the source one
+			// hit actually consumes — the waveform stutters like the audio does.
+			if (rt) {
+				const r = tileRegion(src, rt.wTile);
+				slicer.view.setPlayingRegion(r.start, r.end);
+				slicer.view.setIsPlaying(true);
+				slicer.view.setPlayheadPosition(Math.min(1, rt.hitFrac * rt.hitRegionFrac));
+				return;
+			}
 			const r = tileRegion(src, w);
 			slicer.view.setPlayingRegion(r.start, r.end);
 			slicer.view.setIsPlaying(true);
@@ -2678,6 +2831,7 @@ function createSlicer(savedState = null) {
 			playOrder       = -1;
 			slicer.sequencerPlaying = false;
 			setPlayingTile(-1);
+			setFiringMod(-1);
 			slicer.view.setIsPlaying(false);
 			slicer.view.setPlayingRegion(null);
 			slicer.view.setPlayheadPosition(0);
@@ -2731,9 +2885,17 @@ function createSlicer(savedState = null) {
 		seqLoopBtn.setAttribute('aria-pressed', String(seq.loop));
 		scheduleSave();
 	});
-	// "Reset" the tiles back to the default one-unit-per-tile layout (Σ w === U).
-	// Safe mid-play: the transport re-reads seq.tiles each scheduler tick, so swapping
-	// the array in place reshapes the loop without stopping playback.
+	// Reset Order: native play order only — per-slice settings survive. Safe
+	// mid-play (the transport re-reads seq.tiles each scheduler tick), like the
+	// full reset below.
+	seqResetOrderBtn.addEventListener('click', () => {
+		resetOrderTiles(seq.tiles);
+		renderSequencer();
+	});
+	// Reset All: back to the default one-unit-per-tile layout (Σ w === U), wiping
+	// fades/reverse/pitch/mutes/locks. Safe mid-play: the transport re-reads
+	// seq.tiles each scheduler tick, so swapping the array in place reshapes the
+	// loop without stopping playback.
 	seqClearBtn.addEventListener('click', () => {
 		seq.tiles = defaultTiles(unitCount());
 		renderSequencer();
@@ -2857,7 +3019,7 @@ function createSlicer(savedState = null) {
 			tiles: seq.tiles.map((t) => (t.gap
 				? { gap: true, w: t.w }
 				: { src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: t.colorIdx, locked: !!t.locked, reversed: !!t.reversed, fadeIn: t.fadeIn || 0, fadeOut: t.fadeOut || 0 })),
-			mods:  seq.mods.map((m) => ({ step: m.step, action: m.action, fireMode: m.fireMode, fireValue: m.fireValue })),
+			mods:  seq.mods.map((m) => ({ step: m.step, action: m.action, fireMode: m.fireMode, fireValue: m.fireValue, subdiv: m.subdiv, lenSteps: m.lenSteps })),
 			loop:  seq.loop,
 		},
 	});
@@ -2928,10 +3090,26 @@ function createSlicer(savedState = null) {
 								if (rebuilt) out = rebuilt;
 							} else if (m.action === 'reset' && modFires(m, loopIdx)) {
 								if (out === tiles) out = out.slice();
-								resetPatternTiles(out);
+								resetOrderTiles(out);
 							}
 						}
 						return out;
+					},
+					// Ratchet resolution for the render — same rules as live
+					// (first firing ratchet covering the tile wins; silence
+					// doesn't ratchet), minus the chip flash.
+					resolveRatchet: (tile, posSteps) => {
+						if (!tile || tile.gap || tile.muted) return null;
+						const { loopIdx, stepInBar } = barPos(posSteps, U);
+						const w = (tile.w > 0) ? tile.w : 1;
+						for (const m of modsInSpan(mods, stepInBar, w)) {
+							if (m.action !== 'ratchet' || !modFires(m, loopIdx)) continue;
+							return {
+								subdiv:   Math.max(1, Math.round(m.subdiv || 1)),
+								lenSteps: Math.max(1, Math.round(m.lenSteps || 1)),
+							};
+						}
+						return null;
 					},
 					voiceOverrides: (tile, posSteps) => {
 						const { loopIdx, stepInBar } = barPos(posSteps, U);
@@ -3006,12 +3184,16 @@ function createSlicer(savedState = null) {
 			seq.mods = Array.isArray(savedState.seq.mods)
 				? savedState.seq.mods
 					.filter((m) => m && Number.isFinite(m.step) && m.step >= 0
-						&& ['mute', 'rev', 'rand', 'reset'].includes(m.action))
+						&& ['mute', 'rev', 'rand', 'reset', 'ratchet'].includes(m.action))
 					.map((m) => ({
 						step:      Math.round(m.step),
 						action:    m.action,
 						fireMode:  m.fireMode === 'every' ? 'every' : 'prob',
 						fireValue: Number.isFinite(m.fireValue) ? m.fireValue : 100,
+						...(m.action === 'ratchet' ? {
+							subdiv:   Number.isFinite(m.subdiv)   ? Math.max(1, Math.min(8,  Math.round(m.subdiv)))   : 2,
+							lenSteps: Number.isFinite(m.lenSteps) ? Math.max(1, Math.min(16, Math.round(m.lenSteps))) : 1,
+						} : {}),
 					}))
 					.filter((m) => (modSteps.has(m.step) ? false : (modSteps.add(m.step), true)))
 				: [];
