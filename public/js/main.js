@@ -1041,12 +1041,18 @@ function createSlicer(savedState = null) {
 	//                 'rand' | 'reset' — virtual Randomize press / order-only
 	//                 reset (native order, settings kept), fired live against
 	//                 seq.tiles
-	//                 'ratchet' — retrigger the covered tile `subdiv` times per
-	//                 step across `lenSteps` steps of grid time; the span absorbs
-	//                 tiles that start inside it (clamped to the end of the bar)
+	//                 'ratchet' — retrigger the covered tile across `lenSteps`
+	//                 steps of grid time; the span absorbs tiles that start
+	//                 inside it (clamped to the end of the bar)
 	//     fireMode  : 'prob'  → fireValue = 0..100 (% chance per pass)
 	//                 'every' → fireValue = N (fires on the 1st of every N loops)
-	//     subdiv    : ratchet only — retriggers per step (1..8)
+	//     mode      : ratchet only — hit layout: 'even' (subdiv uniform hits per
+	//                 step), 'ramp' (spacing morphs subdiv → subdivTo hits/step
+	//                 over the span), 'pitch' (even spacing, each successive hit
+	//                 shifted pitchStep semitones as varispeed)
+	//     subdiv    : ratchet only — retriggers per step (1..8; ramp start)
+	//     subdivTo  : ratchet only — ramp end subdivision (1..8)
+	//     pitchStep : ratchet only — semitones per hit in pitch mode (-12..12)
 	//     lenSteps  : ratchet only — steps the ratchet occupies (1..16)
 	const seq = {
 		tiles:        [],
@@ -1395,9 +1401,12 @@ function createSlicer(savedState = null) {
 			if (m.action !== 'ratchet' || !modFires(m, loopIdx)) continue;
 			flashMod(m, when);
 			return {
-				subdiv:   Math.max(1, Math.round(m.subdiv || 1)),
-				lenSteps: Math.max(1, Math.round(m.lenSteps || 1)),
-				step:     m.step,   // for the live visuals (firing chip + brace)
+				mode:      m.mode || 'even',
+				subdiv:    Math.max(1, Math.round(m.subdiv || 1)),
+				subdivTo:  Math.max(1, Math.round(m.subdivTo || m.subdiv || 1)),
+				pitchStep: Math.round(m.pitchStep || 0),
+				lenSteps:  Math.max(1, Math.round(m.lenSteps || 1)),
+				step:      m.step,   // for the live visuals (firing chip + brace)
 			};
 		}
 		return null;
@@ -2055,8 +2064,21 @@ function createSlicer(savedState = null) {
 	const MOD_NAME  = { mute: 'Mute', rev: 'Reverse', rand: 'Randomize', reset: 'Reset', ratchet: 'Ratchet' };
 	let selectedMod = null;
 
+	// Ratchet chip summary, per hit-layout mode.
+	const ratchetDesc = (m) => {
+		const from = Math.max(1, Math.round(m.subdiv || 1));
+		const len  = `over ${Math.max(1, Math.round(m.lenSteps || 1))} step(s)`;
+		if (m.mode === 'ramp') {
+			return ` ramp ×${from}→×${Math.max(1, Math.round(m.subdivTo || from))}/step ${len}`;
+		}
+		if (m.mode === 'pitch') {
+			const st = Math.round(m.pitchStep || 0);
+			return ` ×${from}/step, ${st >= 0 ? '+' : ''}${st} st/hit ${len}`;
+		}
+		return ` ×${from}/step ${len}`;
+	};
 	const modTitle = (m) => `${MOD_NAME[m.action]}${m.action === 'ratchet'
-		? ` ×${Math.max(1, Math.round(m.subdiv || 1))}/step over ${Math.max(1, Math.round(m.lenSteps || 1))} step(s)`
+		? ratchetDesc(m)
 		: ''} — ${m.fireMode === 'every'
 		? `every ${Math.max(1, Math.round(m.fireValue))} loops`
 		: `${Math.round(m.fireValue)}% chance`}. Click for settings, drag to move.`;
@@ -2081,7 +2103,7 @@ function createSlicer(savedState = null) {
 			rev:     'Reverse the step when this fires (toggles an already-reversed slice back)',
 			rand:    'Virtual press of Randomize (uses the Amt level, respects locks)',
 			reset:   'Restore the native play order — slices keep their fades/reverse/pitch (respects locks)',
-			ratchet: 'Retrigger the step: N hits per step, across a length in steps',
+			ratchet: 'Retrigger the step across a length in steps — even hits, a timing ramp, or a pitch ramp',
 		}[a];
 		b.addEventListener('click', () => {
 			if (!overlayMod) return;
@@ -2089,6 +2111,7 @@ function createSlicer(savedState = null) {
 			if (a === 'ratchet') {   // seed sensible params the first time
 				if (!(overlayMod.subdiv >= 1))   overlayMod.subdiv = 2;
 				if (!(overlayMod.lenSteps >= 1)) overlayMod.lenSteps = 1;
+				if (!overlayMod.mode)            overlayMod.mode = 'even';
 			}
 			refreshModOverlay();
 			renderModsRow();
@@ -2135,8 +2158,38 @@ function createSlicer(savedState = null) {
 	modFireRow.appendChild(modProbCtrl.getElement());
 	modFireRow.appendChild(modEveryCtrl.getElement());
 
-	// Ratchet parameters (shown only when the action is 'ratchet'): hits per step
-	// + how many steps of the bar the ratchet occupies.
+	// Ratchet mode (shown only when the action is 'ratchet'): how the retriggers
+	// are laid out across the span.
+	const modRatchetModeRow = document.createElement('div');
+	modRatchetModeRow.className = 'mod-overlay-row';
+	const RATCHET_MODES = [
+		['even',  'Even',  'Evenly spaced retriggers: N hits per step'],
+		['ramp',  'Ramp',  'Spacing morphs from the From to the To subdivision across the span — the rhythm speeds up or slows down'],
+		['pitch', 'Pitch', 'Evenly spaced retriggers, each successive hit shifted by the semitone amount (varispeed — pitch and speed together)'],
+	];
+	const modRatchetModeBtns = {};
+	for (const [mode, name, tip] of RATCHET_MODES) {
+		const b = document.createElement('button');
+		b.className = 'toggle-btn';
+		b.textContent = name;
+		b.title = tip;
+		b.addEventListener('click', () => {
+			if (!overlayMod || overlayMod.mode === mode) return;
+			overlayMod.mode = mode;
+			// Seed the mode's own param the first time it's picked.
+			if (mode === 'ramp'  && !(overlayMod.subdivTo >= 1))            overlayMod.subdivTo = 4;
+			if (mode === 'pitch' && !Number.isFinite(overlayMod.pitchStep)) overlayMod.pitchStep = 2;
+			refreshModOverlay();
+			renderModsRow();
+			scheduleSave();
+		});
+		modRatchetModeBtns[mode] = b;
+		modRatchetModeRow.appendChild(b);
+	}
+
+	// Ratchet parameters (shown only when the action is 'ratchet'), contextual to
+	// the mode: even → Hits + Len; ramp → From + To + Len; pitch → Hits + Pitch +
+	// Len. From/Hits are the same field (subdiv) under two labels.
 	const modRatchetRow = document.createElement('div');
 	modRatchetRow.className = 'mod-overlay-row';
 	const modSubdivCtrl = new DragControl({
@@ -2145,6 +2198,24 @@ function createSlicer(savedState = null) {
 		onChange: (v) => { if (overlayMod) { overlayMod.subdiv = Math.round(v); scheduleSave(); } },
 	});
 	modSubdivCtrl.getElement().title = 'Retriggers per step';
+	const modFromCtrl = new DragControl({
+		min: 1, max: 8, step: 1, value: 2, label: 'From',
+		format: (v) => `×${Math.round(v)}`,
+		onChange: (v) => { if (overlayMod) { overlayMod.subdiv = Math.round(v); scheduleSave(); } },
+	});
+	modFromCtrl.getElement().title = 'Retriggers per step at the span start';
+	const modToCtrl = new DragControl({
+		min: 1, max: 8, step: 1, value: 4, label: 'To',
+		format: (v) => `×${Math.round(v)}`,
+		onChange: (v) => { if (overlayMod) { overlayMod.subdivTo = Math.round(v); scheduleSave(); } },
+	});
+	modToCtrl.getElement().title = 'Retriggers per step at the span end';
+	const modPitchCtrl = new DragControl({
+		min: -12, max: 12, step: 1, value: 2, detent: 0, label: 'Pitch',
+		format: (v) => `${v > 0 ? '+' : ''}${Math.round(v)} st`,
+		onChange: (v) => { if (overlayMod) { overlayMod.pitchStep = Math.round(v); scheduleSave(); } },
+	});
+	modPitchCtrl.getElement().title = 'Semitones added to each successive hit — negative ramps the pitch down';
 	const modLenCtrl = new DragControl({
 		min: 1, max: 16, step: 1, value: 1, label: 'Len',
 		format: (v) => `${Math.round(v)} step${Math.round(v) === 1 ? '' : 's'}`,
@@ -2152,6 +2223,9 @@ function createSlicer(savedState = null) {
 	});
 	modLenCtrl.getElement().title = 'Steps the ratchet occupies — beyond the tile it swallows what follows (clamped to the end of the bar)';
 	modRatchetRow.appendChild(modSubdivCtrl.getElement());
+	modRatchetRow.appendChild(modFromCtrl.getElement());
+	modRatchetRow.appendChild(modToCtrl.getElement());
+	modRatchetRow.appendChild(modPitchCtrl.getElement());
 	modRatchetRow.appendChild(modLenCtrl.getElement());
 
 	const modDeleteBtn = document.createElement('button');
@@ -2168,6 +2242,7 @@ function createSlicer(savedState = null) {
 
 	modOverlay.appendChild(modActionRow);
 	modOverlay.appendChild(modFireRow);
+	modOverlay.appendChild(modRatchetModeRow);
 	modOverlay.appendChild(modRatchetRow);
 	modOverlay.appendChild(modDeleteBtn);
 
@@ -2185,9 +2260,23 @@ function createSlicer(savedState = null) {
 		if (every) modEveryCtrl.setValue(Math.max(1, Math.round(overlayMod.fireValue)));
 		else       modProbCtrl.setValue(Math.max(0, Math.min(100, overlayMod.fireValue)));
 		const ratchet = overlayMod.action === 'ratchet';
-		modRatchetRow.style.display = ratchet ? '' : 'none';
+		modRatchetModeRow.style.display = ratchet ? '' : 'none';
+		modRatchetRow.style.display     = ratchet ? '' : 'none';
 		if (ratchet) {
-			modSubdivCtrl.setValue(Math.max(1, Math.round(overlayMod.subdiv || 2)));
+			const mode = overlayMod.mode || 'even';
+			for (const [k, b] of Object.entries(modRatchetModeBtns)) {
+				b.classList.toggle('active', mode === k);
+				b.setAttribute('aria-pressed', String(mode === k));
+			}
+			modSubdivCtrl.getElement().style.display = mode === 'ramp'  ? 'none' : '';
+			modFromCtrl.getElement().style.display   = mode === 'ramp'  ? '' : 'none';
+			modToCtrl.getElement().style.display     = mode === 'ramp'  ? '' : 'none';
+			modPitchCtrl.getElement().style.display  = mode === 'pitch' ? '' : 'none';
+			const sd = Math.max(1, Math.round(overlayMod.subdiv || 2));
+			modSubdivCtrl.setValue(sd);
+			modFromCtrl.setValue(sd);
+			modToCtrl.setValue(Math.max(1, Math.round(overlayMod.subdivTo || sd)));
+			modPitchCtrl.setValue(Math.max(-12, Math.min(12, Math.round(overlayMod.pitchStep || 0))));
 			modLenCtrl.setValue(Math.max(1, Math.round(overlayMod.lenSteps || 1)));
 		}
 	};
@@ -3019,7 +3108,7 @@ function createSlicer(savedState = null) {
 			tiles: seq.tiles.map((t) => (t.gap
 				? { gap: true, w: t.w }
 				: { src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: t.colorIdx, locked: !!t.locked, reversed: !!t.reversed, fadeIn: t.fadeIn || 0, fadeOut: t.fadeOut || 0 })),
-			mods:  seq.mods.map((m) => ({ step: m.step, action: m.action, fireMode: m.fireMode, fireValue: m.fireValue, subdiv: m.subdiv, lenSteps: m.lenSteps })),
+			mods:  seq.mods.map((m) => ({ step: m.step, action: m.action, fireMode: m.fireMode, fireValue: m.fireValue, mode: m.mode, subdiv: m.subdiv, subdivTo: m.subdivTo, pitchStep: m.pitchStep, lenSteps: m.lenSteps })),
 			loop:  seq.loop,
 		},
 	});
@@ -3105,8 +3194,11 @@ function createSlicer(savedState = null) {
 						for (const m of modsInSpan(mods, stepInBar, w)) {
 							if (m.action !== 'ratchet' || !modFires(m, loopIdx)) continue;
 							return {
-								subdiv:   Math.max(1, Math.round(m.subdiv || 1)),
-								lenSteps: Math.max(1, Math.round(m.lenSteps || 1)),
+								mode:      m.mode || 'even',
+								subdiv:    Math.max(1, Math.round(m.subdiv || 1)),
+								subdivTo:  Math.max(1, Math.round(m.subdivTo || m.subdiv || 1)),
+								pitchStep: Math.round(m.pitchStep || 0),
+								lenSteps:  Math.max(1, Math.round(m.lenSteps || 1)),
 							};
 						}
 						return null;
@@ -3191,8 +3283,11 @@ function createSlicer(savedState = null) {
 						fireMode:  m.fireMode === 'every' ? 'every' : 'prob',
 						fireValue: Number.isFinite(m.fireValue) ? m.fireValue : 100,
 						...(m.action === 'ratchet' ? {
-							subdiv:   Number.isFinite(m.subdiv)   ? Math.max(1, Math.min(8,  Math.round(m.subdiv)))   : 2,
-							lenSteps: Number.isFinite(m.lenSteps) ? Math.max(1, Math.min(16, Math.round(m.lenSteps))) : 1,
+							mode:      ['even', 'ramp', 'pitch'].includes(m.mode) ? m.mode : 'even',
+							subdiv:    Number.isFinite(m.subdiv)    ? Math.max(1, Math.min(8,  Math.round(m.subdiv)))    : 2,
+							subdivTo:  Number.isFinite(m.subdivTo)  ? Math.max(1, Math.min(8,  Math.round(m.subdivTo)))  : 4,
+							pitchStep: Number.isFinite(m.pitchStep) ? Math.max(-12, Math.min(12, Math.round(m.pitchStep))) : 0,
+							lenSteps:  Number.isFinite(m.lenSteps)  ? Math.max(1, Math.min(16, Math.round(m.lenSteps)))  : 1,
 						} : {}),
 					}))
 					.filter((m) => (modSteps.has(m.step) ? false : (modSteps.add(m.step), true)))

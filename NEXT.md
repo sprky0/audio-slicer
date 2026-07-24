@@ -55,23 +55,34 @@ locked to one master clock.
     render's working copy — a bounce evolves like a take; prob is unseeded by
     design). Prescan covers reversed stretch variants for tiles under rev mods
     (all tiles when a pattern mod could shuffle them).
-  - **Ratchet modifier** — retrigger: `subdiv` hits per step (×1–8) across
-    `lenSteps` steps (1–16, clamped to the bar end). Resolved once per scheduled
-    slot (`Transport.resolveRatchet` → `_scheduleRatchet`): each hit replays the
+  - **Ratchet modifier** — retrigger across `lenSteps` steps (1–16, clamped to
+    the bar end), with three hit-layout modes (`mode` on the mod, Even/Ramp/
+    Pitch toggle row in the popover): **even** — `subdiv` uniform hits per step
+    (×1–8); **ramp** — spacing morphs from `subdiv` to `subdivTo` hits/step
+    across the span (accelerando/ritardando; instantaneous density lerped by
+    span position); **pitch** — even spacing, hit k shifted k·`pitchStep`
+    semitones (−12…+12/hit) as VARISPEED (playbackRate multiplier, cumulative
+    clamp ±48 st — pitch and hit-material speed move together, sampler-style).
+    Hit layout lives in pure shared helpers `ratchetHitSteps`/`ratchetHitRate`
+    (named exports of transport.js) used by BOTH the live scheduler and the WAV
+    export, so bounces stay bit-faithful. Resolved once per scheduled slot
+    (`Transport.resolveRatchet` → `_scheduleRatchet`): each hit replays the
     covered tile from its top at grid-locked times, cut at the next hit (always
-    declicked); per-slice fades scale to ONE HIT (`ov.envDurSec` through
-    getTilePlayback). Beyond the tile's own width the span ABSORBS the tiles
-    that start inside it (their slots are consumed); if Len is shorter than the
-    tile, the rest of its slot is silent. Gaps/muted tiles don't ratchet.
-    Mirrored exactly in the WAV export (`modHooks.resolveRatchet` in
+    declicked); per-slice fades scale to ONE (average) HIT (`ov.envDurSec`
+    through getTilePlayback). Beyond the tile's own width the span ABSORBS the
+    tiles that start inside it (their slots are consumed); if Len is shorter
+    than the tile, the rest of its slot is silent. Gaps/muted tiles don't
+    ratchet. Mirrored exactly in the WAV export (`modHooks.resolveRatchet` in
     export-wav.js). Live visuals, all per-frame from the transport's rAF loop
     (no timers — survives grid slews and DOM rebuilds): the covered tile stays
     `.playing` for the whole span; chip + span brace hold a `.firing` glow; the
-    waveform playhead restarts each hit, sweeping only the source one hit
-    consumes; modifiers in the ABSORBED part of the span (which never resolve)
-    show `.superseded` (grey/dashed) while it sounds. A static `.mod-brace`
-    (bottom+right border = duration + endpoint) runs from the end of the mod's
-    step to the end of the covered span whenever Len > 1.
+    waveform playhead restarts each hit — per-hit boundary fractions
+    (`hitBounds` on the note) so ramped, non-uniform hits track correctly —
+    sweeping only the source one hit consumes; modifiers in the ABSORBED part
+    of the span (which never resolve) show `.superseded` (grey/dashed) while it
+    sounds. A static `.mod-brace` (bottom+right border = duration + endpoint)
+    runs from the end of the mod's step to the end of the covered span whenever
+    Len > 1.
   - **Reset Order / Reset All** (toolbar) — Reset Order stable-sorts clips back
     to native (ascending `src`) play order, every tile KEEPING its settings;
     locks and gaps stay anchored (runs between anchors sort internally, so
@@ -145,9 +156,11 @@ peak-normalized to ~0.99, RIFF/WAV blob download. 24-bit remains a later option.
   slice markers.
 - **Modifier lane follow-ups** — true per-step chop (mute/reverse just the
   step's slice of a wider tile — needs mid-voice splitting); more actions
-  (gain, pitch nudge — retrigger shipped as Ratchet); a ratchet option to let
-  the tile's tail play through when Len < tile width; seeded export
-  probability if reproducible bounces are ever wanted.
+  (gain, pitch nudge — retrigger shipped as Ratchet, now with Even/Ramp/Pitch
+  modes); a ratchet option to let the tile's tail play through when Len < tile
+  width; pitch-preserving ratchet pitch ramps (per-hit WSOLA variants) if
+  varispeed ever feels wrong; seeded export probability if reproducible
+  bounces are ever wanted.
 - **Richer meter** (future, per discussion) — selectable beat unit (dotted values,
   e.g. 1.5 = dotted quarter) or an odd/compound time-signature editor, building on
   the Beats model.

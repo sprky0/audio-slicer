@@ -1076,7 +1076,7 @@ input[type="checkbox"]:disabled {
 	flex-direction: column;
 	gap: calc(var(--gap) / 2);
 	padding: var(--gap);
-	width: calc(var(--col-min) * 4);   /* 4 action buttons need the elbow room */
+	width: calc(var(--col-min) * 5);   /* 5 action buttons + 3-control ratchet rows need the elbow room */
 	background: var(--color-bg-secondary);
 	border: 1px solid var(--color-border);
 	border-radius: var(--radius-md);
