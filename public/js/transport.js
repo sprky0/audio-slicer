@@ -37,7 +37,7 @@
  *                    plays it, so all DSP stays outside the Transport. `ctx` =
  *                    { posSteps, when }: the slot's position in steps since this
  *                    run began and its audible start time — the policy uses it to
- *                    resolve step modifiers (mute/reverse overrides).
+ *                    resolve step modifiers (mute/reverse/gain overrides).
  *   beforeTile       (posSteps, when) => void   optional; called just before a
  *                    slot that WILL sound is scheduled (never for skipped-past
  *                    tiles). The policy may mutate/replace the tile list here

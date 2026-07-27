@@ -1017,7 +1017,8 @@ input[type="checkbox"]:disabled {
 }
 
 /* The modifier chip. Colour = action intent: mute=red, reverse=violet (echoes
-   the ◀ badge), randomize=orange (the label accent), reset=blue. */
+   the ◀ badge), randomize=orange (the label accent), reset=blue, gain=teal,
+   ratchet=green. */
 .seq-mod {
 	position: absolute;
 	inset: 1px;
@@ -1035,6 +1036,7 @@ input[type="checkbox"]:disabled {
 }
 .seq-mod[data-action="mute"]  { background: var(--color-danger-active); }
 .seq-mod[data-action="rev"]   { background: #7d3cb8; }
+.seq-mod[data-action="gain"]  { background: #1f8f8f; }
 .seq-mod[data-action="rand"]  { background: var(--color-label-text); color: #221a05; text-shadow: none; }
 .seq-mod[data-action="reset"] { background: var(--color-accent-active); }
 .seq-mod[data-action="ratchet"] { background: #2e9e5b; }
@@ -1152,6 +1154,28 @@ input[type="checkbox"]:disabled {
 .seq-step-pitch {
 	position: absolute;
 	top: -4px;
+	right: 6px;
+	min-width: 16px;
+	height: 16px;
+	padding: 0 3px;
+	border-radius: 8px;
+	background: #111;
+	color: #fff;
+	font-size: 10px;
+	font-weight: bold;
+	line-height: 16px;
+	text-align: center;
+	text-shadow: none;
+	box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+	cursor: pointer;
+	z-index: 2;
+}
+
+/* Per-tile gain badge (bottom-right corner; hidden at unity level). Same plate
+   as the pitch badge, anchored to the opposite corner. */
+.seq-step-gain {
+	position: absolute;
+	bottom: -4px;
 	right: 6px;
 	min-width: 16px;
 	height: 16px;

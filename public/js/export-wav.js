@@ -12,7 +12,7 @@
  * — so the export is bit-faithful to playback (time-stretch + pitch included).
  */
 
-import { applyEnvelope } from './envelope.js';
+import { applyEnvelope, envGain } from './envelope.js';
 import { ratchetHitSteps, ratchetHitRate } from './transport.js';
 
 // Replicates AudioEngine.scheduleBuffer's per-voice envelope + declick: tile
@@ -27,7 +27,8 @@ function scheduleVoice(ctx, dest, buffer, when, stopAt, playbackRate, declick, e
 	source.playbackRate.value = playbackRate > 0 ? playbackRate : 1;
 
 	const voiceGain = ctx.createGain();
-	voiceGain.gain.value = 1;
+	const level = envGain(env);
+	voiceGain.gain.value = level;
 	source.connect(voiceGain);
 	voiceGain.connect(dest);
 
@@ -40,7 +41,7 @@ function scheduleVoice(ctx, dest, buffer, when, stopAt, playbackRate, declick, e
 	source.start(when);
 	if (typeof stopAt === 'number' && stopAt > when && (declick || stopAt < when + effDur)) {
 		if (!fadesOut) {
-			voiceGain.gain.setValueAtTime(1, Math.max(when, stopAt - DECLICK));
+			voiceGain.gain.setValueAtTime(level, Math.max(when, stopAt - DECLICK));
 			voiceGain.gain.linearRampToValueAtTime(0, stopAt);
 		}
 		source.stop(stopAt + DECLICK);
@@ -74,13 +75,14 @@ function normalize(buf, target = 0.99) {
  * track = { volume, pan, tiles, stepSec, getTilePlayback, modHooks? }
  *   stepSec         seconds per unit/step at the master tempo (a number)
  *   getTilePlayback (tile, stepSec, ov) => { buffer, playbackRate, dur, fill, env } | null
- *                   ov = optional one-shot { mute, rev } overrides for the voice
+ *                   ov = optional one-shot { mute, rev, gain } overrides for the
+ *                   voice (gain = level multiplier on the tile's own gain)
  *   modHooks        optional step-modifier callbacks (main.js closes over the
  *                   slicer's modifier lane; the export evolves like a live take):
  *     beforeTile(posSteps, tiles) => tiles   pattern actions (rand/reset) fire
  *                   against the render's WORKING COPY — may return a replacement
  *                   list (same length); the live pattern is untouched
- *     voiceOverrides(tile, posSteps) => { mute, rev } | null
+ *     voiceOverrides(tile, posSteps) => { mute, rev, gain } | null
  *     resolveRatchet(tile, posSteps) =>
  *                   { mode, subdiv, subdivTo, pitchStep, lenSteps } | null
  *                   non-null turns the slot into a ratchet: retriggers across

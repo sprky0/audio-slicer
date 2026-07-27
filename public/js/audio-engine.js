@@ -1,5 +1,5 @@
 import { getAudioContext } from './audio-context.js';
-import { applyEnvelope } from './envelope.js';
+import { applyEnvelope, envGain } from './envelope.js';
 
 /**
  * AudioEngine: Handles audio loading, slicing, playback, segment enable/disable, and state.
@@ -156,8 +156,9 @@ class AudioEngine extends EventTarget {
 	 * `playbackRate` resamples (repitches). For stretched buffers it carries the
 	 * pitch-shift ratio; for raw buffers it's 1 (or a fill ratio in fallback).
 	 *
-	 * `env`: optional fade descriptor ({ fadeInSec, fadeOutSec, curve }) applied
-	 * on this voice's own gain — see envelope.js.
+	 * `env`: optional envelope descriptor ({ fadeInSec, fadeOutSec, curveIn,
+	 * curveOut, gain }) applied on this voice's own gain — see envelope.js. The
+	 * gain is the voice's level (fades rise to / fall from it).
 	 *
 	 * `offsetSec`: start playback this far INTO the buffer (buffer-time seconds)
 	 * — the transport's skip-forward path, used when a voice starts late so its
@@ -170,7 +171,8 @@ class AudioEngine extends EventTarget {
 		source.playbackRate.value = playbackRate > 0 ? playbackRate : 1;
 
 		const voiceGain = this.audioContext.createGain();
-		voiceGain.gain.value = 1;
+		const level = envGain(env);
+		voiceGain.gain.value = level;
 		source.connect(voiceGain);
 		voiceGain.connect(this.gainNode);
 
@@ -189,7 +191,7 @@ class AudioEngine extends EventTarget {
 			// A fade-out already reaches silence at the cut — the declick ramp's
 			// setValueAtTime(1, …) would fight it, so only declick without one.
 			if (!fadesOut) {
-				voiceGain.gain.setValueAtTime(1, Math.max(when, stopAt - DECLICK));
+				voiceGain.gain.setValueAtTime(level, Math.max(when, stopAt - DECLICK));
 				voiceGain.gain.linearRampToValueAtTime(0, stopAt);
 			}
 			source.stop(stopAt + DECLICK);

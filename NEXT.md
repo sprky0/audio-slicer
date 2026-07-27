@@ -1,8 +1,7 @@
 # Where we are / next steps
 
-Working notes for jsloop. Updated 2026-07-17, branch
-`feature-slice-drag-sequencer`. (Completed work lives in git history; this file is
-the current shape + what's next.)
+Working notes for jsloop. Updated 2026-07-27, branch `develop`. (Completed work
+lives in git history; this file is the current shape + what's next.)
 
 ## Current shape
 
@@ -30,10 +29,18 @@ locked to one master clock.
   - **Rev** — reverse the slice (sample flip baked into the region buffer;
     rev-aware region/stretch cache keys; mirrored tile wave + ◀ badge).
     `tile.reversed`, persisted, export-faithful.
+  - **Gain** — per-slice level (0–200%, dbl-click = 100%), the ceiling its fades
+    rise to / fall from. Per-voice gain automation, never baked into buffers
+    (caches stay level-agnostic); tile waveform amplitude tracks it (boosts clip
+    at the rails) + a bottom-right badge when ≠100% (click resets).
+    `tile.gain` (linear 0..2), persisted, export-faithful; ratchet hits inherit it.
   - **F.In / F.Out** — per-slice fade envelope, stored as 0..1 fractions of the
     slice's length, applied as per-voice gain automation at schedule time
-    (`envelope.js` — shared curve registry, linear today; live engine + WAV
-    export use the same code). `tile.fadeIn/fadeOut`, persisted.
+    (`envelope.js` — live engine + WAV export share the code). Each fade has a
+    **curve picker** (↗/↘): Lin / Exp (slow start) / Log (fast start) / S
+    (cosine) — pure shapes in `FADE_SHAPES`, scheduled via setValueCurveAtTime,
+    and the tile's envelope guides trace the actual shape. `tile.fadeIn/fadeOut`
+    + `tile.fadeInCurve/fadeOutCurve`, persisted.
   - **Dup ◀ / Dup ▶** (clip only) — stamp a clone before/after, overwriting under it.
   - **Refill** (anything non-pristine) — set the entry's `src` to its grid
     position + default settings (fills a gap; resets a moved slice; clears
@@ -42,8 +49,10 @@ locked to one master clock.
   - **Modifier lane** (below the tile row) — one optional modifier per STEP,
     pinned to the grid (tiles reorder/resize underneath). Click an empty cell to
     place one, click a chip for its settings popover, drag to move it. Each mod
-    has an action — **Mute** / **Rev** (one-shot per-voice overrides at schedule
-    time; rev TOGGLES an already-reversed slice), **Rand** / **Reset** (virtual
+    has an action — **Mute** / **Rev** / **Gain** (one-shot per-voice overrides
+    at schedule time; rev TOGGLES an already-reversed slice; gain multiplies the
+    slice's own level by `gainAmt`% — duck below 100, accent above; multiple
+    gain mods under one wide tile multiply), **Rand** / **Reset** (virtual
     Randomize press at the Amt level / order-only reset — native play order,
     slices keep their settings; both respect locks), or **Ratchet** (see below) —
     and a fire mode: **Prob** (0–100%, rolled per pass) or **Every N** (1st of
@@ -150,14 +159,14 @@ peak-normalized to ~0.99, RIFF/WAV blob download. 24-bit remains a later option.
 
 ## Next: bigger bets
 
-- **Tier 2 leftovers** — per-step gain (probability shipped via the modifier
-  lane; reverse + fades shipped); fade curve shapes beyond linear (drop into
-  `envelope.js`'s FADE_CURVES); transient detection + draggable non-uniform
-  slice markers.
+- **Tier 2 leftovers** — transient detection + draggable non-uniform slice
+  markers (the last one standing: gain, probability, fades + curve shapes,
+  reverse have all shipped). A model-change design discussion first: the whole
+  tile system assumes U equal units.
 - **Modifier lane follow-ups** — true per-step chop (mute/reverse just the
   step's slice of a wider tile — needs mid-voice splitting); more actions
-  (gain, pitch nudge — retrigger shipped as Ratchet, now with Even/Ramp/Pitch
-  modes); a ratchet option to let the tile's tail play through when Len < tile
+  (pitch nudge — gain shipped; retrigger shipped as Ratchet, now with
+  Even/Ramp/Pitch modes); a ratchet option to let the tile's tail play through when Len < tile
   width; pitch-preserving ratchet pitch ramps (per-hit WSOLA variants) if
   varispeed ever feels wrong; seeded export probability if reproducible
   bounces are ever wanted.

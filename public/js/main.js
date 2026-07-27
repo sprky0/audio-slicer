@@ -7,6 +7,7 @@ import midiClock from './midi-clock.js';
 import { getAudioContext } from './audio-context.js';
 import { createTimeStretcher } from './timestretch.js';
 import { renderMix, encodeWav, triggerDownload } from './export-wav.js';
+import { FADE_SHAPES } from './envelope.js';
 import {
 	saveStateRaw, loadStateRaw, clearStateRaw,
 	putAudio, getAudio, deleteAudio, clearAudio,
@@ -831,6 +832,8 @@ function createSlicer(savedState = null) {
 	// Fades are gain automation on the scheduled voice — no re-render or stretch
 	// rebuild needed, just repaint the tile's envelope guides.
 	const fadeFromTile  = (v) => Math.round(Math.max(0, Math.min(1, v || 0)) * 100);
+	// A tile's stored gain (linear, 0..2; absent = unity).
+	const tileGain = (t) => (t && Number.isFinite(t.gain) && t.gain >= 0) ? Math.min(2, t.gain) : 1;
 	const makeFadeControl = (label, prop) => new DragControl({
 		label, min: 0, max: 100, step: 1, value: 0,
 		format: (v) => (v > 0 ? `${Math.round(v)}%` : 'off'),
@@ -845,6 +848,42 @@ function createSlicer(savedState = null) {
 	});
 	const fadeInControl  = makeFadeControl('F.In',  'fadeIn');
 	const fadeOutControl = makeFadeControl('F.Out', 'fadeOut');
+	// Curve shape of each fade — one picker per direction (envelope.js FADE_SHAPES).
+	const CURVE_OPTIONS = [
+		{ value: 'linear', label: 'Lin' },
+		{ value: 'exp',    label: 'Exp' },
+		{ value: 'log',    label: 'Log' },
+		{ value: 's',      label: 'S' },
+	];
+	const makeCurveControl = (label, prop) => new DragControl({
+		label, options: CURVE_OPTIONS, value: 'linear',
+		onChange: (v) => {
+			const clips = targetClips();
+			if (!clips.length) return;
+			clips.forEach((t) => { t[prop] = v; });
+			redrawTileWaves();       // envelope guides trace the chosen shape
+			scheduleSave();
+		},
+	});
+	const fadeInCurveControl  = makeCurveControl('↗', 'fadeInCurve');
+	const fadeOutCurveControl = makeCurveControl('↘', 'fadeOutCurve');
+	fadeInCurveControl.getElement().title  = 'Fade-in curve shape — Lin: straight · Exp: slow start · Log: fast start · S: smooth both ends';
+	fadeOutCurveControl.getElement().title = 'Fade-out curve shape — Lin: straight · Exp: holds then drops · Log: drops then trails · S: smooth both ends';
+	// Slice level: the voice's gain (fades scale with it), 0–200%, dbl-click = 100%.
+	const gainControl = new DragControl({
+		label: 'Gain', min: 0, max: 200, step: 1, value: 100, detent: 100,
+		format: (v) => `${Math.round(v)}%`,
+		onChange: (v) => {
+			const clips = targetClips();
+			if (!clips.length) return;
+			const g = Math.max(0, Math.min(200, v)) / 100;
+			clips.forEach((t) => { t.gain = g; });
+			redrawTileWaves();       // wave amplitude tracks the level
+			refreshGainBadges();
+			scheduleSave();
+		},
+	});
+	gainControl.getElement().title = 'Slice level — the voice\'s gain, fades rise to it (double-click resets to 100%)';
 
 	// Duplicate the selected slice into the adjacent cells (◀ before / ▶ after),
 	// overwriting what's under. duplicateSlice() lives with the tile-edit helpers.
@@ -877,7 +916,8 @@ function createSlicer(savedState = null) {
 	// a protection flag, not audio state.)
 	const isPristine = (t, start) => !t.gap
 		&& Math.abs((t.src || 0) - start) <= 1e-6
-		&& !t.offset && !t.muted && !t.reversed && !(t.fadeIn > 0) && !(t.fadeOut > 0);
+		&& !t.offset && !t.muted && !t.reversed && !(t.fadeIn > 0) && !(t.fadeOut > 0)
+		&& tileGain(t) === 1;
 
 	// Reflect the current target (selection, or every slice in All mode) into the
 	// slice-settings controls. In All mode the toggles read as "on when ALL slices
@@ -918,6 +958,12 @@ function createSlicer(savedState = null) {
 		fadeOutControl.setDisabled(!act);
 		fadeInControl.setValue(fadeSrc ? fadeFromTile(fadeSrc.fadeIn) : 0);
 		fadeOutControl.setValue(fadeSrc ? fadeFromTile(fadeSrc.fadeOut) : 0);
+		fadeInCurveControl.setDisabled(!act);
+		fadeOutCurveControl.setDisabled(!act);
+		fadeInCurveControl.setValue(fadeSrc ? (fadeSrc.fadeInCurve || 'linear') : 'linear');
+		fadeOutCurveControl.setValue(fadeSrc ? (fadeSrc.fadeOutCurve || 'linear') : 'linear');
+		gainControl.setDisabled(!act);
+		gainControl.setValue(fadeSrc ? Math.round(tileGain(fadeSrc) * 100) : 100);
 		dupBeforeBtn.disabled = !clip;
 		dupAfterBtn.disabled  = !clip;
 		refillBtn.disabled    = !canRefill;
@@ -994,8 +1040,11 @@ function createSlicer(savedState = null) {
 	seqToolbar.appendChild(setSpan(muteToggle, 1));
 	seqToolbar.appendChild(setSpan(lockToggle, 1));
 	seqToolbar.appendChild(setSpan(reverseToggle, 1));
+	seqToolbar.appendChild(setSpan(gainControl.getElement(), 2));     // Slice level
 	seqToolbar.appendChild(setSpan(fadeInControl.getElement(), 2));   // Fade in
+	seqToolbar.appendChild(setSpan(fadeInCurveControl.getElement(), 1));
 	seqToolbar.appendChild(setSpan(fadeOutControl.getElement(), 2));  // Fade out
+	seqToolbar.appendChild(setSpan(fadeOutCurveControl.getElement(), 1));
 	seqToolbar.appendChild(setSpan(dupBeforeBtn, 1));
 	seqToolbar.appendChild(setSpan(dupAfterBtn, 1));
 	seqToolbar.appendChild(setSpan(refillBtn, 1));
@@ -1016,7 +1065,8 @@ function createSlicer(savedState = null) {
 	container.appendChild(seqEl);
 
 	// Sequencer state — an ordered list of variable-width tiles.
-	//   tile = { src, w, offset, muted, colorIdx, reversed, fadeIn, fadeOut }
+	//   tile = { src, w, offset, muted, colorIdx, reversed, fadeIn, fadeOut,
+	//            fadeInCurve, fadeOutCurve, gain }
 	//     src      : start unit (0..U-1) this tile reads source from
 	//     w        : width in units (also its playback duration = w steps)
 	//     offset   : per-tile pitch offset (semitones), stacks on master
@@ -1025,8 +1075,11 @@ function createSlicer(savedState = null) {
 	//                colour stays put while you drag its length.
 	//     reversed : play this slice's audio back-to-front
 	//     fadeIn / fadeOut : envelope, as 0..1 fractions of the slice's length
-	//                (0 = off, 1 = the whole slice); linear today (fadeCurve is the
-	//                future hook — see envelope.js).
+	//                (0 = off, 1 = the whole slice)
+	//     fadeInCurve / fadeOutCurve : shape of each fade — a FADE_SHAPES name
+	//                ('linear' | 'exp' | 'log' | 's'; absent = linear)
+	//     gain     : slice level, linear 0..2 (absent = 1); the ceiling its fades
+	//                rise to / fall from — per-voice automation, never baked in.
 	// Resizing conserves Σ w (a drag deducts from the play-order neighbour), so the
 	// overall sequence length is fixed once set.
 	//
@@ -1036,8 +1089,9 @@ function createSlicer(savedState = null) {
 	// step, decided once when that tile is scheduled.
 	//   mod = { step, action, fireMode, fireValue }
 	//     step      : integer grid cell 0..U-1
-	//     action    : 'mute' | 'rev'   — one-shot per-voice override (never
-	//                 written back to the tile); rev TOGGLES tile.reversed
+	//     action    : 'mute' | 'rev' | 'gain' — one-shot per-voice override (never
+	//                 written back to the tile); rev TOGGLES tile.reversed, gain
+	//                 multiplies the tile's level by `gainAmt`% for the pass
 	//                 'rand' | 'reset' — virtual Randomize press / order-only
 	//                 reset (native order, settings kept), fired live against
 	//                 seq.tiles
@@ -1046,6 +1100,8 @@ function createSlicer(savedState = null) {
 	//                 inside it (clamped to the end of the bar)
 	//     fireMode  : 'prob'  → fireValue = 0..100 (% chance per pass)
 	//                 'every' → fireValue = N (fires on the 1st of every N loops)
+	//     gainAmt   : gain only — level multiplier in % (0..200; <100 ducks,
+	//                 >100 accents)
 	//     mode      : ratchet only — hit layout: 'even' (subdiv uniform hits per
 	//                 step), 'ramp' (spacing morphs subdiv → subdivTo hits/step
 	//                 over the span), 'pitch' (even spacing, each successive hit
@@ -1283,8 +1339,9 @@ function createSlicer(savedState = null) {
 	// region fills its slot raw (no stretch). The stretch factor is global
 	// (stepSec/unitDur × pitch) and only departs from 1 when BPM/pitch deviate.
 	// `ov` = optional one-shot modifier overrides for THIS voice only:
-	// { mute, rev } — mute silences the slot, rev toggles the tile's own reversed
-	// flag ("reverse the step" of an already-reversed slice plays it forward).
+	// { mute, rev, gain } — mute silences the slot, rev toggles the tile's own
+	// reversed flag ("reverse the step" of an already-reversed slice plays it
+	// forward), gain multiplies the tile's own level for this pass.
 	// Persisted tile state is never touched.
 	const getTilePlayback = (tile, stepSecVal, ov) => {
 		if (!tile) return null;
@@ -1297,18 +1354,23 @@ function createSlicer(savedState = null) {
 		const U   = unitCount();
 		if (!buf || U <= 0) return { buffer: null, playbackRate: 1, dur: playDur, fill: false };
 
-		// Fade descriptor: the tile stores fades as 0..1 fractions of its own length,
-		// converted here to seconds of the slot it occupies (so they track BPM and
-		// resize). Applied per voice at schedule time (envelope.js), never baked into
-		// buffers — the caches stay envelope-agnostic.
+		// Envelope descriptor: the tile stores fades as 0..1 fractions of its own
+		// length, converted here to seconds of the slot it occupies (so they track
+		// BPM and resize); gain is the voice's level (fades rise/fall to it), a
+		// one-shot ov.gain multiplier stacking on top. Applied per voice at schedule
+		// time (envelope.js), never baked into buffers — the caches stay
+		// envelope-agnostic.
 		const rev = (ov && ov.rev) ? !tile.reversed : !!tile.reversed;
 		// Envelope window: normally the whole slot; a ratchet hit passes its own
 		// hit length (ov.envDurSec) so the fades shape each retrigger.
 		const envDur = (ov && ov.envDurSec > 0) ? ov.envDurSec : playDur;
-		const env = ((tile.fadeIn > 0) || (tile.fadeOut > 0)) ? {
+		const level = tileGain(tile) * ((ov && Number.isFinite(ov.gain) && ov.gain >= 0) ? ov.gain : 1);
+		const env = ((tile.fadeIn > 0) || (tile.fadeOut > 0) || level !== 1) ? {
 			fadeInSec:  Math.max(0, Math.min(1, tile.fadeIn  || 0)) * envDur,
 			fadeOutSec: Math.max(0, Math.min(1, tile.fadeOut || 0)) * envDur,
-			curve: tile.fadeCurve || 'linear',
+			curveIn:  tile.fadeInCurve  || 'linear',
+			curveOut: tile.fadeOutCurve || 'linear',
+			gain: level,
 		} : null;
 
 		const unitDur     = ((selEndFrac - selStartFrac) * buf.duration) / U;
@@ -1371,21 +1433,24 @@ function createSlicer(savedState = null) {
 		seqModsRow.querySelector(`.mod-brace[data-brace-step="${step}"]`)?.classList.add('firing');
 	};
 
-	// Voice-level resolution for one scheduled slot: collect mute/rev modifiers
-	// covering the tile's span, roll each, and hand getTilePlayback a one-shot
-	// override. Two rev modifiers under one wide tile cancel out (toggle twice).
+	// Voice-level resolution for one scheduled slot: collect mute/rev/gain
+	// modifiers covering the tile's span, roll each, and hand getTilePlayback a
+	// one-shot override. Two rev modifiers under one wide tile cancel out (toggle
+	// twice); gain modifiers multiply together.
 	const resolveVoiceMods = (tile, posSteps, when) => {
 		if (!seq.mods.length) return null;
 		const { loopIdx, stepInBar } = barPos(posSteps, unitCount());
 		const w = (tile && tile.w > 0) ? tile.w : 1;
-		let mute = false, rev = false;
+		let mute = false, rev = false, gain = 1;
 		for (const m of modsInSpan(seq.mods, stepInBar, w)) {
-			if (m.action !== 'mute' && m.action !== 'rev') continue;
+			if (m.action !== 'mute' && m.action !== 'rev' && m.action !== 'gain') continue;
 			if (!modFires(m, loopIdx)) continue;
-			if (m.action === 'mute') mute = true; else rev = !rev;
+			if (m.action === 'mute') mute = true;
+			else if (m.action === 'rev') rev = !rev;
+			else gain *= Math.max(0, Math.min(200, m.gainAmt != null ? m.gainAmt : 50)) / 100;
 			flashMod(m, when);
 		}
-		return (mute || rev) ? { mute, rev } : null;
+		return (mute || rev || gain !== 1) ? { mute, rev, gain } : null;
 	};
 
 	// Ratchet resolution for one scheduled slot: the first FIRING ratchet modifier
@@ -1602,6 +1667,25 @@ function createSlicer(savedState = null) {
 		}
 	};
 
+	// Gain badge (bottom-right): shown only when the slice's level departs unity.
+	const updateGainBadge = (badge, gain) => {
+		if (gain !== 1) {
+			badge.textContent   = `${Math.round(gain * 100)}%`;
+			badge.style.display = '';
+		} else {
+			badge.textContent   = '';
+			badge.style.display = 'none';
+		}
+	};
+	// Refresh every tile's gain badge in place (a Gain drag fires per tick — no
+	// full re-render, mirrors how redrawTileWaves handles the waveforms).
+	const refreshGainBadges = () => {
+		for (const el of seqStepsRow.children) {
+			const b = el.querySelector?.('.seq-step-gain');
+			if (b && el._tile) updateGainBadge(b, tileGain(el._tile));
+		}
+	};
+
 	// The transport's visual loop owns the `.playing` highlight (renderSequencer no
 	// longer paints it). Toggling directly avoids a full DOM rebuild every step.
 	let playingTileEl = null;
@@ -1691,7 +1775,7 @@ function createSlicer(savedState = null) {
 				const clip = c.clip, base = c.srcSub;
 				let j = k;
 				while (j < cells.length && cells[j] && cells[j].clip === clip && cells[j].srcSub === base + (j - k)) j++;
-				out.push({ src: base / RES, w: (j - k) / RES, offset: clip.offset || 0, muted: !!clip.muted, colorIdx: clip.colorIdx, locked: !!clip.locked, reversed: !!clip.reversed, fadeIn: clip.fadeIn || 0, fadeOut: clip.fadeOut || 0 });
+				out.push({ src: base / RES, w: (j - k) / RES, offset: clip.offset || 0, muted: !!clip.muted, colorIdx: clip.colorIdx, locked: !!clip.locked, reversed: !!clip.reversed, fadeIn: clip.fadeIn || 0, fadeOut: clip.fadeOut || 0, fadeInCurve: clip.fadeInCurve || 'linear', fadeOutCurve: clip.fadeOutCurve || 'linear', gain: tileGain(clip) });
 				k = j;
 			}
 		}
@@ -1736,7 +1820,10 @@ function createSlicer(savedState = null) {
 	const sameMarks  = (a, b) => !!a.locked === !!b.locked && !!a.muted === !!b.muted
 		&& !!a.reversed === !!b.reversed
 		&& (a.fadeIn  || 0) === (b.fadeIn  || 0)
-		&& (a.fadeOut || 0) === (b.fadeOut || 0);
+		&& (a.fadeOut || 0) === (b.fadeOut || 0)
+		&& (a.fadeInCurve  || 'linear') === (b.fadeInCurve  || 'linear')
+		&& (a.fadeOutCurve || 'linear') === (b.fadeOutCurve || 'linear')
+		&& tileGain(a) === tileGain(b);
 	const preserveMarkedTilesFromPrevGrid = (oldTiles) => {
 		const U_new = unitCount();
 		if (!(U_new > 0) || !oldTiles || oldTiles.length === 0) return false;
@@ -1769,6 +1856,9 @@ function createSlicer(savedState = null) {
 						reversed: !!t.reversed,
 						fadeIn:   t.fadeIn  || 0,
 						fadeOut:  t.fadeOut || 0,
+						fadeInCurve:  t.fadeInCurve  || 'linear',
+						fadeOutCurve: t.fadeOutCurve || 'linear',
+						gain:     tileGain(t),
 					};
 					runs.push(cur);
 				}
@@ -1808,6 +1898,9 @@ function createSlicer(savedState = null) {
 				reversed: run.reversed,
 				fadeIn:   run.fadeIn,
 				fadeOut:  run.fadeOut,
+				fadeInCurve:  run.fadeInCurve,
+				fadeOutCurve: run.fadeOutCurve,
+				gain:     run.gain,
 			};
 			for (let k = 0; k < wCells; k++) {
 				cells[startCell + k] = { clip, srcSub: srcCell + k };
@@ -1848,7 +1941,7 @@ function createSlicer(savedState = null) {
 		if (start + w > cells.length) w = cells.length - start;         // …and bar end
 		if (w <= 0) return;                                             // no room to place a copy
 		if (rangeHasLocked(cells, start, w, sel)) return;               // don't overwrite a locked slice
-		const copy = { src: sel.src, w: selCount / RES, offset: sel.offset || 0, muted: !!sel.muted, colorIdx: sel.colorIdx, reversed: !!sel.reversed, fadeIn: sel.fadeIn || 0, fadeOut: sel.fadeOut || 0 };
+		const copy = { src: sel.src, w: selCount / RES, offset: sel.offset || 0, muted: !!sel.muted, colorIdx: sel.colorIdx, reversed: !!sel.reversed, fadeIn: sel.fadeIn || 0, fadeOut: sel.fadeOut || 0, fadeInCurve: sel.fadeInCurve || 'linear', fadeOutCurve: sel.fadeOutCurve || 'linear', gain: tileGain(sel) };
 		paintCells(cells, copy, start, w, Math.round((sel.src || 0) * RES));
 		seq.tiles = rebuildFromCells(cells);
 		selectedTile = tileStartingAtCell(start);                       // keep the copy selected
@@ -1951,8 +2044,8 @@ function createSlicer(savedState = null) {
 		if (!t || t.w < 2) return;
 		const left = Math.floor(t.w / 2);
 		seq.tiles.splice(i, 1,
-			{ src: t.src,        w: left,        offset: t.offset, muted: t.muted, colorIdx: t.colorIdx,   reversed: !!t.reversed, fadeIn: t.fadeIn || 0, fadeOut: 0 },
-			{ src: t.src + left, w: t.w - left,  offset: t.offset, muted: t.muted, colorIdx: nextColorIdx++, reversed: !!t.reversed, fadeIn: 0, fadeOut: t.fadeOut || 0 });
+			{ src: t.src,        w: left,        offset: t.offset, muted: t.muted, colorIdx: t.colorIdx,   reversed: !!t.reversed, fadeIn: t.fadeIn || 0, fadeOut: 0, fadeInCurve: t.fadeInCurve || 'linear', gain: tileGain(t) },
+			{ src: t.src + left, w: t.w - left,  offset: t.offset, muted: t.muted, colorIdx: nextColorIdx++, reversed: !!t.reversed, fadeIn: 0, fadeOut: t.fadeOut || 0, fadeOutCurve: t.fadeOutCurve || 'linear', gain: tileGain(t) });
 		renderSequencer();
 	};
 
@@ -1989,7 +2082,10 @@ function createSlicer(savedState = null) {
 		s0 = Math.max(0, Math.min(len, s0));
 		s1 = Math.max(s0 + 1, Math.min(len, s1));
 		const spp = (s1 - s0) / cssW;
-		const amp = cssH / 2;
+		// Amplitude tracks the slice's level (a quiet slice draws smaller); a boost
+		// above unity saturates at the tile bounds like the audio would at 0dB.
+		const g   = tileGain(tile);
+		const amp = (cssH / 2) * Math.min(1, g);
 		const mid = cssH / 2;
 
 		ctx.strokeStyle = color;
@@ -2018,24 +2114,45 @@ function createSlicer(savedState = null) {
 				if (v > max) max = v;
 			}
 			if (min > max) { min = 0; max = 0; }
+			if (g > 1) {   // boost: scale the samples, clip at the rails
+				min = Math.max(-1, min * g);
+				max = Math.min(1, max * g);
+			}
 			const x = px + 0.5;
 			ctx.moveTo(x, mid + min * amp);
 			ctx.lineTo(x, mid + max * amp);
 		}
 		ctx.stroke();
 
-		// Envelope guides: a line rising over the fade-in span and falling over the
-		// fade-out span. Same proportional scale-down playback uses when the two
-		// would overlap, so the picture matches what's heard.
+		// Envelope guides: the fade-in rising and the fade-out falling, traced with
+		// the tile's actual curve shapes (FADE_SHAPES — the same functions playback
+		// samples) and topping out at the slice's level ceiling. Same proportional
+		// scale-down playback uses when the two would overlap, so the picture
+		// matches what's heard.
 		let fi = Math.max(0, Math.min(1, tile.fadeIn  || 0));
 		let fo = Math.max(0, Math.min(1, tile.fadeOut || 0));
 		if (fi + fo > 1) { const s = 1 / (fi + fo); fi *= s; fo *= s; }
 		if (fi > 0 || fo > 0) {
+			const top     = cssH - Math.max(1, cssH - 1) * Math.min(1, g);   // gain ceiling in px (y grows down)
+			const shapeIn  = FADE_SHAPES[tile.fadeInCurve]  || FADE_SHAPES.linear;
+			const shapeOut = FADE_SHAPES[tile.fadeOutCurve] || FADE_SHAPES.linear;
+			const trace = (shape, x0, x1, rising) => {
+				const wPx = x1 - x0;
+				const n   = Math.max(2, Math.min(48, Math.round(wPx / 3)));
+				for (let k = 0; k <= n; k++) {
+					const x = x0 + (k / n) * wPx;
+					const v = shape(k / n);                       // fraction travelled
+					const y = rising
+						? cssH - 0.5 - (cssH - 0.5 - top) * v      // 0 → ceiling
+						: top + (cssH - 0.5 - top) * v;            // ceiling → 0
+					if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+				}
+			};
 			ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
 			ctx.lineWidth   = 1;
 			ctx.beginPath();
-			if (fi > 0) { ctx.moveTo(0.5, cssH - 0.5); ctx.lineTo(fi * cssW, 0.5); }
-			if (fo > 0) { ctx.moveTo(cssW - fo * cssW, 0.5); ctx.lineTo(cssW - 0.5, cssH - 0.5); }
+			if (fi > 0) trace(shapeIn,  0.5, fi * cssW, true);
+			if (fo > 0) trace(shapeOut, cssW - fo * cssW, cssW - 0.5, false);
 			ctx.stroke();
 		}
 	};
@@ -2060,8 +2177,8 @@ function createSlicer(savedState = null) {
 	// chip. Click an empty cell to place a modifier (opens its settings), click a
 	// chip to select it (toggles the settings overlay), drag a chip sideways to
 	// move it to another step (occupied steps are skipped over).
-	const MOD_GLYPH = { mute: 'M', rev: '◀', rand: '⚂', reset: '↺', ratchet: '≣' };
-	const MOD_NAME  = { mute: 'Mute', rev: 'Reverse', rand: 'Randomize', reset: 'Reset', ratchet: 'Ratchet' };
+	const MOD_GLYPH = { mute: 'M', rev: '◀', gain: 'G', rand: '⚂', reset: '↺', ratchet: '≣' };
+	const MOD_NAME  = { mute: 'Mute', rev: 'Reverse', gain: 'Gain', rand: 'Randomize', reset: 'Reset', ratchet: 'Ratchet' };
 	let selectedMod = null;
 
 	// Ratchet chip summary, per hit-layout mode.
@@ -2079,7 +2196,7 @@ function createSlicer(savedState = null) {
 	};
 	const modTitle = (m) => `${MOD_NAME[m.action]}${m.action === 'ratchet'
 		? ratchetDesc(m)
-		: ''} — ${m.fireMode === 'every'
+		: (m.action === 'gain' ? ` ${Math.round(m.gainAmt != null ? m.gainAmt : 50)}%` : '')} — ${m.fireMode === 'every'
 		? `every ${Math.max(1, Math.round(m.fireValue))} loops`
 		: `${Math.round(m.fireValue)}% chance`}. Click for settings, drag to move.`;
 
@@ -2093,7 +2210,7 @@ function createSlicer(savedState = null) {
 	const modActionRow = document.createElement('div');
 	modActionRow.className = 'mod-overlay-row';
 	const modActionBtns = {};
-	for (const a of ['mute', 'rev', 'rand', 'reset', 'ratchet']) {
+	for (const a of ['mute', 'rev', 'gain', 'rand', 'reset', 'ratchet']) {
 		const b = document.createElement('button');
 		b.className = 'toggle-btn mod-action-btn';
 		b.dataset.action = a;
@@ -2101,6 +2218,7 @@ function createSlicer(savedState = null) {
 		b.title = {
 			mute:    'Silence the step (the whole tile covering it) when this fires',
 			rev:     'Reverse the step when this fires (toggles an already-reversed slice back)',
+			gain:    'Scale the step\'s level when this fires — below 100% ducks, above accents (multiplies the slice\'s own gain)',
 			rand:    'Virtual press of Randomize (uses the Amt level, respects locks)',
 			reset:   'Restore the native play order — slices keep their fades/reverse/pitch (respects locks)',
 			ratchet: 'Retrigger the step across a length in steps — even hits, a timing ramp, or a pitch ramp',
@@ -2113,6 +2231,7 @@ function createSlicer(savedState = null) {
 				if (!(overlayMod.lenSteps >= 1)) overlayMod.lenSteps = 1;
 				if (!overlayMod.mode)            overlayMod.mode = 'even';
 			}
+			if (a === 'gain' && !Number.isFinite(overlayMod.gainAmt)) overlayMod.gainAmt = 50;
 			refreshModOverlay();
 			renderModsRow();
 			schedulePrescan();   // 'rev' needs the flipped stretch variants cached
@@ -2157,6 +2276,18 @@ function createSlicer(savedState = null) {
 	modFireRow.appendChild(modEveryBtn);
 	modFireRow.appendChild(modProbCtrl.getElement());
 	modFireRow.appendChild(modEveryCtrl.getElement());
+
+	// Gain parameter (shown only when the action is 'gain'): the one-shot level
+	// multiplier applied to the covered tile's own gain.
+	const modGainRow = document.createElement('div');
+	modGainRow.className = 'mod-overlay-row';
+	const modGainCtrl = new DragControl({
+		min: 0, max: 200, step: 1, value: 50, detent: 100, label: 'Level',
+		format: (v) => `${Math.round(v)}%`,
+		onChange: (v) => { if (overlayMod) { overlayMod.gainAmt = Math.round(v); renderModsRow(); scheduleSave(); } },
+	});
+	modGainCtrl.getElement().title = 'Level multiplier for the pass — below 100% ducks, above accents (double-click = 100%)';
+	modGainRow.appendChild(modGainCtrl.getElement());
 
 	// Ratchet mode (shown only when the action is 'ratchet'): how the retriggers
 	// are laid out across the span.
@@ -2242,6 +2373,7 @@ function createSlicer(savedState = null) {
 
 	modOverlay.appendChild(modActionRow);
 	modOverlay.appendChild(modFireRow);
+	modOverlay.appendChild(modGainRow);
 	modOverlay.appendChild(modRatchetModeRow);
 	modOverlay.appendChild(modRatchetRow);
 	modOverlay.appendChild(modDeleteBtn);
@@ -2259,6 +2391,9 @@ function createSlicer(savedState = null) {
 		modEveryCtrl.getElement().style.display = every ? '' : 'none';
 		if (every) modEveryCtrl.setValue(Math.max(1, Math.round(overlayMod.fireValue)));
 		else       modProbCtrl.setValue(Math.max(0, Math.min(100, overlayMod.fireValue)));
+		const isGain = overlayMod.action === 'gain';
+		modGainRow.style.display = isGain ? '' : 'none';
+		if (isGain) modGainCtrl.setValue(Math.max(0, Math.min(200, Math.round(overlayMod.gainAmt != null ? overlayMod.gainAmt : 50))));
 		const ratchet = overlayMod.action === 'ratchet';
 		modRatchetModeRow.style.display = ratchet ? '' : 'none';
 		modRatchetRow.style.display     = ratchet ? '' : 'none';
@@ -2506,6 +2641,21 @@ function createSlicer(savedState = null) {
 				scheduleSave();
 			});
 			el.appendChild(badge);
+
+			// Gain badge (shown only when the level departs 100%); click it to reset.
+			const gainBadge = document.createElement('span');
+			gainBadge.className = 'seq-step-gain';
+			gainBadge.title = 'Slice level — click to reset to 100%';
+			updateGainBadge(gainBadge, tileGain(tile));
+			gainBadge.addEventListener('click', (ev) => {
+				ev.stopPropagation();
+				tile.gain = 1;
+				updateGainBadge(gainBadge, 1);
+				redrawTileWaves();
+				updateSliceSettings();
+				scheduleSave();
+			});
+			el.appendChild(gainBadge);
 
 			// Wheel over a tile nudges its pitch offset (±5), independent of master.
 			el.addEventListener('wheel', (ev) => {
@@ -3107,8 +3257,8 @@ function createSlicer(savedState = null) {
 		seq:            {
 			tiles: seq.tiles.map((t) => (t.gap
 				? { gap: true, w: t.w }
-				: { src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: t.colorIdx, locked: !!t.locked, reversed: !!t.reversed, fadeIn: t.fadeIn || 0, fadeOut: t.fadeOut || 0 })),
-			mods:  seq.mods.map((m) => ({ step: m.step, action: m.action, fireMode: m.fireMode, fireValue: m.fireValue, mode: m.mode, subdiv: m.subdiv, subdivTo: m.subdivTo, pitchStep: m.pitchStep, lenSteps: m.lenSteps })),
+				: { src: t.src, w: t.w, offset: t.offset || 0, muted: !!t.muted, colorIdx: t.colorIdx, locked: !!t.locked, reversed: !!t.reversed, fadeIn: t.fadeIn || 0, fadeOut: t.fadeOut || 0, fadeInCurve: t.fadeInCurve || 'linear', fadeOutCurve: t.fadeOutCurve || 'linear', gain: tileGain(t) })),
+			mods:  seq.mods.map((m) => ({ step: m.step, action: m.action, fireMode: m.fireMode, fireValue: m.fireValue, mode: m.mode, subdiv: m.subdiv, subdivTo: m.subdivTo, pitchStep: m.pitchStep, lenSteps: m.lenSteps, gainAmt: m.gainAmt })),
 			loop:  seq.loop,
 		},
 	});
@@ -3206,13 +3356,15 @@ function createSlicer(savedState = null) {
 					voiceOverrides: (tile, posSteps) => {
 						const { loopIdx, stepInBar } = barPos(posSteps, U);
 						const w = (tile && tile.w > 0) ? tile.w : 1;
-						let mute = false, rev = false;
+						let mute = false, rev = false, gain = 1;
 						for (const m of modsInSpan(mods, stepInBar, w)) {
-							if (m.action !== 'mute' && m.action !== 'rev') continue;
+							if (m.action !== 'mute' && m.action !== 'rev' && m.action !== 'gain') continue;
 							if (!modFires(m, loopIdx)) continue;
-							if (m.action === 'mute') mute = true; else rev = !rev;
+							if (m.action === 'mute') mute = true;
+							else if (m.action === 'rev') rev = !rev;
+							else gain *= Math.max(0, Math.min(200, m.gainAmt != null ? m.gainAmt : 50)) / 100;
 						}
-						return (mute || rev) ? { mute, rev } : null;
+						return (mute || rev || gain !== 1) ? { mute, rev, gain } : null;
 					},
 				} : null,
 			};
@@ -3267,6 +3419,9 @@ function createSlicer(savedState = null) {
 							reversed: !!t.reversed,
 							fadeIn:  Number.isFinite(t.fadeIn)  ? Math.max(0, Math.min(1, t.fadeIn))  : 0,
 							fadeOut: Number.isFinite(t.fadeOut) ? Math.max(0, Math.min(1, t.fadeOut)) : 0,
+							fadeInCurve:  FADE_SHAPES[t.fadeInCurve]  ? t.fadeInCurve  : 'linear',
+							fadeOutCurve: FADE_SHAPES[t.fadeOutCurve] ? t.fadeOutCurve : 'linear',
+							gain: Number.isFinite(t.gain) ? Math.max(0, Math.min(2, t.gain)) : 1,
 						}))
 				: [];
 			nextColorIdx = seq.tiles.reduce((m, t) => Math.max(m, t.gap ? -1 : t.colorIdx), -1) + 1;
@@ -3276,12 +3431,15 @@ function createSlicer(savedState = null) {
 			seq.mods = Array.isArray(savedState.seq.mods)
 				? savedState.seq.mods
 					.filter((m) => m && Number.isFinite(m.step) && m.step >= 0
-						&& ['mute', 'rev', 'rand', 'reset', 'ratchet'].includes(m.action))
+						&& ['mute', 'rev', 'gain', 'rand', 'reset', 'ratchet'].includes(m.action))
 					.map((m) => ({
 						step:      Math.round(m.step),
 						action:    m.action,
 						fireMode:  m.fireMode === 'every' ? 'every' : 'prob',
 						fireValue: Number.isFinite(m.fireValue) ? m.fireValue : 100,
+						...(m.action === 'gain' ? {
+							gainAmt: Number.isFinite(m.gainAmt) ? Math.max(0, Math.min(200, Math.round(m.gainAmt))) : 50,
+						} : {}),
 						...(m.action === 'ratchet' ? {
 							mode:      ['even', 'ramp', 'pitch'].includes(m.mode) ? m.mode : 'even',
 							subdiv:    Number.isFinite(m.subdiv)    ? Math.max(1, Math.min(8,  Math.round(m.subdiv)))    : 2,
