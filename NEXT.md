@@ -14,6 +14,16 @@ locked to one master clock.
   **Step** (1/2…1/32, default 1/16) is an independent subdivision. The slice grid
   is derived: `cells = beats × stepDenom/4` (`cellCount()` in main.js). Fixed
   quarter-note beat unit for now.
+  - **Edits survive a Beats/Step change.** Per-step settings (mute, reverse,
+    pitch offset, fades + curves, gain) re-apply positionally onto the new grid
+    (`inheritStepSettingsFromPrevGrid`): new step p inherits old step
+    `floor(p/r)` — an upsize copies a step's edits to all its new subdivisions;
+    a downsize keeps the surviving positions' edits and drops the in-between
+    ones. Arrangement (moves/resizes/gaps) resets to native audio — except
+    LOCKED slices, which keep audio + loop position via the (now locked-only)
+    `preserveMarkedTilesFromPrevGrid`, painted on top. Modifier-lane steps were
+    already rescaled. (Mute-only tiles used to run-preserve with their audio;
+    they now travel as positional settings like everything else.)
 - **Tile sequencer.** Ordered variable-width tiles over the grid; drag-reorder /
   edge-resize / split (dbl-click) / merge (shift-click) / per-step pitch (wheel),
   live while playing. **Click a tile — or an empty gap — to select** it; the

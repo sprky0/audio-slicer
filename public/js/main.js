@@ -642,10 +642,18 @@ function createSlicer(savedState = null) {
 	endSlider.addEventListener('input',   (e) => setEnd(e.target.value));
 
 	// Beats change → re-slice (cellCount = beats × step) + re-derive the tempo.
+	// Same edit-preservation as a Step change: per-step settings inherit
+	// positionally; locked slices keep audio + position.
 	beatsSelect.addEventListener('change', () => {
+		const prevTiles = seq.tiles.slice();
 		const start = clamp01(parseFloat(startInput.value));
 		const end   = clamp01(parseFloat(endInput.value));
 		applyRange(start, end);
+		const inherited = inheritStepSettingsFromPrevGrid(prevTiles);
+		const locked    = preserveMarkedTilesFromPrevGrid(prevTiles);
+		if (inherited || locked) renderSequencer();
+		schedulePrescan();
+		scheduleSave();
 	});
 
 	// --- Cut: commit current slider selection as the new virtual window ---
@@ -1644,12 +1652,13 @@ function createSlicer(savedState = null) {
 		scheduleSave();
 	});
 	// Step change → new subdivision means a new cell count (beats × step), so re-slice
-	// the selection into that grid. Tempo is unchanged (it comes from beats). User-
-	// marked slices (locked or muted) survive the change: audio + loop position are
-	// rescaled onto the new grid (see preserveMarkedTilesFromPrevGrid) so a mark keeps
-	// guarding the same content — contiguous unit-marks rejoin on downsize; a wide
-	// mark stays wide on upsize (the user can Split it further if they want finer
-	// control).
+	// the selection into that grid. Tempo is unchanged (it comes from beats). The
+	// user's work survives the change as much as is reasonable: per-step edits
+	// (mute/reverse/pitch/fades/curves/gain) are re-applied positionally onto the
+	// new grid (inheritStepSettingsFromPrevGrid — upsize copies an old step's
+	// edits to all its new subdivisions, downsize keeps the surviving positions'
+	// edits), then LOCKED slices are rescaled with their audio + loop position
+	// intact (preserveMarkedTilesFromPrevGrid) on top.
 	divisionSelect.addEventListener('change', () => {
 		const prevTiles = seq.tiles.slice();
 		divisionDenom = parseInt(divisionSelect.value, 10);
@@ -1657,10 +1666,11 @@ function createSlicer(savedState = null) {
 		const end   = clamp01(parseFloat(endInput.value));
 		applyRange(start, end);
 		// applyRange → segmentsliced → seq.tiles reset to defaultTiles(U_new).
-		// Reapply marks from the previous grid on top of those defaults; re-render
-		// only when something actually got re-marked (nothing to preserve → no
-		// second paint).
-		if (preserveMarkedTilesFromPrevGrid(prevTiles)) renderSequencer();
+		// Inherit per-step settings onto those defaults, then repaint locked runs;
+		// re-render only when something actually carried over.
+		const inherited = inheritStepSettingsFromPrevGrid(prevTiles);
+		const locked    = preserveMarkedTilesFromPrevGrid(prevTiles);
+		if (inherited || locked) renderSequencer();
 		schedulePrescan();
 		scheduleSave();
 	});
@@ -1824,17 +1834,67 @@ function createSlicer(savedState = null) {
 		return false;
 	};
 
-	// Re-apply user-marked slices (locked or muted) from a pre-resolution-change tile
-	// snapshot onto the fresh default grid in `seq.tiles`. Each marked run is rescaled
-	// by r = U_new / U_old so its audio + loop position stay put; contiguous runs that
-	// share contiguous source AND the same flags (locked, muted) are coalesced first
-	// so a run of unit-marks at the old resolution can re-emerge as one wider mark at
-	// the new one (and vice versa — splitting on upsize is just what rebuildFromCells
-	// does with a wider paint). Locks and mutes coalesce independently, so a run of
-	// muted tiles doesn't merge with a neighbouring locked one. Marks that shrink
-	// below the sub-step grain, or would overhang the bar after rescale, are dropped
+	// Carry per-STEP settings across a resolution change. The fresh default grid
+	// (one unit per tile) inherits each old step's cosmetic edits — mute, reverse,
+	// pitch offset, fades + curves, gain — from the OLD tile that sounded at the
+	// corresponding position: new step p reads old unit floor(p / r). Upsize
+	// (e.g. 8→16): every new subdivision of an old step inherits its edits.
+	// Downsize (8→4): the old step at each surviving position wins; edits on the
+	// dropped in-between steps are lost. Arrangement (src/w — moves, resizes,
+	// gaps) is NOT inherited — audio resets to native; LOCKED slices keep audio +
+	// position via preserveMarkedTilesFromPrevGrid, painted on top of this.
+	// Mutates the default tiles in seq.tiles in place; true = something inherited.
+	const hasStepEdits = (t) => !t.gap && (!!t.muted || !!t.reversed
+		|| (t.offset || 0) !== 0 || t.fadeIn > 0 || t.fadeOut > 0
+		|| tileGain(t) !== 1
+		|| (t.fadeInCurve  || 'linear') !== 'linear'
+		|| (t.fadeOutCurve || 'linear') !== 'linear');
+	const inheritStepSettingsFromPrevGrid = (oldTiles) => {
+		const U_new = unitCount();
+		if (!(U_new > 0) || !oldTiles || oldTiles.length === 0) return false;
+		const U_old = oldTiles.reduce((s, t) => s + (t.w || 0), 0);
+		if (!(U_old > 0) || Math.abs(U_new - U_old) < 1e-9) return false;
+		const r = U_new / U_old;
+		const tileAtOldUnit = (u) => {
+			let s = 0;
+			for (const t of oldTiles) {
+				if (u < s + t.w - 1e-9) return t;
+				s += t.w;
+			}
+			return null;
+		};
+		let inherited = false;
+		let pos = 0;
+		for (const nt of seq.tiles) {
+			const from = tileAtOldUnit(Math.floor(pos / r + 1e-9));
+			pos += nt.w;
+			if (nt.gap || !from || from.gap || !hasStepEdits(from)) continue;
+			nt.muted        = !!from.muted;
+			nt.reversed     = !!from.reversed;
+			nt.offset       = from.offset || 0;
+			nt.fadeIn       = from.fadeIn  || 0;
+			nt.fadeOut      = from.fadeOut || 0;
+			nt.fadeInCurve  = from.fadeInCurve  || 'linear';
+			nt.fadeOutCurve = from.fadeOutCurve || 'linear';
+			nt.gain         = tileGain(from);
+			inherited = true;
+		}
+		return inherited;
+	};
+
+	// Re-apply LOCKED slices from a pre-resolution-change tile snapshot onto the
+	// (settings-inherited) default grid in `seq.tiles`. Each locked run is rescaled
+	// by r = U_new / U_old so its audio + loop position stay put — the one edit
+	// inheritance can't express (a lock guards specific CONTENT, possibly moved).
+	// Contiguous runs that share contiguous source AND identical settings are
+	// coalesced first so a run of unit-locks at the old resolution can re-emerge
+	// as one wider lock at the new one (and vice versa — splitting on upsize is
+	// just what rebuildFromCells does with a wider paint). Locks that shrink below
+	// the sub-step grain, or would overhang the bar after rescale, are dropped
 	// rather than truncated. On downsize collisions the earlier run wins.
-	const isMarked   = (t) => !!t && !t.gap && (t.locked || t.muted);
+	// (Mute-only tiles used to be run-preserved too; they now travel through
+	// inheritStepSettingsFromPrevGrid as a positional setting instead.)
+	const isMarked   = (t) => !!t && !t.gap && !!t.locked;
 	// Coalescing also requires matching reverse/fade settings — merging two runs
 	// that differ in those would smear one tile's envelope/direction over both.
 	const sameMarks  = (a, b) => !!a.locked === !!b.locked && !!a.muted === !!b.muted
@@ -1850,9 +1910,9 @@ function createSlicer(savedState = null) {
 		const U_old = oldTiles.reduce((s, t) => s + (t.w || 0), 0);
 		if (!(U_old > 0)) return false;
 
-		// Collect marked runs from the previous grid, coalescing adjacent marks that
-		// share contiguous source AND identical mark flags (so mutes don't merge into
-		// locks, and a downsize can rejoin same-flag unit-marks).
+		// Collect locked runs from the previous grid, coalescing adjacent locks
+		// that share contiguous source AND identical settings (so a downsize can
+		// rejoin same-setting unit-locks).
 		const runs = [];
 		let posU = 0;
 		let cur = null;
@@ -1899,12 +1959,14 @@ function createSlicer(savedState = null) {
 			if (wCells < 1) continue;                                   // sub-cell → too small to represent
 			if (startCell < 0 || startCell + wCells > cells.length) continue;   // out of bar
 
-			// Skip if these cells already carry a mark placed by an earlier run
-			// (first-wins on any downsize collision — regardless of which flag).
+			// Skip if these cells already carry a lock placed by an earlier run
+			// (first-wins on any downsize collision). Checks LOCKED only — the
+			// grid underneath may legitimately carry inherited mutes/settings,
+			// which a lock run is allowed to paint over.
 			let conflict = false;
 			for (let k = 0; k < wCells; k++) {
 				const c = cells[startCell + k];
-				if (c && c.clip && (c.clip.locked || c.clip.muted)) { conflict = true; break; }
+				if (c && c.clip && c.clip.locked) { conflict = true; break; }
 			}
 			if (conflict) continue;
 
