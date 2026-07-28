@@ -28,6 +28,10 @@ class AudioEngine extends EventTarget {
 			playbackLatency:0,
 		};
 		// --- Volume and Pan ---
+		// The output gain applies volume × mute: `volume` remembers the set level
+		// while `muted` zeroes the output, so unmuting restores the exact level.
+		this.volume = 1;
+		this.muted  = false;
 		this.gainNode = this.audioContext.createGain();
 		this.gainNode.gain.value = 1;
 		this.pannerNode = this.audioContext.createStereoPanner
@@ -241,7 +245,13 @@ class AudioEngine extends EventTarget {
 	}
 	// --- Volume and Pan Controls ---
 	setVolume(val) {
-		this.gainNode.gain.value = val;
+		this.volume = val;
+		this.gainNode.gain.value = this.muted ? 0 : val;
+	}
+	// Mute zeroes the output without touching the stored volume (unmute restores it).
+	setMuted(on) {
+		this.muted = !!on;
+		this.gainNode.gain.value = this.muted ? 0 : this.volume;
 	}
 	setPan(val) {
 		if (this.pannerNode) {

@@ -294,6 +294,14 @@ function createSlicer(savedState = null) {
 		min: -5, max: 5, step: 1, value: 0, detent: 0,
 		format: (v) => (v > 0 ? `+${v}` : `${v}`),
 	});
+	// Channel mute: zeroes this slicer's output while the sequencer keeps running;
+	// Vol keeps its value for unmute. Persisted; a muted channel is also
+	// default-unchecked in the Export panel.
+	const muteChannelBtn = document.createElement('button');
+	muteChannelBtn.textContent = 'Mute';
+	muteChannelBtn.className   = 'toggle-btn';
+	muteChannelBtn.title       = 'Mute this channel — output silenced, sequencer keeps running, Vol remembered';
+	muteChannelBtn.setAttribute('aria-pressed', 'false');
 
 	// --- Details panel: ALL source-editing controls (everything but the waveform and
 	// the sequencer controls). Shown = "edit" mindset (big waveform, small tile row);
@@ -331,6 +339,7 @@ function createSlicer(savedState = null) {
 	cluster.appendChild(setSpan(volumeKnob.getElement(), 1));
 	cluster.appendChild(setSpan(panKnob.getElement(),    1));
 	cluster.appendChild(setSpan(pitchKnob.getElement(),  1));
+	cluster.appendChild(setSpan(muteChannelBtn, 1));
 	cluster.appendChild(setSpan(detailsBtn, 2));             // Show/Hide details
 	cluster.appendChild(setSpan(duplicateBtn, 1));
 	cluster.appendChild(setSpan(removeBtn, 1));
@@ -527,6 +536,17 @@ function createSlicer(savedState = null) {
 	volumeKnob.onChange = (v) => { slicer.setVolume(v); scheduleSave(); };
 	panKnob.onChange    = (v) => { slicer.setPan(v);    scheduleSave(); };
 	pitchKnob.onChange  = (v) => { masterPitch = v; schedulePrescan(); scheduleSave(); };
+	let channelMuted = false;
+	const applyChannelMute = () => {
+		slicer.setMuted(channelMuted);
+		muteChannelBtn.classList.toggle('active', channelMuted);
+		muteChannelBtn.setAttribute('aria-pressed', String(channelMuted));
+	};
+	muteChannelBtn.addEventListener('click', () => {
+		channelMuted = !channelMuted;
+		applyChannelMute();
+		scheduleSave();
+	});
 
 	// File loading — used by the Select File button, waveform drop, and waveform
 	// click-when-empty (all three route through here).
@@ -693,8 +713,8 @@ function createSlicer(savedState = null) {
 
 	const seqLoopBtn = document.createElement('button');
 	seqLoopBtn.textContent = 'Loop';
-	seqLoopBtn.className   = 'seq-loop-btn';
-	seqLoopBtn.setAttribute('aria-pressed', 'false');
+	seqLoopBtn.className   = 'seq-loop-btn active';   // new lanes loop by default (seq.loop)
+	seqLoopBtn.setAttribute('aria-pressed', 'true');
 
 	// --- Randomize: shuffle tile order; the level sets how many tiles move ---
 	// randLevel is a 0–100% knob on the per-tile swap probability: 0 leaves the
@@ -1115,7 +1135,7 @@ function createSlicer(savedState = null) {
 		mods:         [],
 		isPlaying:    false,
 		currentTile:  -1,
-		loop:         false,
+		loop:         true,     // new lanes loop by default; restore overrides
 	};
 
 	// Monotonic source of stable per-tile colour ids.
@@ -3252,6 +3272,7 @@ function createSlicer(savedState = null) {
 		bpmManual,
 		volume:         volumeKnob.value,
 		pan:            panKnob.value,
+		muted:          channelMuted,
 		masterPitch,
 		randLevel,
 		seq:            {
@@ -3292,6 +3313,7 @@ function createSlicer(savedState = null) {
 			id,
 			fileName: currentFileName,
 			beats:    beatCount(),
+			muted:    channelMuted,
 			exportable: !!slicer.engine.audioBuffer && seq.tiles.some((t) => !t.gap),
 		}),
 		// Enqueue every WSOLA build the current master tempo/pitch needs, so a
@@ -3397,6 +3419,7 @@ function createSlicer(savedState = null) {
 
 		if (Number.isFinite(savedState.volume)) { volumeKnob.setValue(savedState.volume); slicer.setVolume(savedState.volume); }
 		if (Number.isFinite(savedState.pan))    { panKnob.setValue(savedState.pan);       slicer.setPan(savedState.pan); }
+		if (savedState.muted) { channelMuted = true; applyChannelMute(); }
 		if (Number.isFinite(savedState.masterPitch)) { masterPitch = savedState.masterPitch; pitchKnob.setValue(masterPitch); }
 		if (Number.isFinite(savedState.randLevel)) {
 			randLevel = Math.max(0, Math.min(100, savedState.randLevel));
@@ -3661,7 +3684,9 @@ function openExportPanel() {
 		row.className = 'export-row';
 		const cb = document.createElement('input');
 		cb.type = 'checkbox';
-		cb.checked = true;
+		// A muted channel starts unchecked (you're presumably not mixing it) but
+		// stays listed — checking it exports it at full level regardless of mute.
+		cb.checked = !meta.muted;
 		const name = document.createElement('span');
 		name.className = 'export-row-name';
 		name.textContent = meta.fileName || `Slicer ${i + 1}`;

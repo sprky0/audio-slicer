@@ -130,6 +130,13 @@ locked to one master clock.
   against a jittered synthetic 116 BPM clock. Debug handle: `window.__jsloop`.
 - **Per-slicer actions** — Add / **Duplicate** (clones a slicer via its `getState()`
   snapshot + a copied audio blob, slotted in right after) / Remove.
+- **Channel mute** — a Mute toggle in the header (next to Vol/Pan/Pitch):
+  `engine.setMuted` zeroes the output gain while `engine.volume` remembers the
+  set level (Vol edits while muted stick, output stays 0). Sequencer keeps
+  running. Persisted (`muted` in getState); Export panel default-unchecks muted
+  channels (checking one still exports at full level — export has its own graph).
+- **Loop default** — new lanes start with Loop ON (`seq.loop: true` + the button
+  pre-lit); restored lanes keep their saved value.
 - **Unified DragControl** everywhere (`drag-control.js`); fluid relative-unit grid
   (see `public/CSS.md`). MIDI clock sync, WSOLA time-stretch + pitch, persistence
   (localStorage settings + IndexedDB audio).

@@ -372,6 +372,10 @@ class AudioSlicerController {
 		this.engine.setVolume(val);
 	}
 
+	setMuted(on) {
+		this.engine.setMuted(on);
+	}
+
 	setPan(val) {
 		this.engine.setPan(val);
 	}
