@@ -50,7 +50,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F13 | Modifier lane — one modifier per step, prob / every-N, mute / rev / gain actions, rand / reset pattern actions via `beforeTile`, pinned settings panel, chip flash / firing / superseded visuals | Done 0.13.0 |
 | F14 | Ratchet + pattern tools — even / ramp / pitch hit layouts, span absorption, randomize with lock buckets, Reset Order / Reset All, lock, dup, refill, split / merge, Packed vs Gaps (rasterize → rebuild), grid-change inheritance, the All broadcast, zoom (Trim / Full) | Done 0.14.0 |
 | F15 | Multi-track — up to `FG_MAX_TRACKS`, a track tab strip with the focused track in the editor, add / duplicate / remove, in-phase join, master mix | Done 0.17.1 (`max_tracks` conf key open) |
-| F16 | Performance MIDI — note-triggered slices, CC map (learn), program change = session, `appliance.conf` keys | In progress 0.17.2 (notes done; CC map, program change open) |
+| F16 | Performance MIDI — note-triggered slices, CC map (learn), program change = session, `appliance.conf` keys | In progress 0.18.1 (notes and sessions-as-presets done; CC map and conf keys open) |
 | F17 | Bounce — offline render of the master mix to `RF_DATA_DIR/exports`, one bar (LCM of the tracks' beats), normalised | Done 0.17.0 |
 | F18 | Record — two halves with one status: **host capture** (ALSA capture PCM + an input path on `Processor`), an L-item to open in ratfactory-linux-host and link here once numbered; **Frog side** (record into a track, re-slice live), developed on the Mac first. Both rows move together, same commit | In progress 0.18.0 (Frog side done; host half awaiting the L-item) |
 | F19 | Transient markers — detection + draggable non-uniform slice points (needs the model change noted in the JS NEXT.md) | Planned |
@@ -71,7 +71,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 |----|---------|--------|
 | F16.1 | Note triggers: Note On on channel n plays one unit of track n − 1 (note 36 = unit 0, chromatic) at its natural rate, velocity as level, one-shot, ringing out, on top of whatever the sequencer plays; a visual record with tileIndex −1 sweeps the waveform. `fg_engine_midi_msg` carries channel messages into the per-block event list; `trigger_test`; the appliance shell test sends a note through the adapter | Done |
 | F16.2 | CC map with learn (volume, pan, mute, randomize, Amt, master), stored in the session | Planned |
-| F16.3 | Program Change = session: `RF_DATA_DIR/sessions/`, next / previous via the host's preset buttons (`StepPreset`), `currentPreset()` for the panel | Planned |
+| F16.3 | Sessions as presets (0.18.1): `<data dir>/sessions/*.json`, sorted; **Save** writes the current state (named after the loaded session or a stamp), **Sessions** lists them to load; `StepPreset` and MIDI Program Change pick one and the load lands on the idle tick (never the audio thread); `GetCurrentPresetName / Program` feed the appliance panel's status line. `shell_test` saves two, steps, wraps, program-changes | Done |
 | F16.4 | `appliance.conf` keys: `max_tracks=`, `midi_trigger_base=`, `clock=` | Planned |
 
 ### F15 — Multi-track
@@ -287,6 +287,9 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F16.3 sessions as presets (0.18.1).** Save / Sessions in the transport
+  bar; the appliance's preset buttons and Program Change move through the
+  sessions folder with loads deferred to the idle tick.
 - **F18.2 record, Frog side (0.18.0).** Arm, capture, stop and take through
   a lock-free lane; takes land in the samples dir and replace the track's
   store without a dropout. The host capture half (F18.1) is still the

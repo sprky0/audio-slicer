@@ -48,6 +48,10 @@ public:
 	virtual double RecordedSeconds() const = 0;
 	virtual void StartBounce() = 0;
 	virtual const char* BounceStatus() const = 0;   // "Export", "Exporting", "Exported", ...
+	virtual void SaveSessionUI() = 0;
+	virtual void LoadSessionUI(const std::string& path) = 0;
+	virtual std::string SessionsDirUI() const = 0;
+	virtual const char* SessionName() const = 0;
 	virtual int TrackCount() const = 0;
 	virtual int& TrackCountRef() = 0;
 	virtual bool AddTrackUI() = 0;
@@ -125,6 +129,10 @@ public:
 		if (mExportStatus != mHost.BounceStatus()) {
 			mExportStatus = mHost.BounceStatus();
 			mExportBtn->SetDirty(false);
+		}
+		if (mSessionShown != mHost.SessionName()) {
+			mSessionShown = mHost.SessionName();
+			mSessionsBtn->SetDirty(false);
 		}
 		const bool rec = mHost.IsRecording();
 		if (rec || mRec->On()) {
@@ -252,6 +260,12 @@ private:
 			Layout(g);
 		}), mTransport, 1.f));
 		mExportBtn = drag(add(DragControl::Button(z, "Export", Intent::Neutral, [this](double) { mHost.StartBounce(); }), mTransport, 1.f));
+		add(DragControl::Button(z, "Save", Intent::Neutral, [this](double) { mHost.SaveSessionUI(); }), mTransport, 1.f);
+		mSessionsBtn = drag(add(DragControl::Button(z, "Sessions", Intent::Label, [this, g](double) { OpenSessionList(g); }), mTransport, 1.5f));
+		mSessionsBtn->WithFormat([this](double) {
+			const std::string n = mHost.SessionName();
+			return n.empty() ? std::string("Sessions") : n;
+		});
 		mExportBtn->WithFormat([this](double) { return std::string(mHost.BounceStatus()); });
 		g->AttachControl(mVersion = new FrogVersionReadout(z));
 		mTransport.push_back({mVersion, 2.f});
@@ -717,6 +731,19 @@ private:
 		g->AttachControl(mFileList);
 	}
 
+	void OpenSessionList(IGraphics* g) {
+		if (mFileList) {
+			return;
+		}
+		mFileList = new FileListControl(g->GetBounds(), mHost.SessionsDirUI(),
+		                                [this, g](const std::string& path) {
+			                                mHost.LoadSessionUI(path);
+			                                CloseFileList(g);
+		                                },
+		                                [this, g] { CloseFileList(g); }, ".json", "Sessions");
+		g->AttachControl(mFileList);
+	}
+
 	void CloseFileList(IGraphics* g) {
 		if (mFileList) {
 			g->RemoveControl(mFileList);
@@ -741,6 +768,8 @@ private:
 	FrogVersionReadout* mVersion = nullptr;
 	FileListControl* mFileList = nullptr;
 	DragControl* mExportBtn = nullptr;
+	DragControl* mSessionsBtn = nullptr;
+	std::string mSessionShown;
 	DragControl* mRec = nullptr;
 	std::string mExportStatus;
 	DragControl *mPerformBtn = nullptr, *mFileChip = nullptr, *mBeats = nullptr, *mStep = nullptr, *mPitch = nullptr, *mLoop = nullptr;

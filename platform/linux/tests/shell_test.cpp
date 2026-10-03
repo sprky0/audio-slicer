@@ -237,6 +237,26 @@ int main() {
 		}
 	}
 
+	std::printf("=== sessions as presets ===\n");
+	check(!b.proc.stepPreset(1), "no sessions yet: stepPreset says so");
+	check(b.plug.SaveSession("alpha") && b.plug.SaveSession("beta"), "two sessions saved");
+	check(b.proc.currentPreset().name == "beta" && b.proc.currentPreset().program == 1, "the saved one is current", b.proc.currentPreset().name);
+	check(b.proc.stepPreset(-1), "previous");
+	b.proc.idle();
+	check(b.proc.currentPreset().name == "alpha" && b.proc.currentPreset().program == 0, "alpha loaded on the idle tick", b.proc.currentPreset().name);
+	check(b.proc.stepPreset(-1), "wraps");
+	b.proc.idle();
+	check(b.proc.currentPreset().name == "beta", "back to beta", b.proc.currentPreset().name);
+	{
+		const unsigned char pc[2] = {0xC0, 0};
+		b.proc.midi(pc, 2, 0);
+	}
+	b.blocks(1);
+	check(b.proc.currentPreset().name == "beta", "a Program Change waits for the idle tick");
+	b.proc.idle();
+	check(b.proc.currentPreset().name == "alpha", "then loads program 0", b.proc.currentPreset().name);
+	check(fg_engine_pattern(b.plug.Engine(), 0)->tiles[1].muted, "the restored pattern came with it");
+
 	std::printf("%s\n", gFail == 0 ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED");
 	return gFail == 0 ? 0 : 1;
 }

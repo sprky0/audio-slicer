@@ -6,7 +6,9 @@
 #include "engine/sample.h"
 #include "engine/session.h"
 
+#include <algorithm>
 #include <ctime>
+#include <dirent.h>
 #include <sys/stat.h>
 
 #include <cmath>
@@ -191,6 +193,105 @@ bool Frog::DuplicateTrack(int from) {
 		OnParamChange(TrackParam(t, (ETrackParam)w));
 	}
 	return true;
+}
+
+// --- sessions ------------------------------------------------------------
+
+std::string Frog::SessionsDir() const {
+	if (const char* rf = getenv("RF_DATA_DIR")) {
+		return std::string(rf) + "/sessions";
+	}
+	WDL_String dir;
+	AppSupportPath(dir, false);
+	dir.Append("/Frog/sessions");
+	return dir.Get();
+}
+
+void Frog::ScanSessions() {
+	mSessions.clear();
+	if (DIR* d = opendir(SessionsDir().c_str())) {
+		while (const dirent* e = readdir(d)) {
+			const std::string n = e->d_name;
+			if (n.size() > 5 && n.compare(n.size() - 5, 5, ".json") == 0 && n[0] != '.') {
+				mSessions.push_back(n);
+			}
+		}
+		closedir(d);
+	}
+	std::sort(mSessions.begin(), mSessions.end());
+	mSessionIndex = -1;
+	for (size_t i = 0; i < mSessions.size(); i++) {
+		if (mSessions[i] == mSessionName + ".json") {
+			mSessionIndex = (int)i;
+		}
+	}
+}
+
+bool Frog::SaveSession(const std::string& name) {
+	const std::string dir = SessionsDir();
+	EnsureDir(dir);
+	std::string n = name;
+	if (n.empty()) {
+		char stamp[32];
+		const time_t now = time(nullptr);
+		strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", localtime(&now));
+		n = std::string("session-") + stamp;
+	}
+	fg_session* s = (fg_session*)calloc(1, sizeof(fg_session));
+	SnapshotSession(*s);
+	const bool ok = fg_session_save_file((dir + "/" + n + ".json").c_str(), s);
+	free(s);
+	if (ok) {
+		mSessionName = n;
+		ScanSessions();
+	}
+	return ok;
+}
+
+void Frog::RequestLoadSession(const std::string& path) {
+	mPendingSession = path;
+}
+
+bool Frog::StepPreset(int delta) {
+	ScanSessions();
+	if (mSessions.empty()) {
+		return false;
+	}
+	const int n = (int)mSessions.size();
+	int idx = mSessionIndex < 0 ? (delta > 0 ? -1 : 0) : mSessionIndex;
+	idx = ((idx + delta) % n + n) % n;
+	mPendingProgram.store(idx);
+	return true;
+}
+
+void Frog::ServiceSession() {
+	const int prog = mPendingProgram.exchange(-1);
+	if (prog >= 0) {
+		if (mSessions.empty()) {
+			ScanSessions();
+		}
+		if (prog < (int)mSessions.size()) {
+			mPendingSession = SessionsDir() + "/" + mSessions[(size_t)prog];
+		}
+	}
+	if (mPendingSession.empty()) {
+		return;
+	}
+	const std::string path = mPendingSession;
+	mPendingSession.clear();
+	fg_session* s = (fg_session*)calloc(1, sizeof(fg_session));
+	if (fg_session_load_file(path.c_str(), s)) {
+		ApplySession(*s);
+		OnParamReset(kPresetRecall);
+		const size_t slash = path.rfind('/');
+		std::string n = slash == std::string::npos ? path : path.substr(slash + 1);
+		if (n.size() > 5) {
+			n = n.substr(0, n.size() - 5);
+		}
+		mSessionName = n;
+		ScanSessions();
+	}
+	free(s);
 }
 
 // --- record --------------------------------------------------------------
@@ -564,6 +665,8 @@ void Frog::ProcessMidiMsg(const IMidiMsg& msg) {
 	const int status = msg.mStatus;
 	if (status >= 0xF8) {
 		fg_engine_midi(mEngine, (uint8_t)status, msg.mOffset);
+	} else if ((status & 0xF0) == 0xC0) {
+		mPendingProgram.store(msg.mData1);   // a session, loaded on the idle tick
 	} else if (status >= 0x80 && status < 0xF0) {
 		fg_engine_midi_msg(mEngine, (uint8_t)status, (uint8_t)msg.mData1, (uint8_t)msg.mData2, msg.mOffset);
 	}
@@ -622,6 +725,7 @@ void Frog::OnIdle() {
 	ServiceRetired();
 	ServiceBounce();
 	ServiceRecord();
+	ServiceSession();
 	PollVisuals();
 	for (int t = 0; t < FG_MAX_TRACKS; t++) {
 		if (fg_engine_take_pattern_change(mEngine, t)) {

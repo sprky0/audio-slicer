@@ -20,8 +20,10 @@ public:
 	using OnPick = std::function<void(const std::string& path)>;
 	using OnClose = std::function<void()>;
 
-	FileListControl(const IRECT& b, const std::string& dir, OnPick onPick, OnClose onClose)
-	    : IControl(b), mDir(dir), mOnPick(std::move(onPick)), mOnClose(std::move(onClose)) {
+	// `exts` is a space-separated list of lower-case extensions (".wav .aif");
+	// `title` heads the card.
+	FileListControl(const IRECT& b, const std::string& dir, OnPick onPick, OnClose onClose, const char* exts = ".wav .wave .aif .aiff", const char* title = "Samples")
+	    : IControl(b), mDir(dir), mExts(exts), mTitle(title), mOnPick(std::move(onPick)), mOnClose(std::move(onClose)) {
 		mIgnoreMouse = false;
 		Scan();
 	}
@@ -37,7 +39,7 @@ public:
 				const size_t dot = name.rfind('.');
 				std::string ext = dot == std::string::npos ? "" : name.substr(dot);
 				std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-				if (ext == ".wav" || ext == ".wave" || ext == ".aif" || ext == ".aiff") {
+				if (!ext.empty() && (" " + mExts + " ").find(" " + ext + " ") != std::string::npos) {
 					mFiles.push_back(name);
 				}
 			}
@@ -86,10 +88,10 @@ public:
 		g.FillRoundRect(kPanel, card, 6.f);
 		g.DrawRoundRect(kLine, card, 6.f);
 		const IRECT title = card.GetFromTop(RowH());
-		g.DrawText(Text(15.f, kLabelText, EAlign::Near), ("Samples  " + mDir).c_str(), title.GetPadded(-12.f, 0.f, -12.f, 0.f));
+		g.DrawText(Text(15.f, kLabelText, EAlign::Near), (mTitle + "  " + mDir).c_str(), title.GetPadded(-12.f, 0.f, -12.f, 0.f));
 		const IRECT list = ListRect();
 		if (mFiles.empty()) {
-			g.DrawText(Text(14.f, kTextDim), "No .wav files here yet", list);
+			g.DrawText(Text(14.f, kTextDim), ("Nothing here yet (" + mExts + ")").c_str(), list);
 		} else {
 			g.PathClipRegion(list);
 			for (size_t i = 0; i < mFiles.size(); i++) {
@@ -115,6 +117,8 @@ private:
 	IRECT CloseRect() const { return Card().GetFromBottom(RowH()).GetPadded(-8.f, 0.f, -8.f, 0.f); }
 
 	std::string mDir;
+	std::string mExts;
+	std::string mTitle;
 	std::vector<std::string> mFiles;
 	OnPick mOnPick;
 	OnClose mOnClose;

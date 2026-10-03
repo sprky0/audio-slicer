@@ -89,6 +89,16 @@ public:
 	void StopRecord();
 	bool Recording() const;
 	double RecordSeconds() const;
+	// Sessions on disk (<data dir>/sessions/*.json) double as the appliance's
+	// presets: StepPreset / Program Change move through them, loads land on
+	// the idle tick. Save writes the current state under `name` (or a stamp).
+	std::string SessionsDir() const;
+	bool SaveSession(const std::string& name);          // "" → session-<stamp>
+	void RequestLoadSession(const std::string& path);   // loaded on the idle tick
+	bool StepPreset(int delta);
+	std::string GetCurrentPresetName() const { return mSessionName.empty() ? "unsaved" : mSessionName; }
+	int GetCurrentPresetBank() const { return 0; }
+	int GetCurrentPresetProgram() const { return mSessionIndex; }
 	bool Bounce();
 	bool Bouncing() const { return mBounceRunning.load(); }
 	const std::string& LastBounce() const { return mBounceResult; }   // path, or an error after "!"
@@ -100,6 +110,10 @@ public:
 	// frogui::Host
 	void Publish(int track) override { fg_engine_publish(mEngine, track); }
 	void StartBounce() override { Bounce(); }
+	void SaveSessionUI() override { SaveSession(mSessionName); }
+	void LoadSessionUI(const std::string& path) override { RequestLoadSession(path); }
+	std::string SessionsDirUI() const override { return SessionsDir(); }
+	const char* SessionName() const override { return mSessionName.c_str(); }
 	void ToggleRecord(int track) override;
 	bool IsRecording() const override { return Recording(); }
 	double RecordedSeconds() const override { return RecordSeconds(); }
@@ -153,6 +167,8 @@ private:
 	void PollVisuals();
 	void ServiceBounce();
 	void ServiceRecord();
+	void ServiceSession();
+	void ScanSessions();
 
 	fg_engine* mEngine = nullptr;
 	std::vector<PendingLoad> mPendingLoads;   // main thread only
@@ -163,6 +179,11 @@ private:
 	fg_edit_mode mEditMode = FG_EDIT_PACK;
 	int mNumTracks = 1;
 	double mSampleRate = 48000.;
+	std::vector<std::string> mSessions;   // file names in SessionsDir(), sorted
+	int mSessionIndex = -1;
+	std::string mSessionName;             // the loaded / saved session's name (no extension)
+	std::string mPendingSession;          // path queued for the idle tick
+	std::atomic<int> mPendingProgram{-1}; // from MIDI Program Change
 	std::thread mBounceThread;
 	std::atomic<bool> mBounceRunning{false};
 	std::atomic<int> mBounceDone{0};   // 1 ok, -1 failed, 0 none
