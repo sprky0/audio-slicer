@@ -1,7 +1,7 @@
 #define PLUG_NAME "Frog"
 #define PLUG_MFR "Rat Factory"
-#define PLUG_VERSION_HEX 0x00001203
-#define PLUG_VERSION_STR "0.18.3"
+#define PLUG_VERSION_HEX 0x00001204
+#define PLUG_VERSION_STR "0.18.4"
 // AU subtype is the product, manufacturer is the org: auval -v aumu Frog RatF.
 // Keep these lines free of trailing comments — prepare_resources-mac.py parses
 // config.h by hand and folds anything after the value into the plist string.
@@ -34,6 +34,11 @@
 #define PLUG_FPS 60
 #define PLUG_SHARED_RESOURCES 0
 #define PLUG_HOST_RESIZE 1
+// Free re-layout at any aspect, never smaller than the panel it was designed for.
+#define PLUG_MIN_WIDTH 1024
+#define PLUG_MIN_HEIGHT 600
+#define PLUG_MAX_WIDTH 8192
+#define PLUG_MAX_HEIGHT 8192
 
 #define AUV2_ENTRY Frog_Entry
 #define AUV2_ENTRY_STR "Frog_Entry"
