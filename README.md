@@ -1,9 +1,9 @@
-# Slicer — native port (branch `native`)
+# Frog — native port (branch `native`)
 
 This branch carries the native rewrite of the browser slicer / loop performer
 for the Rat Factory plugin family: a C11 engine wrapped in an iPlug2 (C++17)
 plugin, targeting the Mac (APP / VST3 / AU) and the Raspberry Pi appliance.
-Product name TBD.
+**Frog** (knitting: to rip back and rework) is the product name.
 
 - Plan and architecture: [docs/PORT_PLAN.md](docs/PORT_PLAN.md)
 - Feature tracking and version: [ROADMAP.md](ROADMAP.md)

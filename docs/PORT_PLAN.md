@@ -6,7 +6,7 @@ Raspberry Pi appliance. Written 2026-10-03 on the `native` branch. Tracking
 lives in [ROADMAP.md](../ROADMAP.md); this file holds the reasoning behind
 the F-items there and is updated when a decision changes.*
 
-Product name: **TBD** (placeholders below say "the slicer"). Owner: Rat Factory.
+Product: **Frog** (knitting: to rip back and rework; decided 2026-10-03). Owner: Rat Factory.
 
 ## 0. The shape in one paragraph
 
@@ -20,7 +20,7 @@ host transport, and an IGraphics (NanoVG) UI built from a handful of owned
 controls (waveform, tile row, modifier lane, the unified drag control,
 transport bar). On the Mac it builds as APP / VST3 / AU from the Rat Factory
 iPlug2 fork; on the appliance it builds exactly as Tink does: a static
-`<name>-appliance` binary on `libratfactory-linux-host` with the editor in a
+`frog-appliance` binary on `libratfactory-linux-host` with the editor in a
 runtime-loaded module. The browser version stays intact on the `js` branch
 and doubles as the golden reference for engine parity tests.
 
@@ -82,9 +82,9 @@ consequence for this project after each.
   out, no clock master, no host transport. → the slicer is a clock
   *follower* on the appliance and a *master* only via its own BPM.
 - **Static linking, one product per binary** (D16). `platform/linux/` with
-  `<name>_plugin` + `<name>-appliance`, `rflh::IPlug2HeadlessProcessor<T>`,
+  `frog_plugin` + `frog-appliance`, `rflh::IPlug2HeadlessProcessor<T>`,
   `HEADLESS_API IPLUG_DSP=1 SAMPLE_TYPE_DOUBLE -fsigned-char`. Editor is a
-  separate `lib<name>-editor.so` loaded after the first audio callback. →
+  separate `libfrog-editor.so` loaded after the first audio callback. →
   copy Tink's folder; no new host API needed for MVP.
 - **Display: 7" 1024 × 600 HDMI panel, single-contact evdev touch, DRM/KMS +
   GLES2 NanoVG via `IGraphicsKMS`.** A full-panel redraw on the Pi 3 is
@@ -97,7 +97,7 @@ consequence for this project after each.
   At 6.65 px/mm on the 7" panel that is 48–64 px. → control height 48 px
   minimum on the appliance.
 - **Storage**: read-only root + tmpfs overlay; the only writable tree is
-  `/data/ratfactory/<name>/` (`RF_DATA_DIR`), writes via
+  `/data/ratfactory/frog/` (`RF_DATA_DIR`), writes via
   `rflh::atomicWrite()`. **No convention yet for samples**; USB storage is
   planned (L25). → sessions as JSON in `RF_DATA_DIR`; samples under
   `RF_DATA_DIR/samples/`; a file-list control instead of an OS dialog.
@@ -243,9 +243,9 @@ C++17 because iPlug2 is.
 ### 3.6 Repo layout (target)
 
 ```
-<Name>/                     the plugin, like tink-vst/Tink/
+Frog/                       the plugin, like tink-vst/Tink/
   config.h                  PLUG_* — version source of truth (PLUG_VERSION_STR / _HEX)
-  <Name>.h/.cpp             iPlug2 plugin class: params, state, MIDI, OnIdle, layout
+  Frog.h/.cpp               iPlug2 plugin class: params, state, MIDI, OnIdle, layout
   engine/                   C11 engine (slicer.h, grid.c, pattern.c, edit.c, sequencer.c,
                             voice.c, wsola.c, envelope.c, midiclock.c, session.c, render.c)
   engine/tests/             *_test.c, "ALL CHECKS PASSED" convention, run-tests.sh
@@ -255,7 +255,7 @@ C++17 because iPlug2 is.
   tools/render/             CLI: session JSON + samples → WAV (parity + CPU ratio)
   projects/ config/ scripts/  Xcode / xcconfig / stamp-version.sh, as Tink
   CMakeLists.txt
-platform/linux/             <name>-plugin, <name>-appliance, systemd, iplug2-patches, scripts
+platform/linux/             frog-plugin, frog-appliance, systemd, iplug2-patches, scripts
 docs/                       PORT_PLAN.md (this), ARCHITECTURE.md (once code exists), evidence
 ROADMAP.md                  F-items; LINUX_ROADMAP.md is NOT duplicated here (it lives in
                             tink-vst / ratfactory-linux-host; cross-link L-items from F rows)
@@ -389,23 +389,30 @@ gain slices live, on the appliance and on the Mac.
 1. **Record needs the host.** `AudioOut` is playback-only; recording means
    a capture PCM (same device, full-duplex) and a `Processor::processIO`
    or input pointer. That is an L-item in ratfactory-linux-host, not
-   ours; develop the record path on the Mac (RtAudio has inputs) and land
-   the host side later. **Decision wanted:** is record important enough to
-   schedule the host work alongside M3, or does it stay after MVP?
+   ours. **Decided 2026-10-03: run it in parallel with the MVP.** The host
+   side is opened as an L-item in ratfactory-linux-host and F18 here links
+   to it; both rows carry the same status and are updated in the same
+   commit (the mirrored-sync rule). The Frog side (record into a track,
+   re-slice live) develops on the Mac first, where RtAudio has inputs, so
+   the two halves can land independently. Status of each half is reported
+   in the ROADMAP log whenever either moves.
 2. **WSOLA budget** is estimated, not measured (§3.2); F7.4 measures before
    M1 closes. Fallback: pre-render cache in a worker thread.
 3. **`double` vs float32 storage.** D15 says double end to end; storing
    samples as float32 halves memory and bandwidth on a 1 GB board while
-   keeping all math in double. Flagging as a deliberate family deviation
-   at the storage layer only.
+   keeping all math in double. **Accepted 2026-10-03** as a deviation at
+   the storage layer only: everything the family might share (grid math,
+   envelopes, the mix bus, parameter values, file formats) stays `double`
+   so results are comparable across members; only the decoded sample
+   arrays are float32.
 4. **MIDI jitter on the appliance.** Pulses are stamped on RtMidi's thread
    and mapped through the block clock; the JS PLL tolerated multi-ms
    jitter, so this should hold, but it is the first thing to verify with
    hardware (F9.4).
-5. **Name.** The family uses knitting terms (Tink, Weft, Purl, Warp, Wale,
-   Beam). Candidates that fit a slicer: **Steek** (stitches knitted to be
-   *cut open*), Snip, Shear, Frog (to rip back). Placeholder `<Name>` until
-   decided; renaming later touches `config.h`, targets and the unit name.
+5. **Name: Frog** (decided 2026-10-03; knitting: to rip back and rework).
+   Identifiers: `Frog` class / dir, `frog_plugin`, `frog-appliance`,
+   `libfrog-editor.so`, `frog-appliance.service`, `RF_DATA_DIR=/data/ratfactory/frog`,
+   `PLUG_UNIQUE_ID 'Frog'`, bundle `com.ratfactory.*.Frog`.
 6. **Multi-track UI on 600 px** (§4) is a proposal; it needs the device in
    hand before M5 commits to it.
 7. **Pi 4 / 5** are placeholders in the host; caps come from

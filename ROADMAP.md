@@ -1,4 +1,4 @@
-# Slicer (name TBD) — Roadmap & Progress Log
+# Frog — Roadmap & Progress Log
 
 Features are tracked with stable IDs (**F1**, **F2**, …). IDs only increment —
 they are never renumbered or reused, even if a feature is dropped (mark it
@@ -15,7 +15,7 @@ commit. Prefixes across roadmap files must not clash.
 **Version.** `MAJOR.MINOR.PATCH`: MINOR is the F-number of the current or
 most recent effort, PATCH increments per landed piece inside it. `config.h`
 (`PLUG_VERSION_STR` / `PLUG_VERSION_HEX`) is the source of truth once F2
-lands; until then the current version is recorded here: **0.1.0**. Tags are
+lands; until then the current version is recorded here: **0.1.1**. Tags are
 cut at milestones: `v<MAJOR>.<MINOR>-<milestone>`.
 
 **The browser version** is preserved on the `js` branch. `public/` remains
@@ -27,8 +27,8 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 
 | ID | Feature | Status |
 |----|---------|--------|
-| F1 | Plan — survey tink-vst / ratfactory-linux-host, inventory the JS app, write PORT_PLAN.md + this roadmap, split `js` / `native` branches | Done 0.1.0 |
-| F2 | Scaffold — iPlug2 fork submodule (`Rat-Factory/iPlug2` @ ratfactory-linux, same pin as tink-vst), `<Name>/config.h`, CMake + Xcode, empty plugin builds APP / VST3 / AU on the Mac, `.clang-format`, version stamp | Planned |
+| F1 | Plan — survey tink-vst / ratfactory-linux-host, inventory the JS app, write PORT_PLAN.md + this roadmap, split `js` / `native` branches, settle name / record / storage decisions | Done 0.1.0, 0.1.1 |
+| F2 | Scaffold — iPlug2 fork submodule (`Rat-Factory/iPlug2` @ ratfactory-linux, same pin as tink-vst), `Frog/config.h`, CMake + Xcode, empty plugin builds APP / VST3 / AU on the Mac, `.clang-format`, version stamp | Planned |
 | F3 | Appliance target — `platform/linux/` copied from tink-vst (plugin lib, appliance binary, systemd unit, docker build, deploy), boots on the Pi 3B with silence, `--render-wav` works (↔ L5, L15) | Planned |
 | F4 | Test harness — `engine/tests/run-tests.sh` (no framework, "ALL CHECKS PASSED"), `tools/render` CLI, fixtures dir, TSan race target | Planned |
 | F5 | Engine: model + grid — C11 `sl_pattern` (tiles, gaps, mods, caps), beat grid in samples (tempo re-anchor, sync phase, nudge), session JSON v1 = JS `version: 3` import / export | Planned |
@@ -44,7 +44,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F15 | Multi-track — up to `max_tracks` (4 on Pi 3), focus track + summary rows, add / duplicate / remove, in-phase join, master mix | Planned |
 | F16 | Performance MIDI — note-triggered slices, CC map (learn), program change = session, `appliance.conf` keys | Planned |
 | F17 | Bounce — offline render of the master mix to `RF_DATA_DIR/exports`, length in beats, normalise | Planned |
-| F18 | Record (stretch) — needs host capture (new L-item in ratfactory-linux-host); record into a track, re-slice live; developed on the Mac first | Planned |
+| F18 | Record — runs in parallel with the MVP (decided 2026-10-03). Two halves with one status: **host capture** (ALSA capture PCM + an input path on `Processor`), an L-item to open in ratfactory-linux-host and link here once numbered; **Frog side** (record into a track, re-slice live), developed on the Mac first. Both rows move together, same commit | Planned |
 | F19 | Transient markers — detection + draggable non-uniform slice points (needs the model change noted in the JS NEXT.md) | Planned |
 
 ### F1 — Plan
@@ -55,6 +55,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F1.2 | Inventory the JS app: data model, grid math, edit ops, scheduling policy, UI structure | Done |
 | F1.3 | Write docs/PORT_PLAN.md: architecture, stretch strategy, clock sources, caps, UI adaptation, milestones, tests, risks | Done |
 | F1.4 | Branches: `js` preserves the browser app at its last commit; `native` carries the port | Done |
+| F1.5 | Decisions (2026-10-03, **0.1.1**): name **Frog**; record (F18) runs in parallel with the MVP with both halves tracked in sync; float32 sample storage accepted, all shared math stays `double` | Done |
 
 ### F7 — Time-stretch + pitch
 
@@ -93,3 +94,9 @@ pre-render cache and record the measurement.
   format = the JS save object, single-touch UI adaptation for the 1024 × 600
   panel, milestones M0–M8 with gates. Branch `js` preserves the browser app;
   `native` carries the port. Version 0.1.0.
+- **F1.5 decisions (0.1.1).** The product is **Frog**. Record (F18) is
+  scheduled in parallel with the MVP: the host capture half becomes an
+  L-item in ratfactory-linux-host, the Frog half develops on the Mac first,
+  and the two rows carry one status updated in the same commit. Float32
+  sample storage is accepted with all shared math kept in `double` for
+  cross-family comparability.
