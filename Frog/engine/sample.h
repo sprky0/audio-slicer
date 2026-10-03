@@ -31,6 +31,8 @@ fg_sample* fg_sample_load_wav(const char* path, double targetRate, double maxSec
 
 /* Write 16-bit PCM WAV. */
 bool fg_sample_write_wav16(const char* path, const double* const* ch, int nCh, int64_t frames, double sampleRate);
+/* PCM at 16 or 24 bits (anything else → 16). */
+bool fg_sample_write_wav(const char* path, const double* const* ch, int nCh, int64_t frames, double sampleRate, int bits);
 
 /* Windowed-sinc resample of one channel (offline quality). Returns frames written. */
 int64_t fg_resample(const float* in, int64_t inFrames, double inRate, float* out, int64_t outCap, double outRate);

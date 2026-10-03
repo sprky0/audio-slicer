@@ -103,7 +103,7 @@ headless shell test and renders the editor offscreen as a check. See
   | | | 80 | track.focus | 78 | slice.curveOut |
 
   Also hookable, no default: `track.solo`, `transport.bpm`, `clock.source`, `export.open`,
-  `export.loops`, `export.tracks`, `export.normalize`, `export.go`,
+  `export.loops`, `export.tracks`, `export.normalize`, `export.depth`, `export.seed`, `export.go`,
   `export.cancel`, `session.save`, `record.toggle`, `track.load`, `track.beats`, `track.step`,
   `slice.all`, `slice.split`, `slice.merge`, `pattern.dupPrev`,
   `pattern.dupNext`, `pattern.refill`, `pattern.mode`, `view.trim`,
@@ -114,9 +114,10 @@ headless shell test and renders the editor offscreen as a check. See
   respond; slice and modifier hooks need the panel.
 - **Export**: the Export button opens a two-row panel: Length (1, 2, 4 or
   8 loops of the session's bar), Tracks (All = the mix, Focused = the
-  track in front alone, Stems = one WAV per track in use, levels kept) and
-  Normalize; Export now writes `exports/frog-<stamp>.wav` (or `-t<n>.wav`
-  per track) on a worker thread while playback continues.
+  track in front alone, Stems = one WAV per unmuted track, levels kept),
+  Normalize, 16 / 24-bit and Fixed seed (probability modifiers roll the
+  same way on every bounce); Export now writes `exports/frog-<stamp>.wav`
+  (or `-t<n>.wav` per track) on a worker thread while playback continues.
 - **Developer hooks**: `FROG_AUTOLOAD=<wav>` loads a file into track 1 at
   start (and skips the factory session), `FROG_AUTOPLAY=1` presses Play
   once it has loaded, `FROG_NO_FACTORY=1` boots blank.

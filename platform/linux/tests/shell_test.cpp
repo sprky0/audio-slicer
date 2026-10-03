@@ -296,8 +296,52 @@ int main() {
 		o.subset = Frog::kExportStems;
 		check(bounceAndWait(o), "stems", b.plug.LastBounce());
 		check(frames(b.plug.LastBounce() + "-t1.wav") == bar && frames(b.plug.LastBounce() + "-t2.wav") == bar, "one WAV per track, a bar each");
+		// a muted track is left out of the stems
+		b.plug.GetParam(TrackParam(1, kTrackMute))->Set(1.);
+		b.plug.OnParamChange(TrackParam(1, kTrackMute));
+		check(bounceAndWait(o), "stems with track 2 muted", b.plug.LastBounce());
+		{
+			// one stem left: the result is that file itself, named after its track
+			const std::string lb = b.plug.LastBounce();
+			const bool t1 = lb.size() > 7 && lb.substr(lb.size() - 7) == "-t1.wav";
+			check(t1 && frames(lb) == bar && frames(lb.substr(0, lb.size() - 7) + "-t2.wav") < 0, "only track 1 is written", lb);
+		}
+		b.plug.GetParam(TrackParam(1, kTrackMute))->Set(0.);
+		b.plug.OnParamChange(TrackParam(1, kTrackMute));
 		check(b.plug.RemoveTrack(), "back to one track");
 		b.proc.idle();
+		// 24-bit and a fixed seed: a probability modifier rolls the same way twice
+		o.subset = Frog::kExportAll;
+		o.bits = 24;
+		o.fixedSeed = true;
+		fg_pattern* pp = fg_engine_pattern(b.plug.Engine(), 0);
+		const int savedMods = pp->nMods;
+		pp->nMods = 1;
+		pp->mods[0] = (fg_mod){0, FG_MOD_RAND, FG_FIRE_PROB, 0, 50, 0, 1, 1, 0, 1, 0, 0};
+		fg_engine_publish(b.plug.Engine(), 0);
+		check(bounceAndWait(o), "24-bit bounce with a 50 % Rand modifier", b.plug.LastBounce());
+		const std::string first = b.plug.LastBounce();
+		usleep(1100000);   /* a fresh seed would differ by the clock; a fixed one must not */
+		check(bounceAndWait(o), "and again");
+		{
+			auto slurp = [](const std::string& path) {
+				std::string d;
+				if (FILE* f = std::fopen(path.c_str(), "rb")) {
+					char buf[8192];
+					size_t n;
+					while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) {
+						d.append(buf, n);
+					}
+					std::fclose(f);
+				}
+				return d;
+			};
+			const std::string A = slurp(first), B = slurp(b.plug.LastBounce());
+			check(!A.empty() && A == B, "the two fixed-seed bounces are byte-identical", std::to_string(A.size()));
+			check(A.size() > 44 && A[34] == 24, "24 bits per sample in the header");
+		}
+		pp->nMods = savedMods;
+		fg_engine_publish(b.plug.Engine(), 0);
 	}
 
 	std::printf("=== sessions as presets ===\n");

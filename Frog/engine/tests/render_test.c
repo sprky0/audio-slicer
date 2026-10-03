@@ -40,8 +40,25 @@ int main(void) {
 		}
 		CHECK(maxDiff < 1e-3);   /* both normalised to the same peak */
 	}
-	fg_sample_free(a);
 	fg_sample_free(b);
+	/* 24-bit: the same signal at finer steps */
+	o.beats = 0.0;
+	o.bits = 24;
+	fg_render_stats st24 = {0};
+	CHECK(fg_render_session(s, &o, "/tmp/frog-render-test-24.wav", &st24));
+	fg_sample* c = fg_sample_load_wav("/tmp/frog-render-test-24.wav", 0.0, 0.0);
+	CHECK(c && a && c->frames == a->frames);
+	if (c && a) {
+		double maxDiff = 0.0;
+		for (int64_t i = 0; i < a->frames; i++) {
+			const double d = fabs((double)c->ch[0][i] - (double)a->ch[0][i]);
+			maxDiff = d > maxDiff ? d : maxDiff;
+		}
+		CHECK(maxDiff < 2.0 / 32767.0);   /* within two 16-bit steps of the 16-bit file (its rounding and the /32768 read scale) */
+	}
+	fg_sample_free(c);
+	fg_sample_free(a);
+	remove("/tmp/frog-render-test-24.wav");
 	remove("/tmp/frog-render-test-1.wav");
 	remove("/tmp/frog-render-test-2.wav");
 	free(s);

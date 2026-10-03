@@ -53,6 +53,8 @@ public:
 	virtual int& ExportLoops() = 0;
 	virtual int& ExportSubset() = 0;
 	virtual bool& ExportNormalize() = 0;
+	virtual int& ExportBits() = 0;
+	virtual bool& ExportFixedSeed() = 0;
 	virtual void SaveSessionUI() = 0;
 	virtual void LoadSessionUI(const std::string& path) = 0;
 	virtual std::string SessionsDirUI() const = 0;
@@ -641,7 +643,10 @@ private:
 		hk("export.normalize", add(DragControl::Toggle(z, "Normalize", mHost.ExportNormalize(), Intent::Neutral, [this](double v) {
 			mHost.ExportNormalize() = v >= 0.5;
 		}), mExportRow1, 1.f));
-		mExportNote = drag(add(new DragControl(z, "", DragControl::Mode::Button, 0, 1, 1, NAN, Intent::Label), mExportRow1, 3.f));
+		hk("export.depth", add(DragControl::Enum(z, "", {"16-bit", "24-bit"}, mHost.ExportBits() == 24 ? 1 : 0, [this](double v) {
+			mHost.ExportBits() = v >= 0.5 ? 24 : 16;
+		}), mExportRow1, 1.f));
+		mExportNote = drag(add(new DragControl(z, "", DragControl::Mode::Button, 0, 1, 1, NAN, Intent::Label), mExportRow1, 2.f));
 		mExportNote->WithFormat([this](double) {
 			switch (mHost.ExportSubset()) {
 				case 1: return std::string("the focused track alone, to exports/");
@@ -653,7 +658,10 @@ private:
 			mHost.StartBounce();
 			ShowExportPanel(false);
 		}), mExportRow2, 2.f));
-		mExportStatusChip = drag(add(new DragControl(z, "", DragControl::Mode::Button, 0, 1, 1, NAN, Intent::Label), mExportRow2, 3.f));
+		hk("export.seed", add(DragControl::Toggle(z, "Fixed seed", mHost.ExportFixedSeed(), Intent::Neutral, [this](double v) {
+			mHost.ExportFixedSeed() = v >= 0.5;
+		}), mExportRow2, 1.5f));
+		mExportStatusChip = drag(add(new DragControl(z, "", DragControl::Mode::Button, 0, 1, 1, NAN, Intent::Label), mExportRow2, 2.f));
 		mExportStatusChip->WithFormat([this](double) { return std::string(mHost.BounceStatus()); });
 		hk("export.cancel", add(DragControl::Button(z, "Close", Intent::Neutral, [this](double) { ShowExportPanel(false); }), mExportRow2, 1.f));
 		ShowExportPanel(false);

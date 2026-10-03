@@ -586,8 +586,8 @@ bool Frog::Bounce(const ExportOpts& opts) {
 		solo.push_back(focus);
 	} else if (opts.subset == kExportStems) {
 		for (int t = 0; t < mNumTracks; t++) {
-			if (!mTrackPaths[t].empty()) {
-				solo.push_back(t);
+			if (!mTrackPaths[t].empty() && !GetParam(TrackParam(t, kTrackMute))->Bool()) {
+				solo.push_back(t);   /* muted tracks are left out, as the browser's export unchecked them */
 			}
 		}
 		if (solo.empty()) {
@@ -602,23 +602,34 @@ bool Frog::Bounce(const ExportOpts& opts) {
 	char stamp[32];
 	const time_t now = time(nullptr);
 	strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", localtime(&now));
-	const std::string prefix = exportsDir + "/frog-" + stamp;
+	std::string prefix = exportsDir + "/frog-" + stamp;
+	{
+		// two exports in one second: never overwrite the first
+		struct stat st;
+		const std::string base = prefix;
+		for (int k = 2; (stat((prefix + ".wav").c_str(), &st) == 0 || stat((prefix + "-t1.wav").c_str(), &st) == 0) && k < 100; k++) {
+			prefix = base + "-" + std::to_string(k);
+		}
+	}
 	mBouncePath = solo.size() == 1 ? prefix + "-t" + std::to_string(solo[0] + 1) + ".wav" : solo.empty() ? prefix + ".wav" : prefix;
 	const double sr = mSampleRate;
 	const double beats = std::max(1, opts.loops) * fg_render_loop_beats(s);
 	const bool normalize = opts.normalize && opts.subset != kExportStems;
+	const int bits = opts.bits == 24 ? 24 : 16;
+	const uint32_t seed = opts.fixedSeed ? 0xF406u : (uint32_t)time(nullptr);
 	mBounceSteps = std::max<int>(1, (int)solo.size());
 	mBounceStep.store(0);
 	mBounceRunning.store(true);
 	mBounceDone.store(0);
 	mBounceStatus = "Exporting";
-	mBounceThread = std::thread([this, s, solo, prefix, samplesDir, sr, beats, normalize] {
+	mBounceThread = std::thread([this, s, solo, prefix, samplesDir, sr, beats, normalize, bits, seed] {
 		fg_render_opts o = {0};
 		o.sampleRate = sr;
 		o.blockSize = 128;
 		o.beats = beats;
 		o.normalize = normalize;
-		o.seed = (uint32_t)time(nullptr);
+		o.bits = bits;
+		o.seed = seed;
 		o.samplesDir = samplesDir.c_str();
 		bool ok = true;
 		if (solo.empty()) {

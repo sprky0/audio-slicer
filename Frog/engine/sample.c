@@ -165,18 +165,24 @@ fg_sample* fg_sample_load_wav(const char* path, double targetRate, double maxSec
 }
 
 bool fg_sample_write_wav16(const char* path, const double* const* ch, int nCh, int64_t frames, double sampleRate) {
+	return fg_sample_write_wav(path, ch, nCh, frames, sampleRate, 16);
+}
+
+bool fg_sample_write_wav(const char* path, const double* const* ch, int nCh, int64_t frames, double sampleRate, int bits) {
+	bits = bits == 24 ? 24 : 16;
 	drwav_data_format fmt;
 	fmt.container = drwav_container_riff;
 	fmt.format = DR_WAVE_FORMAT_PCM;
 	fmt.channels = (drwav_uint32)nCh;
 	fmt.sampleRate = (drwav_uint32)sampleRate;
-	fmt.bitsPerSample = 16;
+	fmt.bitsPerSample = (drwav_uint32)bits;
 	drwav w;
 	if (!drwav_init_file_write(&w, path, &fmt, NULL)) {
 		return false;
 	}
 	const int64_t CHUNK = 4096;
-	drwav_int16* buf = (drwav_int16*)malloc((size_t)CHUNK * nCh * sizeof(drwav_int16));
+	const size_t bytesPerSample = (size_t)bits / 8;
+	unsigned char* buf = (unsigned char*)malloc((size_t)CHUNK * (size_t)nCh * bytesPerSample);
 	if (!buf) {
 		drwav_uninit(&w);
 		return false;
@@ -188,7 +194,17 @@ bool fg_sample_write_wav16(const char* path, const double* const* ch, int nCh, i
 			for (int c = 0; c < nCh; c++) {
 				double v = ch[c][at + i];
 				v = v > 1.0 ? 1.0 : (v < -1.0 ? -1.0 : v);
-				buf[i * nCh + c] = (drwav_int16)lrint(v * 32767.0);
+				unsigned char* o = buf + ((size_t)i * (size_t)nCh + (size_t)c) * bytesPerSample;
+				if (bits == 24) {
+					const int32_t q = (int32_t)lrint(v * 8388607.0);   /* little-endian, 3 bytes */
+					o[0] = (unsigned char)(q & 0xFF);
+					o[1] = (unsigned char)((q >> 8) & 0xFF);
+					o[2] = (unsigned char)((q >> 16) & 0xFF);
+				} else {
+					const int16_t q = (int16_t)lrint(v * 32767.0);
+					o[0] = (unsigned char)(q & 0xFF);
+					o[1] = (unsigned char)((q >> 8) & 0xFF);
+				}
 			}
 		}
 		ok = drwav_write_pcm_frames(&w, (drwav_uint64)n, buf) == (drwav_uint64)n;

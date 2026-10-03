@@ -112,7 +112,7 @@ bool fg_render_session(const fg_session* s, const fg_render_opts* o, const char*
 		stats->tracksWithAudio = withAudio;
 	}
 	const double* chans[2] = {L, R};
-	const bool ok = outPath ? fg_sample_write_wav16(outPath, chans, 2, frames, sr) : true;
+	const bool ok = outPath ? fg_sample_write_wav(outPath, chans, 2, frames, sr, o->bits) : true;
 
 	free(L);
 	free(R);

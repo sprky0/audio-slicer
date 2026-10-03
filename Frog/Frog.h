@@ -126,6 +126,8 @@ public:
 		int loops = 1;
 		int subset = kExportAll;
 		bool normalize = true;
+		int bits = 16;            // 16 or 24
+		bool fixedSeed = false;   // probability rolls from a fixed seed: the same bounce twice
 	};
 	ExportOpts& Export() { return mExportOpts; }
 	bool Bounce() { return Bounce(mExportOpts); }
@@ -162,6 +164,8 @@ public:
 	int& ExportLoops() override { return mExportOpts.loops; }
 	int& ExportSubset() override { return mExportOpts.subset; }
 	bool& ExportNormalize() override { return mExportOpts.normalize; }
+	int& ExportBits() override { return mExportOpts.bits; }
+	bool& ExportFixedSeed() override { return mExportOpts.fixedSeed; }
 	void SaveSessionUI() override { SaveSession(mSessionName); }
 	void LoadSessionUI(const std::string& path) override { RequestLoadSession(path); }
 	std::string SessionsDirUI() const override { return SessionsDir(); }

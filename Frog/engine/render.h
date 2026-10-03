@@ -18,6 +18,7 @@ typedef struct {
 	double seconds;       /* length; 0 = use beats */
 	double beats;         /* length in beats at the master tempo; 0 = LCM of the tracks' beat counts */
 	bool normalize;       /* peak to −0.1 dBFS as the browser export does */
+	int bits;             /* 16 (0) or 24 */
 	uint32_t seed;        /* probability rolls; 0 = 1 */
 	const char* samplesDir;   /* where track samplePath / fileName resolve; NULL = cwd */
 	double maxSampleSeconds;  /* per-track source cap; 0 = none */
