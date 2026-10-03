@@ -1,3 +1,19 @@
+# Slicer — native port (branch `native`)
+
+This branch carries the native rewrite of the browser slicer / loop performer
+for the Rat Factory plugin family: a C11 engine wrapped in an iPlug2 (C++17)
+plugin, targeting the Mac (APP / VST3 / AU) and the Raspberry Pi appliance.
+Product name TBD.
+
+- Plan and architecture: [docs/PORT_PLAN.md](docs/PORT_PLAN.md)
+- Feature tracking and version: [ROADMAP.md](ROADMAP.md)
+- The browser version is preserved intact on the `js` branch. `public/`
+  stays on this branch as the parity reference until the engine matches it.
+
+The original README follows.
+
+---
+
 # jsloop
 
 A browser-based audio slicer and step sequencer, built with vanilla JavaScript and the Web Audio API. No build step, no dependencies — just static files.

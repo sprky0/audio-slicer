@@ -1,0 +1,29 @@
+# Code style: tabs for indentation, spaces for alignment, OTBS braces. Applies to C and C++.
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++17
+
+# Tabs indent, spaces align
+UseTab: ForIndentation
+IndentWidth: 4
+TabWidth: 4
+ContinuationIndentWidth: 4
+AlignAfterOpenBracket: Align
+AccessModifierOffset: -4
+
+# OTBS: attach all braces, cuddle else/catch, brace every control statement
+BreakBeforeBraces: Attach
+InsertBraces: true
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortLambdasOnASingleLine: All
+
+# Keep churn low vs. upstream iPlug2 idiom
+ColumnLimit: 0
+PointerAlignment: Left
+SortIncludes: Never
+IndentCaseLabels: true
+NamespaceIndentation: None
+FixNamespaceComments: true
