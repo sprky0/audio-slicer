@@ -121,7 +121,9 @@ headless shell test and renders the editor offscreen as a check. See
   start (and skips the factory session), `FROG_AUTOPLAY=1` presses Play
   once it has loaded, `FROG_NO_FACTORY=1` boots blank.
 - **Offline**: `frog-render session.json out.wav [--beats N] [--rate HZ]`
-  bounces a session through the same engine.
+  bounces a session through the same engine; `frog-render --factory <data
+  dir>` writes the first-run clip and session into a data dir that already
+  had sessions when Frog first ran.
 
 ## Repository layout
 

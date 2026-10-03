@@ -2,11 +2,17 @@
  *
  *   frog-render SESSION.json [OUT.wav] [--seconds N | --beats N] [--rate HZ]
  *               [--block N] [--samples DIR] [--seed N] [--no-normalize]
+ *   frog-render --factory DATADIR
+ *
+ * --factory writes the first-run material the plugin would generate itself
+ * (DATADIR/samples/amen-variation.wav and DATADIR/sessions/factory.json), for
+ * a data dir that already had sessions when Frog first ran.
  *
  * Without OUT.wav it loads the session, renders in memory and prints the
  * summary and levels. Sample files resolve relative to --samples (default:
  * the session file's directory).
  */
+#include "factory.h"
 #include "pattern.h"
 #include "render.h"
 #include "session.h"
@@ -16,9 +22,37 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
 
 static void usage(void) {
-	fprintf(stderr, "usage: frog-render SESSION.json [OUT.wav] [--seconds N | --beats N] [--rate HZ] [--block N] [--samples DIR] [--seed N] [--no-normalize]\n");
+	fprintf(stderr, "usage: frog-render SESSION.json [OUT.wav] [--seconds N | --beats N] [--rate HZ] [--block N] [--samples DIR] [--seed N] [--no-normalize]\n"
+	                "       frog-render --factory DATADIR\n");
+}
+
+static int factory(const char* dataDir) {
+	char path[FG_PATH_MAX];
+	snprintf(path, sizeof path, "%s/samples", dataDir);
+	mkdir(dataDir, 0755);
+	mkdir(path, 0755);
+	snprintf(path, sizeof path, "%s/sessions", dataDir);
+	mkdir(path, 0755);
+	snprintf(path, sizeof path, "%s/samples/amen-variation.wav", dataDir);
+	if (!fg_factory_write_clip(path)) {
+		fprintf(stderr, "frog-render: cannot write %s\n", path);
+		return 1;
+	}
+	printf("wrote %s\n", path);
+	fg_session* s = (fg_session*)calloc(1, sizeof(fg_session));
+	fg_factory_session(s, "amen-variation.wav", "amen-variation.wav");
+	snprintf(path, sizeof path, "%s/sessions/factory.json", dataDir);
+	const bool ok = fg_session_save_file(path, s);
+	free(s);
+	if (!ok) {
+		fprintf(stderr, "frog-render: cannot write %s\n", path);
+		return 1;
+	}
+	printf("wrote %s\n", path);
+	return 0;
 }
 
 static double db(double v) {
@@ -32,6 +66,9 @@ int main(int argc, char** argv) {
 	o.normalize = true;
 	o.seed = 1;
 
+	if (argc == 3 && strcmp(argv[1], "--factory") == 0) {
+		return factory(argv[2]);
+	}
 	for (int i = 1; i < argc; i++) {
 		const char* a = argv[i];
 		if (strcmp(a, "--seconds") == 0 && i + 1 < argc) {

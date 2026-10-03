@@ -289,6 +289,10 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **0.18.9 — `frog-render --factory DATADIR`.** The first-run install only
+  fires on an empty `sessions/`; a rig that saved a session before 0.18.6
+  never gets the material. The render tool now writes it on demand (used on
+  the owner's Mac); Frog boots into `sessions/factory.json` from then on.
 - **0.18.8 — crash on tapping the build stamp.** `FrogVersionReadout`
   showed its full version through `ShowBubbleControl`, but no bubble control
   had been attached; the guard is an assert, compiled out in Release, so the
