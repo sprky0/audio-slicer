@@ -57,6 +57,17 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F1.4 | Branches: `js` preserves the browser app at its last commit; `native` carries the port | Done |
 | F1.5 | Decisions (2026-10-03, **0.1.1**): name **Frog**; record (F18) runs in parallel with the MVP with both halves tracked in sync; float32 sample storage accepted, all shared math stays `double` | Done |
 
+### F18 — Record
+
+Two halves, one status. Neither moves without the other's row being updated
+in the same commit, and every status change gets a line in the Log.
+
+| ID | Subtask | Status |
+|----|---------|--------|
+| F18.1 | **Host capture — cross-repo action, pending.** Open an L-item in `ratfactory-linux-host/LINUX_ROADMAP.md` (mirrored into `tink-vst`): ALSA capture PCM on the same device as playback (full duplex, same period / rate), an input path on `rflh::Processor` (an `inputs` pointer on `process()` or a `processIO()` overload), `IPlug2HeadlessProcessor` forwarding, `--render-wav --input FILE` for offline checks. Once numbered, write its L-id into this row and F18's master row, and the F18 ids into that L-row. This repo is read-only on the host repo; the owner opens it | Planned — awaiting the L-item |
+| F18.2 | Frog side on the Mac first (RtAudio inputs): arm / record into a track's sample store, auto-region on stop, re-slice live; publish the new store by the F6 pointer swap so playback is never interrupted | Planned |
+| F18.3 | Join the halves on the appliance: record through the host capture path; 0 xruns over 10 min while recording and playing on the Pi 3B | Planned — after F18.1 |
+
 ### F7 — Time-stretch + pitch
 
 Streaming WSOLA inside the voice replaces the JS pre-render cache (reasoning
@@ -100,3 +111,7 @@ pre-render cache and record the measurement.
   and the two rows carry one status updated in the same commit. Float32
   sample storage is accepted with all shared math kept in `double` for
   cross-family comparability.
+- **F18 split into F18.1–F18.3.** F18.1 (host capture) is a pending
+  cross-repo action: the L-item in ratfactory-linux-host is to be opened by
+  the owner, then cross-linked here. Nothing on F18 proceeds on the
+  appliance until it exists; F18.2 can start on the Mac any time after F6.
