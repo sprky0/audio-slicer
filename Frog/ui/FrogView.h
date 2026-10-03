@@ -275,7 +275,8 @@ private:
 		mModLane->Bind(Pat(), [this] { Publish(); }, [this](int i) { ShowModPanel(i >= 0); });
 		g->AttachControl(mModLane);
 
-		// --- slice toolbar (row 1: the selected slice) ---------------------
+		// --- slice toolbar (row 1: the selected slice, or every slice with All) ---
+		mAll = drag(add(DragControl::Toggle(z, "All", false, Intent::Label, [this](double) { RefreshToolbar(); }), mToolbar1, 1.f));
 		mMute = drag(add(DragControl::Toggle(z, "Mute", false, Intent::Stop, [this](double v) { SetSel([&](fg_tile& t) { t.muted = v >= 0.5; }); }), mToolbar1, 1.f));
 		mLock = drag(add(DragControl::Toggle(z, "Lock", false, Intent::Neutral, [this](double v) { SetSel([&](fg_tile& t) { t.locked = v >= 0.5; }); }), mToolbar1, 1.f));
 		mRev = drag(add(DragControl::Toggle(z, "Rev", false, Intent::Neutral, [this](double v) { SetSel([&](fg_tile& t) { t.reversed = v >= 0.5; }); }), mToolbar1, 1.f));
@@ -311,11 +312,14 @@ private:
 		add(DragControl::Button(z, "Dup >", Intent::Neutral, [this](double) { Dup(+1); }), mToolbar2, 1.f);
 		add(DragControl::Button(z, "Refill", Intent::Neutral, [this](double) {
 			const int i = mTiles->Selected();
-			if (i >= 0 && fg_edit_refill(Pat(), i)) {
-				Publish();
-				mTiles->Refresh();
-				RefreshToolbar();
+			if (mAll->On()) {
+				fg_edit_refill_all(Pat());
+			} else if (i < 0 || !fg_edit_refill(Pat(), i)) {
+				return;
 			}
+			Publish();
+			mTiles->Refresh();
+			RefreshToolbar();
 		}), mToolbar2, 1.f);
 		add(DragControl::Button(z, "Randomize", Intent::Neutral, [this](double) {
 			if (fg_edit_randomize(Pat(), Pat()->randLevel / 100.0, &mRng)) {
@@ -343,6 +347,33 @@ private:
 			mHost.EditMode() = v >= 0.5 ? FG_EDIT_GAPS : FG_EDIT_PACK;
 			mTiles->Refresh();
 		}), mToolbar2, 1.f));
+		// zoom: Trim makes the selection the view; Full shows the whole sample again
+		add(DragControl::Button(z, "Trim", Intent::Neutral, [this](double) {
+			fg_pattern* p = Pat();
+			const double vs = p->virtualStart, vspan = p->virtualEnd - vs;
+			const double ns = vs + p->start * vspan, ne = vs + p->end * vspan;
+			if (ne - ns < 0.001) {
+				return;
+			}
+			p->virtualStart = ns;
+			p->virtualEnd = ne;
+			p->start = 0.0;
+			p->end = 1.0;
+			Publish();
+			mWaveform->SetDirty(false);
+			mTiles->Refresh();
+		}), mToolbar2, 1.f);
+		add(DragControl::Button(z, "Full", Intent::Neutral, [this](double) {
+			fg_pattern* p = Pat();
+			const double vs = p->virtualStart, vspan = p->virtualEnd - vs;
+			p->start = vs + p->start * vspan;   /* keep the audible region where it is */
+			p->end = vs + p->end * vspan;
+			p->virtualStart = 0.0;
+			p->virtualEnd = 1.0;
+			Publish();
+			mWaveform->SetDirty(false);
+			mTiles->Refresh();
+		}), mToolbar2, 1.f);
 
 		// --- modifier settings (shown in place of the toolbars while a chip is selected) ---
 		mModAction = drag(add(DragControl::Enum(z, "", {"Mute", "Rev", "Gain", "Rand", "Reset", "Ratchet"}, 0, [this](double v) { SetMod([&](fg_mod& m) { m.action = (uint8_t)v; }); }), mModRow1, 1.5f));
@@ -468,10 +499,23 @@ private:
 		}
 	}
 
-	// apply a setter to the selected clip, publish, redraw
+	// apply a setter to the selected clip (or, with All lit, to every clip),
+	// publish, redraw. Toggles follow fill-up semantics through the control's
+	// own value: the control shows "on" only when every clip is on, so a tap
+	// from a mixed state turns everything on, and from all-on everything off.
 	void SetSel(const std::function<void(fg_tile&)>& fn) {
-		const int i = mTiles->Selected();
 		fg_pattern* p = Pat();
+		if (mAll && mAll->On()) {
+			for (int k = 0; k < p->nTiles; k++) {
+				if (!p->tiles[k].gap) {
+					fn(p->tiles[k]);
+				}
+			}
+			Publish();
+			mTiles->Refresh();
+			return;
+		}
+		const int i = mTiles->Selected();
 		if (i < 0 || i >= p->nTiles || p->tiles[i].gap) {
 			return;
 		}
@@ -515,17 +559,43 @@ private:
 		RefreshToolbar();
 	}
 
-	// toolbar follows the selection
+	// toolbar follows the selection (or, with All, the whole row)
 	void RefreshToolbar() {
 		const int i = mTiles->Selected();
 		const fg_pattern* p = Pat();
-		const bool clip = i >= 0 && i < p->nTiles && !p->tiles[i].gap;
+		const bool all = mAll && mAll->On();
+		const bool clip = all ? p->nTiles > 0 : (i >= 0 && i < p->nTiles && !p->tiles[i].gap);
 		DragControl* sliceControls[] = {mMute, mLock, mRev, mGain, mFadeIn, mCurveIn, mFadeOut, mCurveOut, mOffset};
 		for (auto* c : sliceControls) {
 			c->WithEnabled(clip);
 			c->SetDirty(false);
 		}
+		if (all) {
+			mLock->WithEnabled(false);   /* Lock and Dup stay per slice */
+		}
 		if (!clip) {
+			return;
+		}
+		if (all) {
+			// the row's state: toggles read "on" only when every clip is on
+			bool allMuted = true, allRev = true;
+			for (int k = 0; k < p->nTiles; k++) {
+				if (p->tiles[k].gap) {
+					continue;
+				}
+				allMuted = allMuted && p->tiles[k].muted;
+				allRev = allRev && p->tiles[k].reversed;
+			}
+			mMute->SetLocalValue(allMuted);
+			mRev->SetLocalValue(allRev);
+			const int k = i >= 0 && i < p->nTiles ? i : 0;
+			const fg_tile& t = p->tiles[k];
+			mGain->SetLocalValue(t.gain * 100.);
+			mFadeIn->SetLocalValue(t.fadeIn * 100.);
+			mCurveIn->SetLocalValue(t.curveIn);
+			mFadeOut->SetLocalValue(t.fadeOut * 100.);
+			mCurveOut->SetLocalValue(t.curveOut);
+			mOffset->SetLocalValue(t.offset);
 			return;
 		}
 		const fg_tile& t = p->tiles[i];
@@ -575,6 +645,7 @@ private:
 	FrogVersionReadout* mVersion = nullptr;
 	FileListControl* mFileList = nullptr;
 	DragControl *mPerformBtn = nullptr, *mFileChip = nullptr, *mBeats = nullptr, *mStep = nullptr, *mPitch = nullptr, *mLoop = nullptr;
+	DragControl* mAll = nullptr;
 	DragControl *mMute = nullptr, *mLock = nullptr, *mRev = nullptr, *mGain = nullptr, *mFadeIn = nullptr, *mCurveIn = nullptr, *mFadeOut = nullptr, *mCurveOut = nullptr, *mOffset = nullptr;
 	DragControl *mAmt = nullptr, *mModeBtn = nullptr;
 };

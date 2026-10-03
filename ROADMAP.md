@@ -46,7 +46,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F11 | MVP release — one track end-to-end on the Mac (appliance: in the container; on the board pending), docs/ARCHITECTURE.md, README, tag `v0.11-mvp` | Done 0.11.0 (on-device gate open, with F3.6) |
 | F12 | Live-performance pass — critique the UI with the device in hand: permanent big actions, pad / trigger mode, what moves to MIDI | Planned |
 | F13 | Modifier lane — one modifier per step, prob / every-N, mute / rev / gain actions, rand / reset pattern actions via `beforeTile`, pinned settings panel, chip flash / firing / superseded visuals | Done 0.13.0 |
-| F14 | Ratchet + pattern tools — even / ramp / pitch hit layouts, span absorption, randomize with lock buckets, Reset Order / Reset All, lock, dup, refill, split / merge, Packed vs Gaps (rasterize → rebuild), grid-change inheritance | Planned |
+| F14 | Ratchet + pattern tools — even / ramp / pitch hit layouts, span absorption, randomize with lock buckets, Reset Order / Reset All, lock, dup, refill, split / merge, Packed vs Gaps (rasterize → rebuild), grid-change inheritance, the All broadcast, zoom (Trim / Full) | Done 0.14.0 |
 | F15 | Multi-track — up to `max_tracks` (4 on Pi 3), focus track + summary rows, add / duplicate / remove, in-phase join, master mix | Planned |
 | F16 | Performance MIDI — note-triggered slices, CC map (learn), program change = session, `appliance.conf` keys | Planned |
 | F17 | Bounce — offline render of the master mix to `RF_DATA_DIR/exports`, length in beats, normalise | Planned |
@@ -62,6 +62,18 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F1.3 | Write docs/PORT_PLAN.md: architecture, stretch strategy, clock sources, caps, UI adaptation, milestones, tests, risks | Done |
 | F1.4 | Branches: `js` preserves the browser app at its last commit; `native` carries the port | Done |
 | F1.5 | Decisions (2026-10-03, **0.1.1**): name **Frog**; record (F18) runs in parallel with the MVP with both halves tracked in sync; float32 sample storage accepted, all shared math stays `double` | Done |
+
+### F14 — Ratchet + pattern tools
+
+Most of this list landed inside earlier efforts: hit layouts and span
+absorption (F6), randomize / reset / lock / dup / refill / split / merge /
+gaps raster / grid-change inheritance (F10.9). What remained:
+
+| ID | Subtask | Status |
+|----|---------|--------|
+| F14.1 | **All** broadcast toggle in the slice toolbar: while lit, Mute / Rev / Gain / fades / curves / Pitch apply to every clip (toggles read "on" only when every clip is on, so a tap from a mixed state turns all on, from all-on all off); Refill with All refills every unlocked entry; Lock and Dup stay per slice | Done |
+| F14.2 | Zoom: **Trim** makes the selection the view (`virtualStart/End`, the selection becomes 0..1 of it), **Full** shows the whole sample again with the audible region kept; the waveform draws the virtual window and maps the playhead into it; tile waveforms already read through it | Done |
+| F14.3 | Per-slice pitch is the toolbar's Pitch control (the browser's mouse wheel) | Done |
 
 ### F13 — Modifier lane
 
@@ -241,6 +253,9 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F14 complete (0.14.0).** The All broadcast and the Trim / Full zoom
+  close the pattern-tool list; everything else in F14 had landed with F6
+  and F10. Next: F17 (bounce from the UI) and F15 (multi-track), then F16.
 - **F13 complete (0.13.0).** The modifier lane is in the panel with its
   settings replacing the toolbars while a chip is selected, and the live
   flash / firing / superseded states driven from the engine's rings.

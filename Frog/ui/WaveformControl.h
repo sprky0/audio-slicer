@@ -34,9 +34,16 @@ public:
 	void SetOnDrop(DropFn fn) { mOnDrop = std::move(fn); }
 	void SetEmptyText(const char* s) { mEmptyText = s; }
 
-	// playhead as a fraction of the sample (< 0 hides it); redraws only on a
-	// visible change
+	// playhead as a fraction of the whole sample (< 0 hides it), mapped into
+	// the view's virtual window; redraws only on a visible change
 	void SetPlayhead(double frac) {
+		if (frac >= 0.0 && mPattern) {
+			const double vs = mPattern->virtualStart, ve = mPattern->virtualEnd;
+			frac = ve > vs ? (frac - vs) / (ve - vs) : frac;
+			if (frac < 0.0 || frac > 1.0) {
+				frac = -1.0;
+			}
+		}
 		const float px = frac < 0.0 ? -1.f : std::round((float)frac * mRECT.W());
 		if (px != mPlayheadPx) {
 			mPlayheadPx = px;
@@ -95,12 +102,14 @@ public:
 		const int W = (int)r.W();
 		const float mid = r.MH();
 		const float half = r.H() * 0.5f - 2.f;
+		const double vs = mPattern ? mPattern->virtualStart : 0.0;
+		const double vspan = mPattern ? (mPattern->virtualEnd - vs) : 1.0;
 		for (int px = 0; px < W; px++) {
 			const double f0 = (double)px / W, f1 = (double)(px + 1) / W;
 			const bool inside = f1 > selS && f0 < selE;
 			for (int c = 0; c < mPeaks->nCh; c++) {
 				float lo, hi;
-				mPeaks->Range(c, f0, f1, lo, hi);
+				mPeaks->Range(c, vs + f0 * vspan, vs + f1 * vspan, lo, hi);
 				const float y0 = mid - hi * half, y1 = mid - lo * half;
 				const IColor col = inside ? (c == 0 ? kWave : kWaveDim) : kWaveDim;
 				g.DrawVerticalLine(col, r.L + px + 0.5f, std::min(y0, y1), std::max(y0, y1) + 1.f, c == 0 ? 0 : &BLEND_50, 1.f);
