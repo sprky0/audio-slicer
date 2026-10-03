@@ -1,7 +1,7 @@
 #define PLUG_NAME "Frog"
 #define PLUG_MFR "Rat Factory"
-#define PLUG_VERSION_HEX 0x00000500
-#define PLUG_VERSION_STR "0.5.0"
+#define PLUG_VERSION_HEX 0x00000600
+#define PLUG_VERSION_STR "0.6.0"
 // AU subtype is the product, manufacturer is the org: auval -v aumu Frog RatF.
 // Keep these lines free of trailing comments — prepare_resources-mac.py parses
 // config.h by hand and folds anything after the value into the plist string.

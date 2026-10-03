@@ -1,44 +1,53 @@
-/* frog-render — bounce a session offline.
+/* frog-render — bounce a session offline through the engine.
  *
- *   frog-render SESSION.json [OUT.wav] [--seconds N | --bars N] [--rate HZ]
- *               [--samples DIR] [--seed N]
+ *   frog-render SESSION.json [OUT.wav] [--seconds N | --beats N] [--rate HZ]
+ *               [--block N] [--samples DIR] [--seed N] [--no-normalize]
  *
- * Without OUT.wav it only loads the session and prints a summary, which is
- * what the F5 scaffold does; the render itself arrives with the engine (F6).
- * Sample files resolve relative to --samples (default: the session's dir).
+ * Without OUT.wav it loads the session, renders in memory and prints the
+ * summary and levels. Sample files resolve relative to --samples (default:
+ * the session file's directory).
  */
 #include "pattern.h"
+#include "render.h"
 #include "session.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static void usage(void) {
-	fprintf(stderr, "usage: frog-render SESSION.json [OUT.wav] [--seconds N | --bars N] [--rate HZ] [--samples DIR] [--seed N]\n");
+	fprintf(stderr, "usage: frog-render SESSION.json [OUT.wav] [--seconds N | --beats N] [--rate HZ] [--block N] [--samples DIR] [--seed N] [--no-normalize]\n");
+}
+
+static double db(double v) {
+	return v > 0.0 ? 20.0 * log10(v) : -200.0;
 }
 
 int main(int argc, char** argv) {
 	const char* sessionPath = NULL;
 	const char* outPath = NULL;
-	double seconds = 0.0;
-	int bars = 0;
-	double rate = 48000.0;
-	const char* samplesDir = NULL;
-	unsigned seed = 1;
+	fg_render_opts o = {0};
+	o.normalize = true;
+	o.seed = 1;
 
 	for (int i = 1; i < argc; i++) {
 		const char* a = argv[i];
 		if (strcmp(a, "--seconds") == 0 && i + 1 < argc) {
-			seconds = atof(argv[++i]);
-		} else if (strcmp(a, "--bars") == 0 && i + 1 < argc) {
-			bars = atoi(argv[++i]);
+			o.seconds = atof(argv[++i]);
+		} else if (strcmp(a, "--beats") == 0 && i + 1 < argc) {
+			o.beats = atof(argv[++i]);
 		} else if (strcmp(a, "--rate") == 0 && i + 1 < argc) {
-			rate = atof(argv[++i]);
+			o.sampleRate = atof(argv[++i]);
+		} else if (strcmp(a, "--block") == 0 && i + 1 < argc) {
+			o.blockSize = atoi(argv[++i]);
 		} else if (strcmp(a, "--samples") == 0 && i + 1 < argc) {
-			samplesDir = argv[++i];
+			o.samplesDir = argv[++i];
 		} else if (strcmp(a, "--seed") == 0 && i + 1 < argc) {
-			seed = (unsigned)strtoul(argv[++i], NULL, 10);
+			o.seed = (unsigned)strtoul(argv[++i], NULL, 10);
+		} else if (strcmp(a, "--no-normalize") == 0) {
+			o.normalize = false;
 		} else if (a[0] == '-') {
 			usage();
 			return 2;
@@ -62,6 +71,16 @@ int main(int argc, char** argv) {
 		free(s);
 		return 1;
 	}
+	char dir[FG_PATH_MAX];
+	if (!o.samplesDir) {
+		const char* slash = strrchr(sessionPath, '/');
+		if (slash) {
+			const size_t n = (size_t)(slash - sessionPath);
+			memcpy(dir, sessionPath, n < sizeof dir - 1 ? n : sizeof dir - 1);
+			dir[n < sizeof dir - 1 ? n : sizeof dir - 1] = 0;
+			o.samplesDir = dir;
+		}
+	}
 
 	printf("session: %s\n", sessionPath);
 	printf("master: %.3f bpm%s, edit mode %s, %d track(s)\n",
@@ -75,15 +94,23 @@ int main(int argc, char** argv) {
 		       p->nTiles, p->nMods, p->start, p->end, t->mix.volume, t->mix.pan,
 		       t->mix.muted ? " muted" : "", p->masterPitch);
 	}
-	(void)seconds;
-	(void)bars;
-	(void)rate;
-	(void)samplesDir;
-	(void)seed;
-	if (outPath) {
-		fprintf(stderr, "frog-render: rendering is not implemented yet (F6)\n");
+
+	fg_render_stats st = {0};
+	const clock_t c0 = clock();
+	const bool ok = fg_render_session(s, &o, outPath, &st);
+	const double wall = (double)(clock() - c0) / CLOCKS_PER_SEC;
+	if (!ok) {
+		fprintf(stderr, "frog-render: render failed\n");
 		free(s);
-		return 3;
+		return 1;
+	}
+	const double sr = o.sampleRate > 0.0 ? o.sampleRate : 48000.0;
+	const double secs = (double)st.frames / sr;
+	printf("render: %.2f s at %.0f Hz, block %d, %d track(s) with audio: cpu %.2f s (%.1fx realtime)\n",
+	       secs, sr, o.blockSize > 0 ? o.blockSize : 128, st.tracksWithAudio, wall, wall > 0.0 ? secs / wall : 0.0);
+	printf("levels: peak %.2f dBFS rms %.2f dBFS%s\n", db(st.peak), db(st.rms), o.normalize ? " (normalised to -0.09 dBFS on disk)" : "");
+	if (outPath) {
+		printf("wrote %s\n", outPath);
 	}
 	free(s);
 	return 0;

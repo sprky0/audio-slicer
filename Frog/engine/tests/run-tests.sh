@@ -40,8 +40,8 @@ build() { # name, extra flags...
 }
 run() { # name
 	[ -n "$BUILD_ONLY" ] && return 0
-	( cd engine/tests && "$OUT/$1" ) | tee "$OUT/$1.log" | tail -3
-	grep -q "ALL CHECKS PASSED" "$OUT/$1.log"
+	( cd engine/tests && "$OUT/$1" ) 2>&1 | tee "$OUT/$1.log" | tail -3
+	grep -q "ALL CHECKS PASSED" "$OUT/$1.log" && ! grep -q "ThreadSanitizer" "$OUT/$1.log"
 }
 test_one() { # name, extra flags...
 	name=$1; shift
