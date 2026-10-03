@@ -13,10 +13,10 @@ it; when such an item changes there, update the row here in the same
 commit. Prefixes across roadmap files must not clash.
 
 **Version.** `MAJOR.MINOR.PATCH`: MINOR is the F-number of the current or
-most recent effort, PATCH increments per landed piece inside it. `config.h`
-(`PLUG_VERSION_STR` / `PLUG_VERSION_HEX`) is the source of truth once F2
-lands; until then the current version is recorded here: **0.1.1**. Tags are
-cut at milestones: `v<MAJOR>.<MINOR>-<milestone>`.
+most recent effort, PATCH increments per landed piece inside it.
+`Frog/config.h` (`PLUG_VERSION_STR` / `PLUG_VERSION_HEX`) is the source of
+truth; `Frog/scripts/stamp-version.sh` turns it into the build stamp the UI
+shows. Tags are cut at milestones: `v<MAJOR>.<MINOR>-<milestone>`.
 
 **The browser version** is preserved on the `js` branch. `public/` remains
 on this branch as the parity reference until F8 closes, then is removed here.
@@ -28,7 +28,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | ID | Feature | Status |
 |----|---------|--------|
 | F1 | Plan — survey tink-vst / ratfactory-linux-host, inventory the JS app, write PORT_PLAN.md + this roadmap, split `js` / `native` branches, settle name / record / storage decisions | Done 0.1.0, 0.1.1 |
-| F2 | Scaffold — iPlug2 fork submodule (`Rat-Factory/iPlug2` @ ratfactory-linux, same pin as tink-vst), `Frog/config.h`, CMake + Xcode, empty plugin builds APP / VST3 / AU on the Mac, `.clang-format`, version stamp | Planned |
+| F2 | Scaffold — iPlug2 fork submodule (`Rat-Factory/iPlug2` @ ratfactory-linux, same pin as tink-vst), `Frog/config.h`, CMake + Xcode, empty plugin builds APP / VST3 / AU on the Mac, `.clang-format`, version stamp | Done 0.2.0 |
 | F3 | Appliance target — `platform/linux/` copied from tink-vst (plugin lib, appliance binary, systemd unit, docker build, deploy), boots on the Pi 3B with silence, `--render-wav` works (↔ L5, L15) | Planned |
 | F4 | Test harness — `engine/tests/run-tests.sh` (no framework, "ALL CHECKS PASSED"), `tools/render` CLI, fixtures dir, TSan race target | Planned |
 | F5 | Engine: model + grid — C11 `sl_pattern` (tiles, gaps, mods, caps), beat grid in samples (tempo re-anchor, sync phase, nudge), session JSON v1 = JS `version: 3` import / export | Planned |
@@ -67,6 +67,22 @@ in the same commit, and every status change gets a line in the Log.
 | F18.1 | **Host capture — cross-repo action, pending.** Open an L-item in `ratfactory-linux-host/LINUX_ROADMAP.md` (mirrored into `tink-vst`): ALSA capture PCM on the same device as playback (full duplex, same period / rate), an input path on `rflh::Processor` (an `inputs` pointer on `process()` or a `processIO()` overload), `IPlug2HeadlessProcessor` forwarding, `--render-wav --input FILE` for offline checks. Once numbered, write its L-id into this row and F18's master row, and the F18 ids into that L-row. This repo is read-only on the host repo; the owner opens it | Planned — awaiting the L-item |
 | F18.2 | Frog side on the Mac first (RtAudio inputs): arm / record into a track's sample store, auto-region on stop, re-slice live; publish the new store by the F6 pointer swap so playback is never interrupted | Planned |
 | F18.3 | Join the halves on the appliance: record through the host capture path; 0 xruns over 10 min while recording and playing on the Pi 3B | Planned — after F18.1 |
+
+### F2 — Scaffold
+
+Generated from the fork's `IPlugInstrument` template with `duplicate.py`,
+then cut down to the Tink shape (PORT_PLAN.md §3.6). The VST3 SDK is not
+part of the fork: run `iPlug2/Dependencies/IPlug/download-vst3-sdk.sh` once
+after cloning (it lands gitignored inside the submodule).
+
+| ID | Subtask | Status |
+|----|---------|--------|
+| F2.1 | Submodule `iPlug2` → `Rat-Factory/iPlug2` branch `ratfactory-linux`, pinned to `d1cd40c48` (tink-vst's pin) | Done |
+| F2.2 | `Frog/config.h`: Rat Factory identity (`'Frog'` / `'RatF'`, `com.ratfactory.*.Frog`), 0.2.0, 1024 × 600 with host resize, channel IO `0-2 2-2` (inputs reserved for F18), state chunks, no personal strings | Done |
+| F2.3 | `Frog.h/.cpp`: silent `ProcessBlock`, BPM + Master params, placeholder panel (wordmark + build stamp). Template DSP, RPP, VS solution and workspace files removed | Done |
+| F2.4 | Version stamp: `scripts/stamp-version.sh` → gitignored `version.h` (`FROG_*`), `ui/FrogVersion.h` readout with `__has_include` fallback; Run Script phase on all nine Xcode targets; `FrogVersionStamp` CMake target wired to every `Frog-<fmt>` target | Done |
+| F2.5 | Builds: `xcodebuild -target APP / VST3 / AU -configuration Release` all succeed; APP launches and quits cleanly; `auval -v aumu Frog RatF` → AU VALIDATION SUCCEEDED; `cmake -S Frog -B build` configures | Done |
+| F2.6 | Root `.gitignore` in Tink's shape (build dirs, stamp outputs, Linux cross-build output) | Done |
 
 ### F7 — Time-stretch + pitch
 
@@ -111,6 +127,11 @@ pre-render cache and record the measurement.
   and the two rows carry one status updated in the same commit. Float32
   sample storage is accepted with all shared math kept in `double` for
   cross-family comparability.
+- **F2 complete (0.2.0).** Frog scaffold on the Rat Factory iPlug2 fork:
+  config.h, silent plugin shell with a build-stamp panel, version stamp in
+  both build systems, root gitignore. APP / VST3 / AU build Release with
+  Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
+  once with the fork's `download-vst3-sdk.sh`.
 - **F18 split into F18.1–F18.3.** F18.1 (host capture) is a pending
   cross-repo action: the L-item in ratfactory-linux-host is to be opened by
   the owner, then cross-linked here. Nothing on F18 proceeds on the

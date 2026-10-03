@@ -1,1 +1,33 @@
+# macOS
 .DS_Store
+Icon?
+
+# Xcode
+xcuserdata/
+*.xcuserdata
+*.xcscheme
+*.xcschememanagement.plist
+build-*/
+
+# Visual Studio
+.vs/
+*.exe
+*.sdf
+*.opensdf
+*.suo
+*.ncb
+*.vcproj.*
+ipch/
+
+# Packaging
+*.zip
+*.pkg
+*.dmg
+
+# Build stamp — regenerated pre-build by Frog/scripts/stamp-version.sh,
+# never committed, so building does not dirty the tree
+Frog/version.h
+Frog/.buildnum
+
+# Linux appliance cross-build output (platform/linux/docker-build-arm64.sh)
+platform/linux/build-arm64/

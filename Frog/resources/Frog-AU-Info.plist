@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AudioComponents</key>
+	<array>
+		<dict>
+			<key>description</key>
+			<string>Frog</string>
+			<key>factoryFunction</key>
+			<string>Frog_Factory</string>
+			<key>manufacturer</key>
+			<string>RatF</string>
+			<key>name</key>
+			<string>Rat Factory: Frog</string>
+			<key>sandboxSafe</key>
+			<true/>
+			<key>subtype</key>
+			<string>Frog</string>
+			<key>type</key>
+			<string>aumu</string>
+			<key>version</key>
+			<integer>512</integer>
+		</dict>
+	</array>
+	<key>AudioUnit Version</key>
+	<string>0x00000200</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>Frog</string>
+	<key>CFBundleGetInfoString</key>
+	<string>Frog v0.2.0 Copyright 2026 Rat Factory</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.ratfactory.audiounit.Frog</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Frog</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.2.0</string>
+	<key>CFBundleSignature</key>
+	<string>Frog</string>
+	<key>CFBundleVersion</key>
+	<string>0.2.0</string>
+	<key>CSResourcesFileMapped</key>
+	<true/>
+	<key>LSMinimumSystemVersion</key>
+	<string>10.13.0</string>
+	<key>NSPrincipalClass</key>
+	<string>Frog_View</string>
+</dict>
+</plist>

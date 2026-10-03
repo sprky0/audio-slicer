@@ -1,0 +1,4 @@
+[submodule "iPlug2"]
+	path = iPlug2
+	url = https://github.com/Rat-Factory/iPlug2.git
+	branch = ratfactory-linux

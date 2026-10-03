@@ -10,6 +10,20 @@ plugin, targeting the Mac (APP / VST3 / AU) and the Raspberry Pi appliance.
 - The browser version is preserved intact on the `js` branch. `public/`
   stays on this branch as the parity reference until the engine matches it.
 
+## Building (Mac)
+
+```sh
+git submodule update --init                       # the Rat Factory iPlug2 fork
+iPlug2/Dependencies/IPlug/download-vst3-sdk.sh    # once; VST3 target only
+cd Frog
+xcodebuild -project projects/Frog-macOS.xcodeproj -target APP -configuration Release build
+```
+
+Targets: `APP` `VST3` `AU` (also `AUv3` `CLAP` `AAX`). Products install to
+`~/Applications/Frog.app` and the user plug-in folders. `cmake -S Frog -B
+build` configures the same plugin for CMake-driven builds. The Linux
+appliance target arrives with F3 under `platform/linux/`.
+
 The original README follows.
 
 ---
