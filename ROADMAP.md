@@ -21,6 +21,11 @@ shows. Tags are cut at milestones: `v<MAJOR>.<MINOR>-<milestone>`.
 **The browser version** is preserved on the `js` branch. `public/` remains
 on this branch as the parity reference until F8 closes, then is removed here.
 
+**Priority.** Plugin and standalone builds on the Mac, with proof of build
+at every step, come first; the appliance target is scaffolded early (F3) so
+nothing in the engine or UI drifts away from it, but its on-device gates
+are not blockers for the engine and UI work (F4–F11).
+
 Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 
 ## Features
@@ -28,8 +33,8 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | ID | Feature | Status |
 |----|---------|--------|
 | F1 | Plan — survey tink-vst / ratfactory-linux-host, inventory the JS app, write PORT_PLAN.md + this roadmap, split `js` / `native` branches, settle name / record / storage decisions | Done 0.1.0, 0.1.1 |
-| F2 | Scaffold — iPlug2 fork submodule (`Rat-Factory/iPlug2` @ ratfactory-linux, same pin as tink-vst), `Frog/config.h`, CMake + Xcode, empty plugin builds APP / VST3 / AU on the Mac, `.clang-format`, version stamp | Done 0.2.0 |
-| F3 | Appliance target — `platform/linux/` copied from tink-vst (plugin lib, appliance binary, systemd unit, docker build, deploy), boots on the Pi 3B with silence, `--render-wav` works (↔ L5, L15) | Planned |
+| F2 | Scaffold — iPlug2 fork submodule (`Rat-Factory/iPlug2` @ ratfactory-linux, same pin as tink-vst), `Frog/config.h`, CMake + Xcode, empty plugin builds APP / VST3 / AU on the Mac, `.clang-format`, version stamp | Done 0.2.0, 0.2.1 |
+| F3 | Appliance target scaffold — `platform/linux/` in tink-vst's shape (plugin lib, appliance binary, systemd unit, Docker arm64 build, deploy script); the arm64 cross-build must succeed from the Mac. On-device gates (boots on the Pi 3B with silence, `--render-wav`) are recorded when the board is at hand and do not block F4–F11 (↔ L5, L15) | Planned |
 | F4 | Test harness — `engine/tests/run-tests.sh` (no framework, "ALL CHECKS PASSED"), `tools/render` CLI, fixtures dir, TSan race target | Planned |
 | F5 | Engine: model + grid — C11 `sl_pattern` (tiles, gaps, mods, caps), beat grid in samples (tempo re-anchor, sync phase, nudge), session JSON v1 = JS `version: 3` import / export | Planned |
 | F6 | Engine: sequencer + voices — per-block absolute scheduling (skip-past, late-join offset), voice pool, raw / reversed region reader, envelopes (lin / exp / log / s, gain ceiling), declick, track vol / pan / mute, stereo mix | Planned |
@@ -83,6 +88,7 @@ after cloning (it lands gitignored inside the submodule).
 | F2.4 | Version stamp: `scripts/stamp-version.sh` → gitignored `version.h` (`FROG_*`), `ui/FrogVersion.h` readout with `__has_include` fallback; Run Script phase on all nine Xcode targets; `FrogVersionStamp` CMake target wired to every `Frog-<fmt>` target | Done |
 | F2.5 | Builds: `xcodebuild -target APP / VST3 / AU -configuration Release` all succeed; APP launches and quits cleanly; `auval -v aumu Frog RatF` → AU VALIDATION SUCCEEDED; `cmake -S Frog -B build` configures | Done |
 | F2.6 | Root `.gitignore` in Tink's shape (build dirs, stamp outputs, Linux cross-build output) | Done |
+| F2.7 | Brand assets stored (**0.2.1**): `resources/img/frog-wordmark.svg` — FROG set in Cheltenham Bold, baked to outlines (no font needed at render time), fill `#E0332E`; `resources/img/rat-factory.svg` — the family maker mark, unmodified from tink-vst. The Cheltenham Bold OTF itself is **not** committed: the supplied file is Bitstream's (`CheltenhamBT-Bold`, "Confidential" in its name table) from a free-font site, so its redistribution licence is unknown; the outlines are all the UI needs. Use in the panel is deferred to F10 | Done |
 
 ### F7 — Time-stretch + pitch
 
@@ -132,6 +138,11 @@ pre-render cache and record the measurement.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F2.7 brand assets (0.2.1).** FROG wordmark baked to SVG outlines from
+  Cheltenham Bold (red), plus the family maker mark; the font file stays out
+  of the repo pending its licence. Roadmap priority stated: Mac plugin /
+  standalone builds and proof of build first; the appliance target is
+  scaffolded early but its on-device gates do not block engine and UI work.
 - **F18 split into F18.1–F18.3.** F18.1 (host capture) is a pending
   cross-repo action: the L-item in ratfactory-linux-host is to be opened by
   the owner, then cross-linked here. Nothing on F18 proceeds on the
