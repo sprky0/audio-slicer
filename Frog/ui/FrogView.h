@@ -84,6 +84,11 @@ public:
 	// Called on every resize (the layout function re-runs) and on mode changes.
 	void Layout(IGraphics* g) {
 		const IRECT b = g->GetBounds();
+		// the panel background is a control at index 0 sized once at attach;
+		// Size-mode resizes re-run this layout, so cover the new bounds too
+		if (IControl* bg = g->GetBackgroundControl()) {
+			bg->SetTargetAndDrawRECTs(b);
+		}
 		const float u = Unit(b.W(), b.H());
 		const float ch = kControlU * u, gap = kGapU * u;
 		IRECT rest = b.GetPadded(-gap);

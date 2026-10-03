@@ -255,7 +255,7 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
 
 | ID | Subtask | Status |
 |----|---------|--------|
-| F10.1 | `ui/Style.h` tokens (unit = shorter side / 75 clamped 6–12 px, controls 6 u, intent colours, the 16 slice hues) and the band layout in `FrogView::Layout`: pinned transport / header / two toolbar rows / modifier lane, waveform and tiles share the rest (edit 3:2, perform 1:4), re-laid on resize and the Perform toggle. Rendered at 1024 × 600 and 1280 × 720 (`docs/F10_evidence/`) | Done |
+| F10.1 | `ui/Style.h` tokens (unit = shorter side / 75 clamped 6–12 px, controls 6 u, intent colours, the 16 slice hues) and the band layout in `FrogView::Layout`: pinned transport / header / two toolbar rows / modifier lane, waveform and tiles share the rest (edit 3:2, perform 1:4), re-laid on resize and the Perform toggle (the panel background too, 0.18.2). Rendered at 1024 × 600 and 1280 × 720 (`docs/F10_evidence/`) | Done |
 | F10.2 | `ui/DragControl.h`: value / enum / toggle / button modes, drag any direction (right or up increases, 150 px = full range, 20 px per step), tap to value or step, double-tap to the detent, wheel; param-linked or local; a formatter turns a button into a live chip | Done |
 | F10.3 | `ui/WaveformControl.h` over `ui/Peaks.h` (4096 min / max columns built at load): selection shade, green / red handles with finger-sized hit zones, unit grid, 2 px dirty-rect playhead; drop a file to load. Zoom / trim deferred to F14 with the virtual window | Done |
 | F10.4 | `ui/TileRowControl.h`: tiles proportional to `w` with the slice's own waveform (mirrored when reversed, muted dimmed, locked ringed), badges (unit, reverse, pitch, gain); tap selects, drag reorders (packed live reflow / gaps ghost + drop), edge drag on the selected tile resizes from a snapshot through `edit.h`, double-tap splits | Done |
@@ -287,6 +287,11 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **0.18.2 — F10.1 background on resize.** The panel background is an
+  `IPanelControl` sized once at attach; in Size mode the view's `Layout`
+  re-ran on every resize but never touched it, so a grown window showed the
+  dark block at the old size over the surface's uninitialised clear (pink).
+  `FrogView::Layout` now covers the new bounds with it first.
 - **F16.3 sessions as presets (0.18.1).** Save / Sessions in the transport
   bar; the appliance's preset buttons and Program Change move through the
   sessions folder with loads deferred to the idle tick.
