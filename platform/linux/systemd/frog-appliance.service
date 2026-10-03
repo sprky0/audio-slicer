@@ -1,0 +1,101 @@
+# frog-appliance.service — Frog as the Rat Factory Linux appliance
+# (ratfactory-linux-host docs/APPLIANCE_UNIT.md). Copied from
+# ratfactory-linux-host/systemd/ratfactory-linux-host.service per
+# docs/PORTING_A_PLUGIN.md §4: same user, capabilities, sandbox and device
+# policy; Description, ExecStart, RF_DATA_DIR and Conflicts= differ.
+#
+# Install target: /etc/systemd/system/frog-appliance.service
+#                 (platform/linux/deploy-to-pi.sh --service)
+# Deploy layout:  /opt/ratfactory/{bin/frog-appliance, lib/libfrog-editor.so,
+#                 bin/resources/, assets/}
+# Data root:      /data/ratfactory — the one writable path. Frog's state lives
+#                 in RF_DATA_DIR=/data/ratfactory/frog (sessions/, samples/,
+#                 appliance.conf).
+# Service user:   ratfactory
+#
+# One appliance unit is enabled at a time. Switch with
+# ratfactory-linux-host/scripts/pi-switch-unit.sh.
+
+[Unit]
+Description=Rat Factory Frog appliance
+After=sound.target
+Wants=sound.target
+# /data is its own partition. Order after the mount, do not require it: a
+# broken data partition still boots to sound.
+After=data.mount
+# Every appliance unit wants the same DAC: starting one stops the others.
+Conflicts=ratfactory-linux-host.service tink-appliance.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=ratfactory
+Group=ratfactory
+SupplementaryGroups=audio video input
+UMask=0027
+Environment=RF_DATA_DIR=/data/ratfactory/frog
+# Audio: the USB audio device when present, else the 3.5 mm jack, else HDMI.
+# MIDI: first non-loopback sequencer port, with hot-plug.
+# --status-interval 30: one `audio status:` line every 30 s so the 32 MB
+# journal holds several boots.
+ExecStart=/opt/ratfactory/bin/frog-appliance \
+    --asset-dir /opt/ratfactory/assets \
+    --audio-device usb-then-headphones-then-hdmi \
+    --period 128 \
+    --periods 2 \
+    --status-interval 30
+#
+# The panel: these one-shots put the foreground VT into KD_GRAPHICS before
+# the appliance draws and give it back on stop (`+` runs them as root outside
+# the sandbox, `-` keeps a failure from blocking the unit). Interrupt routing
+# in the same one-shots (ratfactory-linux-host docs/MULTICORE_AUDIO.md §10e).
+ExecStartPre=-+/opt/ratfactory/bin/frog-appliance --console-mode graphics --route-irqs auto
+ExecStopPost=-+/opt/ratfactory/bin/frog-appliance --route-irqs restore --console-mode text
+
+# --- realtime ----------------------------------------------------------
+AmbientCapabilities=CAP_SYS_NICE
+CapabilityBoundingSet=CAP_SYS_NICE
+LimitRTPRIO=95
+LimitRTTIME=infinity
+LimitMEMLOCK=64M
+NoNewPrivileges=yes
+
+# --- filesystem ----------------------------------------------------------
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/data/ratfactory
+PrivateTmp=yes
+ProtectProc=invisible
+
+# --- devices: ALSA (pcm, control, seq for MIDI), framebuffer, evdev, DRM --
+DevicePolicy=closed
+DeviceAllow=char-alsa rw
+DeviceAllow=char-fb rw
+DeviceAllow=char-input rw
+DeviceAllow=char-drm rw
+DeviceAllow=/dev/tty0 w
+
+# --- kernel / namespace surface ----------------------------------------
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=no
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX
+
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

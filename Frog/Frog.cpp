@@ -2,6 +2,7 @@
 #include "IPlug_include_in_plug_src.h"
 
 #if IPLUG_EDITOR
+#include "IControls.h"
 #include "ui/FrogVersion.h"
 #endif
 

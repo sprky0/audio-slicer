@@ -34,7 +34,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 |----|---------|--------|
 | F1 | Plan — survey tink-vst / ratfactory-linux-host, inventory the JS app, write PORT_PLAN.md + this roadmap, split `js` / `native` branches, settle name / record / storage decisions | Done 0.1.0, 0.1.1 |
 | F2 | Scaffold — iPlug2 fork submodule (`Rat-Factory/iPlug2` @ ratfactory-linux, same pin as tink-vst), `Frog/config.h`, CMake + Xcode, empty plugin builds APP / VST3 / AU on the Mac, `.clang-format`, version stamp | Done 0.2.0, 0.2.1 |
-| F3 | Appliance target scaffold — `platform/linux/` in tink-vst's shape (plugin lib, appliance binary, systemd unit, Docker arm64 build, deploy script); the arm64 cross-build must succeed from the Mac. On-device gates (boots on the Pi 3B with silence, `--render-wav`) are recorded when the board is at hand and do not block F4–F11 (↔ L5, L15) | Planned |
+| F3 | Appliance target scaffold — `platform/linux/` in tink-vst's shape (plugin lib, appliance binary, systemd unit, Docker arm64 build, deploy script); the arm64 cross-build must succeed from the Mac. On-device gates (boots on the Pi 3B with silence, `--render-wav`) are recorded when the board is at hand and do not block F4–F11 (↔ L5, L15) | Done 0.3.0 (cross-build); on-device gate open |
 | F4 | Test harness — `engine/tests/run-tests.sh` (no framework, "ALL CHECKS PASSED"), `tools/render` CLI, fixtures dir, TSan race target | Planned |
 | F5 | Engine: model + grid — C11 `sl_pattern` (tiles, gaps, mods, caps), beat grid in samples (tempo re-anchor, sync phase, nudge), session JSON v1 = JS `version: 3` import / export | Planned |
 | F6 | Engine: sequencer + voices — per-block absolute scheduling (skip-past, late-join offset), voice pool, raw / reversed region reader, envelopes (lin / exp / log / s, gain ceiling), declick, track vol / pan / mute, stereo mix | Planned |
@@ -90,6 +90,22 @@ after cloning (it lands gitignored inside the submodule).
 | F2.6 | Root `.gitignore` in Tink's shape (build dirs, stamp outputs, Linux cross-build output) | Done |
 | F2.7 | Brand assets stored (**0.2.1**): `resources/img/frog-wordmark.svg` — FROG set in Cheltenham Bold, baked to outlines (no font needed at render time), fill `#E0332E`; `resources/img/rat-factory.svg` — the family maker mark, unmodified from tink-vst. The Cheltenham Bold OTF itself is **not** committed: the supplied file is Bitstream's (`CheltenhamBT-Bold`, "Confidential" in its name table) from a free-font site, so its redistribution licence is unknown; the outlines are all the UI needs. Use in the panel is deferred to F10 | Done |
 
+### F3 — Appliance target scaffold
+
+`platform/linux/` is a copy-and-edit of tink-vst's folder (the host repo's
+`docs/PORTING_A_PLUGIN.md` says every port after the first two is). No
+`iplug2-patches/` copy here: the fork is the submodule, and tink-vst's patch
+README documents the series.
+
+| ID | Subtask | Status |
+|----|---------|--------|
+| F3.1 | `platform/linux/CMakeLists.txt` + `frog-plugin/` (`frog_plugin` editor-less on `HEADLESS_API`; `frog_plugin_ui` + `libfrog-editor.so` with IGraphicsKMS / NanoVG GLES2 behind `FROG_APPLIANCE_EDITOR`) + `frog-appliance/main.cpp` (`rflh::IPlug2HeadlessProcessor<Frog>`, `rflh::runAppliance()`, data dirs `sessions/` and `samples/` under `RF_DATA_DIR`) | Done |
+| F3.2 | `systemd/frog-appliance.service` from the host's template: `RF_DATA_DIR=/data/ratfactory/frog`, same sandbox and device policy, `Conflicts=` the other appliance units | Done |
+| F3.3 | `docker-build-arm64.sh` (host build image, cmake, `frog-appliance`, then `--render-wav` 2 s as proof of build) and `deploy-to-pi.sh` (Tink's, re-pathed) | Done |
+| F3.4 | Cross-build from the Mac: `frog-appliance` 1.5 MB arm64, `readelf -d` NEEDED = libasound, libstdc++, libm, libgcc_s, libc only; `libfrog-editor.so` carries libdrm / gbm / EGL / GLESv2 with `RPATH $ORIGIN`; resources copied beside the binary; render check writes 96000 silent frames | Done |
+| F3.5 | **Cross-repo action, pending:** `ratfactory-linux-host/scripts/pi-switch-unit.sh` lists the appliance units it will switch between (`APPLIANCE_UNITS`); `frog-appliance.service` must be added there before `deploy-to-pi.sh --service` can make Frog the boot unit. Owner edit in the host repo; link the L-item or commit here when done | Planned — awaiting the host edit |
+| F3.6 | On-device gate: deploy to the Pi 3B, boots to silence with 0 xruns, `--render-wav` on the board. Recorded when the board is at hand | Planned — needs the board |
+
 ### F7 — Time-stretch + pitch
 
 Streaming WSOLA inside the voice replaces the JS pre-render cache (reasoning
@@ -138,6 +154,12 @@ pre-render cache and record the measurement.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F3 scaffold complete (0.3.0).** `platform/linux/` in tink-vst's shape;
+  the arm64 cross-build runs from the Mac in the host repo's Docker image and
+  ends in a 2 s offline render. Binary links no GPU library; the editor is a
+  module. Two items stay open: the host's `pi-switch-unit.sh` must learn
+  `frog-appliance.service` (F3.5, owner edit), and the on-device gate (F3.6)
+  waits for the board.
 - **F2.7 brand assets (0.2.1).** FROG wordmark baked to SVG outlines from
   Cheltenham Bold (red), plus the family maker mark; the font file stays out
   of the repo pending its licence. Roadmap priority stated: Mac plugin /
