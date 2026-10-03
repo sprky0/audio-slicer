@@ -131,6 +131,68 @@ static void EnsureDir(const std::string& path) {
 	}
 }
 
+// --- tracks --------------------------------------------------------------
+
+bool Frog::AddTrack() {
+	if (mNumTracks >= FG_MAX_TRACKS) {
+		return false;
+	}
+	const int t = mNumTracks++;
+	fg_pattern* p = fg_engine_pattern(mEngine, t);
+	fg_pattern_init(p);
+	fg_pattern_default_tiles(p);
+	fg_engine_publish(mEngine, t);
+	mNextColor[t] = fg_unit_count(p);
+	return true;
+}
+
+bool Frog::RemoveTrack() {
+	if (mNumTracks <= 1) {
+		return false;
+	}
+	const int t = --mNumTracks;
+	fg_pattern* p = fg_engine_pattern(mEngine, t);
+	fg_pattern_init(p);
+	fg_pattern_default_tiles(p);
+	fg_engine_publish(mEngine, t);
+	if (fg_sample* old = fg_engine_set_sample(mEngine, t, nullptr)) {
+		mRetired.push_back({t, old});
+	}
+	mTrackNames[t].clear();
+	mTrackPaths[t].clear();
+#if IPLUG_EDITOR
+	mPeaks[t] = frogui::Peaks();
+#endif
+	GetParam(TrackParam(t, kTrackVolume))->Set(100.);
+	GetParam(TrackParam(t, kTrackPan))->Set(0.);
+	GetParam(TrackParam(t, kTrackMute))->Set(0.);
+	for (int w = 0; w < kNumTrackParams; w++) {
+		OnParamChange(TrackParam(t, (ETrackParam)w));
+	}
+	return true;
+}
+
+bool Frog::DuplicateTrack(int from) {
+	if (from < 0 || from >= mNumTracks || mNumTracks >= FG_MAX_TRACKS) {
+		return false;
+	}
+	const int t = mNumTracks++;
+	*fg_engine_pattern(mEngine, t) = *fg_engine_pattern(mEngine, from);
+	fg_engine_publish(mEngine, t);
+	mNextColor[t] = mNextColor[from];
+	mTrackNames[t] = mTrackNames[from];
+	if (!mTrackPaths[from].empty()) {
+		RequestLoadSample(t, mTrackPaths[from]);
+	}
+	GetParam(TrackParam(t, kTrackVolume))->Set(GetParam(TrackParam(from, kTrackVolume))->Value());
+	GetParam(TrackParam(t, kTrackPan))->Set(GetParam(TrackParam(from, kTrackPan))->Value());
+	GetParam(TrackParam(t, kTrackMute))->Set(GetParam(TrackParam(from, kTrackMute))->Value());
+	for (int w = 0; w < kNumTrackParams; w++) {
+		OnParamChange(TrackParam(t, (ETrackParam)w));
+	}
+	return true;
+}
+
 // --- bounce --------------------------------------------------------------
 
 bool Frog::Bounce() {
@@ -204,12 +266,12 @@ static std::string ResolvePath(const std::string& dir, const std::string& p) {
 
 void Frog::SnapshotSession(fg_session& out) const {
 	fg_session_init(&out);
-	out.nTracks = FG_MAX_TRACKS;
+	out.nTracks = mNumTracks;
 	out.masterBpm = GetParam(kParamBpm)->Value();
 	out.masterUserSet = true;
 	out.editMode = (uint8_t)mEditMode;
 	out.nextTrackId = FG_MAX_TRACKS;
-	for (int t = 0; t < FG_MAX_TRACKS; t++) {
+	for (int t = 0; t < mNumTracks; t++) {
 		fg_track_state& ts = out.tracks[t];
 		memset(&ts, 0, sizeof ts);
 		ts.id = t;
@@ -226,6 +288,7 @@ void Frog::SnapshotSession(fg_session& out) const {
 void Frog::ApplySession(const fg_session& s) {
 	const int n = s.nTracks < FG_MAX_TRACKS ? s.nTracks : FG_MAX_TRACKS;
 	mEditMode = (fg_edit_mode)s.editMode;
+	mNumTracks = n > 0 ? n : 1;
 	for (int t = 0; t < n; t++) {
 		const fg_track_state& ts = s.tracks[t];
 		*fg_engine_pattern(mEngine, t) = ts.pattern;

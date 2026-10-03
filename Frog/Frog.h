@@ -77,6 +77,11 @@ public:
 	int PendingLoadCount() const { return (int)mPendingLoads.size(); }
 	// Bounce the session to <data dir>/exports/frog-<stamp>.wav on a worker
 	// thread (its own engine, samples reloaded from their paths). One at a time.
+	// tracks in use (1..FG_MAX_TRACKS); the engine always runs FG_MAX_TRACKS
+	int NumTracks() const { return mNumTracks; }
+	bool AddTrack();
+	bool RemoveTrack();              // the last one: pattern reset, sample unloaded
+	bool DuplicateTrack(int from);   // appended; pattern copied, sample reloaded by path
 	bool Bounce();
 	bool Bouncing() const { return mBounceRunning.load(); }
 	const std::string& LastBounce() const { return mBounceResult; }   // path, or an error after "!"
@@ -88,6 +93,13 @@ public:
 	// frogui::Host
 	void Publish(int track) override { fg_engine_publish(mEngine, track); }
 	void StartBounce() override { Bounce(); }
+	int TrackCount() const override { return mNumTracks; }
+	int& TrackCountRef() override { return mNumTracks; }
+	bool AddTrackUI() override { return AddTrack(); }
+	bool RemoveTrackUI() override { return RemoveTrack(); }
+	bool DuplicateTrackUI(int from) override { return DuplicateTrack(from); }
+	bool TrackHasSample(int track) const override { return fg_engine_has_sample(mEngine, track); }
+	bool TrackMuted(int track) const override { return GetParam(TrackParam(track, kTrackMute))->Bool(); }
 	const char* BounceStatus() const override;
 	const frogui::Peaks& TrackPeaks(int track) const override { return mPeaks[track]; }
 	void LoadSample(int track, const std::string& path) override { RequestLoadSample(track, path); }
@@ -138,6 +150,7 @@ private:
 	std::string mTrackPaths[FG_MAX_TRACKS];   // as stored in the session
 	int mNextColor[FG_MAX_TRACKS] = {0};
 	fg_edit_mode mEditMode = FG_EDIT_PACK;
+	int mNumTracks = 1;
 	double mSampleRate = 48000.;
 	std::thread mBounceThread;
 	std::atomic<bool> mBounceRunning{false};

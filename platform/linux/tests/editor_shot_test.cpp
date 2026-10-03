@@ -14,6 +14,7 @@
 #include "ui/DragControl.h"
 #include "ui/ModLaneControl.h"
 #include "ui/TileRowControl.h"
+#include "ui/TrackStripControl.h"
 
 #include "EditorModule.h"
 #include "iplug2/IGraphicsKMSEditorModule.h"
@@ -190,6 +191,24 @@ int main(int argc, char** argv) {
 		proc.editorTurn();
 		if (!shots.empty()) {
 			check(proc.editorScreenshot(shots + "/mods.png"), "mods.png written");
+		}
+	}
+	// a second track: duplicate the first, which copies the pattern and reloads the sample
+	if (ui) {
+		check(plug.DuplicateTrack(0), "DuplicateTrack(0)");
+		proc.idle();
+		check(plug.NumTracks() == 2 && fg_engine_has_sample(plug.Engine(), 1), "two tracks, the copy has its sample");
+		for (int i = 0; i < ui->NControls(); ++i) {
+			if (auto* strip = dynamic_cast<frogui::TrackStripControl*>(ui->GetControl(i))) {
+				const IRECT sr = strip->GetRECT();
+				tap(*ui, sr.L + sr.W() * 0.5f, sr.MH());   /* the second tab */
+				break;
+			}
+		}
+		proc.idle();
+		proc.editorTurn();
+		if (!shots.empty()) {
+			check(proc.editorScreenshot(shots + "/tracks.png"), "tracks.png written");
 		}
 	}
 	plug.StopAll();

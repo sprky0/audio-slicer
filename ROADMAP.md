@@ -13,7 +13,9 @@ it; when such an item changes there, update the row here in the same
 commit. Prefixes across roadmap files must not clash.
 
 **Version.** `MAJOR.MINOR.PATCH`: MINOR is the F-number of the current or
-most recent effort, PATCH increments per landed piece inside it.
+most recent effort, PATCH increments per landed piece inside it. Versions
+only go up: when a lower-numbered effort lands after a higher one has
+already set MINOR, it takes the next PATCH instead (0.17.1 = F15).
 `Frog/config.h` (`PLUG_VERSION_STR` / `PLUG_VERSION_HEX`) is the source of
 truth; `Frog/scripts/stamp-version.sh` turns it into the build stamp the UI
 shows. Tags are cut at milestones: `v<MAJOR>.<MINOR>-<milestone>`.
@@ -47,7 +49,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F12 | Live-performance pass — critique the UI with the device in hand: permanent big actions, pad / trigger mode, what moves to MIDI | Planned |
 | F13 | Modifier lane — one modifier per step, prob / every-N, mute / rev / gain actions, rand / reset pattern actions via `beforeTile`, pinned settings panel, chip flash / firing / superseded visuals | Done 0.13.0 |
 | F14 | Ratchet + pattern tools — even / ramp / pitch hit layouts, span absorption, randomize with lock buckets, Reset Order / Reset All, lock, dup, refill, split / merge, Packed vs Gaps (rasterize → rebuild), grid-change inheritance, the All broadcast, zoom (Trim / Full) | Done 0.14.0 |
-| F15 | Multi-track — up to `max_tracks` (4 on Pi 3), focus track + summary rows, add / duplicate / remove, in-phase join, master mix | Planned |
+| F15 | Multi-track — up to `FG_MAX_TRACKS`, a track tab strip with the focused track in the editor, add / duplicate / remove, in-phase join, master mix | Done 0.17.1 (`max_tracks` conf key open) |
 | F16 | Performance MIDI — note-triggered slices, CC map (learn), program change = session, `appliance.conf` keys | Planned |
 | F17 | Bounce — offline render of the master mix to `RF_DATA_DIR/exports`, one bar (LCM of the tracks' beats), normalised | Done 0.17.0 |
 | F18 | Record — runs in parallel with the MVP (decided 2026-10-03). Two halves with one status: **host capture** (ALSA capture PCM + an input path on `Processor`), an L-item to open in ratfactory-linux-host and link here once numbered; **Frog side** (record into a track, re-slice live), developed on the Mac first. Both rows move together, same commit | Planned |
@@ -62,6 +64,20 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F1.3 | Write docs/PORT_PLAN.md: architecture, stretch strategy, clock sources, caps, UI adaptation, milestones, tests, risks | Done |
 | F1.4 | Branches: `js` preserves the browser app at its last commit; `native` carries the port | Done |
 | F1.5 | Decisions (2026-10-03, **0.1.1**): name **Frog**; record (F18) runs in parallel with the MVP with both halves tracked in sync; float32 sample storage accepted, all shared math stays `double` | Done |
+
+### F15 — Multi-track
+
+PORT_PLAN.md §4 proposed stacked summary rows for the other tracks; one
+tab strip costs the same height for any track count and keeps the editor
+bands tall on 600 px, so that is what landed.
+
+| ID | Subtask | Status |
+|----|---------|--------|
+| F15.1 | `Frog`: tracks in use (`NumTracks`, 1..8) with `AddTrack` (fresh default row), `RemoveTrack` (last one: row reset, sample retired, mix parameters reset), `DuplicateTrack` (pattern copied, sample reloaded by path, mix copied); the session carries the count | Done |
+| F15.2 | `ui/TrackStripControl.h`: one tab per track (number, name, lit while it sounds, dimmed when muted, the focused one framed) plus + Track / Dup / − Track | Done |
+| F15.3 | Focus switching rebinds the editor bands: waveform, tile row, modifier lane, the param-linked Vol / Pan / Mute (`SetParamIdx`), header values; selection and modifier panel reset | Done |
+| F15.4 | `editor_shot_test`: duplicate track 1, tap the second tab, render (`docs/F15_evidence/`) | Done |
+| F15.5 | Appliance cap from `appliance.conf` (`max_tracks=`, 4 on the Pi 3) through the host's board-settings path; today the plugin allows all eight everywhere | Planned |
 
 ### F17 — Bounce
 
@@ -262,6 +278,9 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F15 multi-track (0.17.1).** Track tab strip with add / dup / remove and
+  focus switching that rebinds the editor bands; verified in the container
+  with a duplicated track. The Pi cap via `appliance.conf` stays open.
 - **F17 bounce (0.17.0).** Export from the transport bar renders the
   session off the UI thread into the data dir; the headless test exercises
   it on arm64. Length / subset choices stay open (F17.4).

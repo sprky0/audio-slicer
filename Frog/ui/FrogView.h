@@ -10,6 +10,7 @@
 #include "Peaks.h"
 #include "Style.h"
 #include "TileRowControl.h"
+#include "TrackStripControl.h"
 #include "WaveformControl.h"
 
 #include "engine/edit.h"
@@ -44,6 +45,13 @@ public:
 	virtual void StopAll() = 0;
 	virtual void StartBounce() = 0;
 	virtual const char* BounceStatus() const = 0;   // "Export", "Exporting", "Exported", ...
+	virtual int TrackCount() const = 0;
+	virtual int& TrackCountRef() = 0;
+	virtual bool AddTrackUI() = 0;
+	virtual bool RemoveTrackUI() = 0;
+	virtual bool DuplicateTrackUI(int from) = 0;
+	virtual bool TrackHasSample(int track) const = 0;
+	virtual bool TrackMuted(int track) const = 0;
 	virtual int& NextColor(int track) = 0;
 	virtual fg_edit_mode& EditMode() = 0;
 	// the latest sounding slot for the track, or nullptr
@@ -75,6 +83,8 @@ public:
 
 		const IRECT transport = rest.ReduceFromTop(ch);
 		rest.ReduceFromTop(gap);
+		const IRECT strip = rest.ReduceFromTop(5.f * u);
+		rest.ReduceFromTop(gap);
 		const IRECT header = rest.ReduceFromTop(ch);
 		rest.ReduceFromTop(gap);
 		const IRECT toolbar2 = rest.GetFromBottom(ch);
@@ -92,6 +102,7 @@ public:
 		const IRECT tiles = rest;
 
 		Row(transport, gap, mTransport);
+		mStrip->SetTargetAndDrawRECTs(strip);
 		Row(header, gap, mHeader);
 		mWaveform->SetTargetAndDrawRECTs(wave);
 		mTiles->SetTargetAndDrawRECTs(tiles);
@@ -112,6 +123,7 @@ public:
 			mExportStatus = mHost.BounceStatus();
 			mExportBtn->SetDirty(false);
 		}
+		mStrip->Refresh();
 		const fg_visual* v = mHost.CurrentNote(mTrack);
 		const int64_t now = fg_engine_now(mHost.Engine());
 		const double sr = 48000.0;   // flash timing only; a 180 ms window
@@ -170,6 +182,7 @@ public:
 
 	// A sample finished loading (main thread): point the controls at its peaks.
 	void SampleChanged(int track) {
+		mStrip->SetDirty(false);
 		if (track != mTrack) {
 			return;
 		}
@@ -257,13 +270,43 @@ private:
 			    Pat()->masterPitch = (int)std::lround(v);
 			    Publish();
 		    });
-		add(new DragControl(z, "Vol", mHost.ParamTrackVolume(mTrack)), mHeader, 1.5f);
-		add(new DragControl(z, "Pan", mHost.ParamTrackPan(mTrack)), mHeader, 1.5f);
-		add(new DragControl(z, "Mute", mHost.ParamTrackMute(mTrack), Intent::Stop), mHeader, 1.f);
+		mVol = drag(add(new DragControl(z, "Vol", mHost.ParamTrackVolume(mTrack)), mHeader, 1.5f));
+		mPan = drag(add(new DragControl(z, "Pan", mHost.ParamTrackPan(mTrack)), mHeader, 1.5f));
+		mTrackMute = drag(add(new DragControl(z, "Mute", mHost.ParamTrackMute(mTrack), Intent::Stop), mHeader, 1.f));
 		mLoop = drag(add(DragControl::Toggle(z, "Loop", true, Intent::Go, [this](double v) {
 			Pat()->loop = v >= 0.5;
 			Publish();
 		}), mHeader, 1.f));
+
+		// --- track strip -----------------------------------------------------
+		mStrip = new TrackStripControl(z);
+		mStrip->Bind(&mHost.TrackCountRef(), &mTrack,
+		             [this](int t) {
+			             TrackStripControl::Info i;
+			             i.name = mHost.TrackName(t);
+			             i.hasSample = mHost.TrackHasSample(t);
+			             i.muted = mHost.TrackMuted(t);
+			             const fg_visual* v = mHost.CurrentNote(t);
+			             i.playing = v && !v->silent && fg_engine_now(mHost.Engine()) < v->stop;
+			             return i;
+		             },
+		             [this](int t) { Focus(t); },
+		             [this] {
+			             if (mHost.AddTrackUI()) {
+				             Focus(mHost.TrackCount() - 1);
+			             }
+		             },
+		             [this] {
+			             if (mHost.DuplicateTrackUI(mTrack)) {
+				             Focus(mHost.TrackCount() - 1);
+			             }
+		             },
+		             [this] {
+			             if (mHost.RemoveTrackUI()) {
+				             Focus(std::min(mTrack, mHost.TrackCount() - 1));
+			             }
+		             });
+		g->AttachControl(mStrip);
 
 		// --- waveform, tiles, modifier lane --------------------------------
 		mWaveform = new WaveformControl(z);
@@ -441,6 +484,30 @@ private:
 		char b[16];
 		snprintf(b, sizeof b, "%d%%", (int)std::lround(v));
 		return b;
+	}
+
+	// bring another track into the editor bands
+	void Focus(int t) {
+		if (t < 0 || t >= mHost.TrackCount()) {
+			return;
+		}
+		mTrack = t;
+		fg_pattern* p = Pat();
+		mWaveform->SetPattern(p);
+		mTiles->Bind(p, &mHost.EditMode(), &mHost.NextColor(mTrack), [this] { Publish(); }, [this](int) { RefreshToolbar(); });
+		mTiles->Select(-1);
+		mModLane->Bind(p, [this] { Publish(); }, [this](int i) { ShowModPanel(i >= 0); });
+		mModLane->Select(-1);
+		ShowModPanel(false);
+		mVol->SetParamIdx(mHost.ParamTrackVolume(mTrack));
+		mPan->SetParamIdx(mHost.ParamTrackPan(mTrack));
+		mTrackMute->SetParamIdx(mHost.ParamTrackMute(mTrack));
+		SyncFromPattern();
+		SampleChanged(mTrack);
+		mStrip->SetDirty(false);
+		mWaveform->SetDirty(false);
+		mTiles->Refresh();
+		mModLane->Refresh();
 	}
 
 	fg_mod* SelMod() {
@@ -648,6 +715,8 @@ private:
 	WaveformControl* mWaveform = nullptr;
 	TileRowControl* mTiles = nullptr;
 	ModLaneControl* mModLane = nullptr;
+	TrackStripControl* mStrip = nullptr;
+	DragControl *mVol = nullptr, *mPan = nullptr, *mTrackMute = nullptr;
 	DragControl *mModAction = nullptr, *mModFire = nullptr, *mModValue = nullptr, *mModLevel = nullptr, *mModMode = nullptr;
 	DragControl *mModHits = nullptr, *mModTo = nullptr, *mModPitch = nullptr, *mModLen = nullptr;
 	FrogVersionReadout* mVersion = nullptr;
