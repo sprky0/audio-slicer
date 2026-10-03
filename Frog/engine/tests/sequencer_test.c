@@ -17,11 +17,14 @@
 
 static double L[4 * BAR], R[4 * BAR];
 
+/* stereo with identical channels: the stereo pan law is unity at centre */
 static fg_sample* make_source(void) {
-	fg_sample* s = fg_sample_create(1, BAR, SR);
+	fg_sample* s = fg_sample_create(2, BAR, SR);
 	for (int i = 0; i < 16; i++) {
-		s->ch[0][i * UNIT] = (float)(i + 1) / 16.f;
-		s->ch[0][i * UNIT + UNIT / 2] = -0.5f;
+		for (int c = 0; c < 2; c++) {
+			s->ch[c][i * UNIT] = (float)(i + 1) / 16.f;
+			s->ch[c][i * UNIT + UNIT / 2] = -0.5f;
+		}
 	}
 	return s;
 }
@@ -82,7 +85,7 @@ int main(void) {
 		for (int k = 0; k < 16; k++) {
 			CHECK_NEAR(L[bar * BAR + k * UNIT], (k + 1) / 16.0, 1e-9);
 			CHECK_NEAR(L[bar * BAR + k * UNIT + UNIT / 2], -0.5, 1e-9);
-			CHECK_NEAR(R[bar * BAR + k * UNIT], (k + 1) / 16.0, 1e-9);   /* mono → both channels */
+			CHECK_NEAR(R[bar * BAR + k * UNIT], (k + 1) / 16.0, 1e-9);   /* both channels */
 			keep[nk++] = bar * BAR + k * UNIT;
 			keep[nk++] = bar * BAR + k * UNIT + UNIT / 2;
 		}
@@ -212,8 +215,31 @@ int main(void) {
 	CHECK_NEAR(L[BAR], 0.0, 0.0);
 	CHECK_NEAR(L[BAR + UNIT], 0.0, 0.0);
 
+	/* 8. a mono sample takes the mono pan law: −3 dB per side at centre, all
+	 *    left at pan −1 (as the Web Audio StereoPannerNode) */
+	fg_engine_stop_all(e);
+	fg_sample* mono = fg_sample_create(1, BAR, SR);
+	mono->ch[0][0] = 1.f;
+	fg_sample* prev = fg_engine_set_sample(e, 0, mono);
+	fg_engine_set_mix(e, 0, 1.0, 0.0);
+	p = fg_engine_pattern(e, 0);
+	p->loop = true;
+	fg_engine_publish(e, 0);
+	fg_engine_play_all(e);
+	render(e, BLOCK);
+	CHECK_NEAR(L[0], sqrt(0.5), 1e-9);
+	CHECK_NEAR(R[0], sqrt(0.5), 1e-9);
+	fg_engine_stop_all(e);
+	fg_engine_set_mix(e, 0, 1.0, -1.0);
+	fg_engine_play_all(e);
+	render(e, BLOCK);
+	CHECK_NEAR(L[0], 1.0, 1e-9);
+	CHECK_NEAR(R[0], 0.0, 1e-9);
+	render(e, BLOCK);
+	fg_sample_free(prev);
+
 	fg_engine_destroy(e);
 	fg_sample_free(src2);
-	fg_sample_free(src3);
+	fg_sample_free(mono);
 	return check_report("sequencer_test");
 }

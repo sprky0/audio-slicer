@@ -152,10 +152,11 @@ void fg_engine_destroy(fg_engine* e) {
 	free(e);
 }
 
-static void pan_gains(double pan, double* gl, double* gr) {
-	/* equal-power pan as the Web Audio StereoPannerNode applies to a stereo
-	 * input: x = pan ≤ 0 ? pan + 1 : pan */
-	const double x = pan <= 0.0 ? pan + 1.0 : pan;
+/* Equal-power pan as the Web Audio StereoPannerNode: a stereo input uses
+ * x = pan ≤ 0 ? pan + 1 : pan and mixes the far channel across; a mono input
+ * uses x = (pan + 1) / 2 on both outputs (−3 dB at centre). */
+static void pan_gains(double pan, bool mono, double* gl, double* gr) {
+	const double x = mono ? (pan + 1.0) * 0.5 : (pan <= 0.0 ? pan + 1.0 : pan);
 	*gl = cos(x * FG_PI / 2.0);
 	*gr = sin(x * FG_PI / 2.0);
 }
@@ -177,16 +178,24 @@ void fg_engine_reset(fg_engine* e, double sampleRate, int maxBlock) {
 			fg_voice_stop(&t->voices[v]);
 		}
 		fg_seq_stop(&t->seq);
-		double gl, gr;
-		pan_gains(t->pan, &gl, &gr);
 		t->curL = t->gainL = t->muted ? 0.0 : t->volume;
 		t->curR = t->gainR = t->curL;
-		(void)gl;
-		(void)gr;
 	}
 }
 
 /* --- audio thread --------------------------------------------------------- */
+
+/* A mix change while nothing sounds cannot click: take it at once, so a
+ * level set before the first note (a loaded session, an offline render) is
+ * exact from the first sample. */
+static void snap_gain_if_silent(fg_track* t) {
+	for (int v = 0; v < FG_MAX_VOICES; v++) {
+		if (t->voices[v].active) {
+			return;
+		}
+	}
+	t->curL = t->curR = t->muted ? 0.0 : t->volume;
+}
 
 static void apply_cmd(fg_engine* e, const fg_cmd* c, int64_t blockStart) {
 	switch (c->type) {
@@ -254,13 +263,17 @@ static void apply_cmd(fg_engine* e, const fg_cmd* c, int64_t blockStart) {
 			break;
 		case FG_CMD_SET_MIX:
 			if (c->track >= 0 && c->track < e->nTracks) {
-				e->tracks[c->track].volume = c->a < 0.0 ? 0.0 : (c->a > 1.0 ? 1.0 : c->a);
-				e->tracks[c->track].pan = c->b < -1.0 ? -1.0 : (c->b > 1.0 ? 1.0 : c->b);
+				fg_track* t = &e->tracks[c->track];
+				t->volume = c->a < 0.0 ? 0.0 : (c->a > 1.0 ? 1.0 : c->a);
+				t->pan = c->b < -1.0 ? -1.0 : (c->b > 1.0 ? 1.0 : c->b);
+				snap_gain_if_silent(t);
 			}
 			break;
 		case FG_CMD_SET_MUTE:
 			if (c->track >= 0 && c->track < e->nTracks) {
-				e->tracks[c->track].muted = c->a != 0.0;
+				fg_track* t = &e->tracks[c->track];
+				t->muted = c->a != 0.0;
+				snap_gain_if_silent(t);
 			}
 			break;
 		default:
@@ -318,8 +331,9 @@ void fg_engine_process(fg_engine* e, double* const* out, int nCh, int nFrames) {
 
 		/* volume × mute, smoothed, then equal-power pan into the output */
 		const double target = t->muted ? 0.0 : t->volume;
+		const bool mono = !t->smp || t->smp->nCh < 2;
 		double gl, gr;
-		pan_gains(t->pan, &gl, &gr);
+		pan_gains(t->pan, mono, &gl, &gr);
 		if (nCh >= 2) {
 			for (int s = 0; s < nFrames; s++) {
 				if (t->curL < target) {
@@ -329,7 +343,10 @@ void fg_engine_process(fg_engine* e, double* const* out, int nCh, int nFrames) {
 				}
 				const double l = t->busL[s] * t->curL;
 				const double r = t->busR[s] * t->curL;
-				if (t->pan <= 0.0) {
+				if (mono) {
+					out[0][s] += (l * gl) * e->masterGain;
+					out[1][s] += (l * gr) * e->masterGain;
+				} else if (t->pan <= 0.0) {
 					out[0][s] += (l + r * gl) * e->masterGain;
 					out[1][s] += (r * gr) * e->masterGain;
 				} else {

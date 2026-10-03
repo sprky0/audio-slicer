@@ -31,3 +31,8 @@ Frog/.buildnum
 
 # Linux appliance cross-build output (platform/linux/docker-build-arm64.sh)
 platform/linux/build-arm64/
+
+# tools/parity: playwright-core is installed locally when regenerating bounces
+Frog/tools/parity/node_modules/
+Frog/tools/parity/package.json
+Frog/tools/parity/package-lock.json

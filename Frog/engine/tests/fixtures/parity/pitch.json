@@ -1,0 +1,184 @@
+{
+	"version": 3,
+	"nextSlicerId": 1,
+	"slicers": [
+		{
+			"id": 0,
+			"fileName": "parity-source.wav",
+			"virtualStart": 0,
+			"virtualEnd": 1,
+			"start": 0,
+			"end": 1,
+			"beats": 4,
+			"bpm": 150,
+			"divisionDenom": 16,
+			"bpmManual": false,
+			"volume": 1.0,
+			"pan": 0.0,
+			"muted": false,
+			"masterPitch": 0,
+			"randLevel": 50,
+			"seq": {
+				"tiles": [
+					{
+						"src": 0,
+						"w": 1,
+						"offset": 12,
+						"muted": false,
+						"colorIdx": 0
+					},
+					{
+						"src": 1,
+						"w": 1,
+						"offset": -5,
+						"muted": false,
+						"colorIdx": 1
+					},
+					{
+						"src": 2,
+						"w": 1,
+						"offset": 7,
+						"muted": false,
+						"colorIdx": 2
+					},
+					{
+						"src": 3,
+						"w": 1,
+						"offset": 0,
+						"muted": false,
+						"colorIdx": 3
+					},
+					{
+						"src": 4,
+						"w": 1,
+						"offset": 0,
+						"muted": false,
+						"colorIdx": 4
+					},
+					{
+						"src": 5,
+						"w": 1,
+						"offset": 0,
+						"muted": false,
+						"colorIdx": 5
+					},
+					{
+						"src": 6,
+						"w": 1,
+						"offset": 0,
+						"muted": false,
+						"colorIdx": 6
+					},
+					{
+						"src": 7,
+						"w": 1,
+						"offset": 0,
+						"muted": false,
+						"colorIdx": 7
+					},
+					{
+						"src": 8,
+						"w": 1,
+						"offset": 0,
+						"muted": false,
+						"colorIdx": 8
+					},
+					{
+						"src": 9,
+						"w": 1,
+						"offset": 0,
+						"muted": false,
+						"colorIdx": 9
+					},
+					{
+						"src": 10,
+						"w": 1,
+						"offset": 0,
+						"muted": false,
+						"colorIdx": 10
+					},
+					{
+						"src": 11,
+						"w": 1,
+						"offset": 0,
+						"muted": false,
+						"colorIdx": 11
+					},
+					{
+						"src": 12,
+						"w": 1,
+						"offset": 0,
+						"muted": false,
+						"colorIdx": 12
+					},
+					{
+						"src": 13,
+						"w": 1,
+						"offset": 0,
+						"muted": false,
+						"colorIdx": 13
+					},
+					{
+						"src": 14,
+						"w": 1,
+						"offset": 0,
+						"muted": false,
+						"colorIdx": 14
+					},
+					{
+						"src": 15,
+						"w": 1,
+						"offset": 0,
+						"muted": false,
+						"colorIdx": 15
+					}
+				],
+				"mods": [
+					{
+						"step": 5,
+						"action": "ratchet",
+						"fireMode": "prob",
+						"fireValue": 100,
+						"mode": "ramp",
+						"subdiv": 1,
+						"subdivTo": 4,
+						"pitchStep": 0,
+						"lenSteps": 2
+					},
+					{
+						"step": 7,
+						"action": "ratchet",
+						"fireMode": "prob",
+						"fireValue": 100,
+						"mode": "pitch",
+						"subdiv": 2,
+						"subdivTo": 2,
+						"pitchStep": 12,
+						"lenSteps": 1
+					},
+					{
+						"step": 9,
+						"action": "ratchet",
+						"fireMode": "prob",
+						"fireValue": 100,
+						"mode": "even",
+						"subdiv": 4,
+						"subdivTo": 4,
+						"pitchStep": 0,
+						"lenSteps": 1
+					}
+				],
+				"loop": true
+			}
+		}
+	],
+	"midi": {
+		"enabled": false,
+		"inputId": null
+	},
+	"master": {
+		"bpm": 150,
+		"userSet": true
+	},
+	"seqEditMode": "pack"
+}

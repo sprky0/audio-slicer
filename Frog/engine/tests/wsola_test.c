@@ -113,7 +113,8 @@ int main(void) {
 	 *    at a slower tempo the fill stretches without changing pitch */
 	fg_engine* e = fg_engine_create(1, 5);
 	fg_engine_reset(e, SR, 128);
-	fg_sample* bed = sine(440.0, 2.0, 0.5);   /* 16 units of 0.125 s at 120 bpm */
+	fg_sample* bed = sine(440.0, 2.0, 0.5);   /* 16 units of 0.125 s at 120 bpm; mono → −3 dB pan law */
+	const double M = sqrt(0.5);
 	fg_engine_set_sample(e, 0, bed);
 	fg_pattern* p = fg_engine_pattern(e, 0);
 	fg_pattern_default_tiles(p);
@@ -137,8 +138,8 @@ int main(void) {
 	CHECK_NEAR(zc_freq(L, 2 * U + 100, 3 * U - 100), 440.0, 4.0);
 	CHECK_NEAR(zc_freq(L, 4 * U + 100, 4 * U + 2900), 440.0, 8.0);   /* ratchet hit 0 */
 	CHECK_NEAR(zc_freq(L, 4 * U + 3100, 5 * U - 100), 880.0, 12.0);  /* hit 1: +12 st varispeed */
-	CHECK_NEAR(rms(L, 2 * U + 100, 3 * U - 100), 0.5 / sqrt(2.0), 0.03);
-	CHECK_NEAR(rms(L, 200, U - 300), 0.5 / sqrt(2.0), 0.05);
+	CHECK_NEAR(rms(L, 2 * U + 100, 3 * U - 100), M * 0.5 / sqrt(2.0), 0.03);
+	CHECK_NEAR(rms(L, 200, U - 300), M * 0.5 / sqrt(2.0), 0.05);
 
 	/* slower tempo: slots are 1.5× longer, pitch stays */
 	fg_engine_stop_all(e);
@@ -158,9 +159,9 @@ int main(void) {
 	const int64_t U80 = 9000;
 	CHECK_NEAR(zc_freq(L2, 300, U80 - 400), 440.0, 4.0);
 	CHECK_NEAR(zc_freq(L2, 7 * U80 + 300, 8 * U80 - 400), 440.0, 4.0);
-	CHECK_NEAR(rms(L2, 300, U80 - 400), 0.5 / sqrt(2.0), 0.03);
+	CHECK_NEAR(rms(L2, 300, U80 - 400), M * 0.5 / sqrt(2.0), 0.03);
 	/* the stretched fill reaches the end of its slot (no gap before the cut) */
-	CHECK(rms(L2, U80 - 700, U80 - 300) > 0.2);
+	CHECK(rms(L2, U80 - 700, U80 - 300) > 0.14);
 
 	free(L);
 	free(R);
