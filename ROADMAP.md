@@ -51,7 +51,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F14 | Ratchet + pattern tools — even / ramp / pitch hit layouts, span absorption, randomize with lock buckets, Reset Order / Reset All, lock, dup, refill, split / merge, Packed vs Gaps (rasterize → rebuild), grid-change inheritance, the All broadcast, zoom (Trim / Full) | Done 0.14.0 |
 | F15 | Multi-track — up to `FG_MAX_TRACKS`, a track tab strip with the focused track in the editor, add / duplicate / remove, in-phase join, master mix | Done 0.17.1 (`max_tracks` conf key open) |
 | F16 | Performance MIDI — note-triggered slices, CC map (learn), program change = session, `appliance.conf` keys | In progress 0.18.5 (notes, sessions-as-presets and the CC map done; conf keys and per-track overrides open) |
-| F17 | Bounce — offline render of the master mix to `RF_DATA_DIR/exports`, one bar (LCM of the tracks' beats), normalised | Done 0.17.0 |
+| F17 | Bounce — offline render to `<data dir>/exports`: the mix, the focused track or stems, 1–8 loops of the bar (LCM of the tracks' beats), normalised (stems excepted) | Done 0.18.7 |
 | F18 | Record — two halves with one status: **host capture** (ALSA capture PCM + an input path on `Processor`), an L-item to open in ratfactory-linux-host and link here once numbered; **Frog side** (record into a track, re-slice live), developed on the Mac first. Both rows move together, same commit | In progress 0.18.0 (Frog side done; host half awaiting the L-item) |
 | F19 | Transient markers — detection + draggable non-uniform slice points (needs the model change noted in the JS NEXT.md) | Planned |
 
@@ -96,7 +96,7 @@ bands tall on 600 px, so that is what landed.
 | F17.1 | `Frog::Bounce()`: snapshot the session, render it on a worker thread through `fg_render_session` (its own engine; samples reloaded from their paths) to `<data dir>/exports/frog-<stamp>.wav`, normalised, LCM-of-beats long at the current tempo; one at a time; results collected on the idle tick | Done |
 | F17.2 | Export button in the transport bar whose text follows the status (Export / Exporting / Exported / Export failed) | Done |
 | F17.3 | `shell_test`: a bounce from the restored instance finishes, reads back, peaks at 0.99 and is one bar long at the session tempo | Done |
-| F17.4 | Length in beats and a track subset from the UI (the browser's export panel) | Planned |
+| F17.4 | Export options (**0.18.7**): Export opens a two-row panel in place of the toolbars — Length (1 / 2 / 4 / 8 loops of the session's bar, the LCM across tracks), Tracks (All = the mix; Focused = the track in front alone; Stems = one WAV per track in use, `frog-<stamp>-t<n>.wav`, never normalised so levels hold), Normalize, a note line, Export now, Close; choices remembered. Status reads "Exporting k/n" through stems. Hooks `export.open / loops / tracks / normalize / go / cancel`. `fg_render_loop_beats` exposed (`render_test`); `shell_test` bounces two loops, the focused track and two stems | Done |
 
 ### F14 — Ratchet + pattern tools
 
@@ -289,6 +289,10 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F17.4 export options (0.18.7).** Owner chose loops (1 / 2 / 4 / 8),
+  All / Focused / Stems, and a two-row panel opened by Export. Stems keep
+  their relative levels (no per-file normalisation); the mix and the
+  focused track normalise as before. F17 complete.
 - **F11.5 factory session (0.18.6).** Four bars of synthesised drums in
   the spirit of the classic break, generated on the rig at first run (no
   binary asset, no licence), sliced at eighths so the 32 tiles stay

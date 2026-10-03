@@ -49,6 +49,10 @@ public:
 	virtual double RecordedSeconds() const = 0;
 	virtual void StartBounce() = 0;
 	virtual const char* BounceStatus() const = 0;   // "Export", "Exporting", "Exported", ...
+	// export options: loops of the bar, subset (0 all, 1 focused, 2 stems), peak normalise
+	virtual int& ExportLoops() = 0;
+	virtual int& ExportSubset() = 0;
+	virtual bool& ExportNormalize() = 0;
 	virtual void SaveSessionUI() = 0;
 	virtual void LoadSessionUI(const std::string& path) = 0;
 	virtual std::string SessionsDirUI() const = 0;
@@ -160,6 +164,8 @@ public:
 		Row(toolbar2, gap, mToolbar2);
 		Row(toolbar1, gap, mModRow1);
 		Row(toolbar2, gap, mModRow2);
+		Row(toolbar1, gap, mExportRow1);
+		Row(toolbar2, gap, mExportRow2);
 		if (mFileList) {
 			mFileList->SetTargetAndDrawRECTs(b);
 		}
@@ -184,6 +190,7 @@ public:
 		if (mExportStatus != mHost.BounceStatus()) {
 			mExportStatus = mHost.BounceStatus();
 			mExportBtn->SetDirty(false);
+			mExportStatusChip->SetDirty(false);
 		}
 		if (mSessionShown != mHost.SessionName()) {
 			mSessionShown = mHost.SessionName();
@@ -323,7 +330,7 @@ private:
 			mPerform = v >= 0.5;
 			Layout(g);
 		}), mTransport, 1.f));
-		mExportBtn = hk("export.start", add(DragControl::Button(z, "Export", Intent::Neutral, [this](double) { mHost.StartBounce(); }), mTransport, 1.f));
+		mExportBtn = hk("export.open", add(DragControl::Button(z, "Export", Intent::Neutral, [this](double) { ShowExportPanel(!mExportOpen); }), mTransport, 1.f));
 		hk("session.save", add(DragControl::Button(z, "Save", Intent::Neutral, [this](double) { mHost.SaveSessionUI(); }), mTransport, 1.f));
 		mSessionsBtn = drag(add(DragControl::Button(z, "Sessions", Intent::Label, [this, g](double) { OpenSessionList(g); }), mTransport, 1.5f));
 		mSessionsBtn->WithFormat([this](double) {
@@ -581,6 +588,40 @@ private:
 		}), mModRow2, 1.f));
 		ShowModPanel(false);
 
+		// --- export options (shown in place of the toolbars while Export is open) ---
+		static const int loopChoices[4] = {1, 2, 4, 8};
+		int loopIdx = 0;
+		for (int k = 0; k < 4; k++) {
+			if (loopChoices[k] == mHost.ExportLoops()) {
+				loopIdx = k;
+			}
+		}
+		hk("export.loops", add(DragControl::Enum(z, "Length", {"1 loop", "2 loops", "4 loops", "8 loops"}, loopIdx, [this](double v) {
+			mHost.ExportLoops() = loopChoices[(int)v];
+		}), mExportRow1, 1.5f));
+		hk("export.tracks", add(DragControl::Enum(z, "Tracks", {"All", "Focused", "Stems"}, mHost.ExportSubset(), [this](double v) {
+			mHost.ExportSubset() = (int)v;
+		}), mExportRow1, 1.5f));
+		hk("export.normalize", add(DragControl::Toggle(z, "Normalize", mHost.ExportNormalize(), Intent::Neutral, [this](double v) {
+			mHost.ExportNormalize() = v >= 0.5;
+		}), mExportRow1, 1.f));
+		mExportNote = drag(add(new DragControl(z, "", DragControl::Mode::Button, 0, 1, 1, NAN, Intent::Label), mExportRow1, 3.f));
+		mExportNote->WithFormat([this](double) {
+			switch (mHost.ExportSubset()) {
+				case 1: return std::string("the focused track alone, to exports/");
+				case 2: return std::string("one WAV per track, levels kept, to exports/");
+				default: return std::string("the mix, to exports/");
+			}
+		});
+		hk("export.go", add(DragControl::Button(z, "Export now", Intent::Go, [this](double) {
+			mHost.StartBounce();
+			ShowExportPanel(false);
+		}), mExportRow2, 2.f));
+		mExportStatusChip = drag(add(new DragControl(z, "", DragControl::Mode::Button, 0, 1, 1, NAN, Intent::Label), mExportRow2, 3.f));
+		mExportStatusChip->WithFormat([this](double) { return std::string(mHost.BounceStatus()); });
+		hk("export.cancel", add(DragControl::Button(z, "Close", Intent::Neutral, [this](double) { ShowExportPanel(false); }), mExportRow2, 1.f));
+		ShowExportPanel(false);
+
 		fg_rng_seed(&mRng, 0xC0FFEE);
 		SyncFromPattern();
 		SampleChanged(mTrack);
@@ -636,22 +677,46 @@ private:
 		RefreshModPanel();
 	}
 
-	// the toolbars and the modifier panel share the two bottom rows
+	// the toolbars, the modifier panel and the export panel share the two bottom rows
 	void ShowModPanel(bool on) {
-		for (auto& it : mToolbar1) {
-			it.first->Hide(on);
+		if (on) {
+			mExportOpen = false;
 		}
-		for (auto& it : mToolbar2) {
-			it.first->Hide(on);
-		}
-		for (auto& it : mModRow1) {
-			it.first->Hide(!on);
-		}
-		for (auto& it : mModRow2) {
-			it.first->Hide(!on);
-		}
+		mModOpen = on;
+		ShowRows();
 		if (on) {
 			RefreshModPanel();
+		}
+	}
+
+	void ShowExportPanel(bool on) {
+		if (on && mModOpen) {
+			mModLane->Select(-1);
+			mModOpen = false;
+		}
+		mExportOpen = on;
+		ShowRows();
+	}
+
+	void ShowRows() {
+		const bool tools = !mModOpen && !mExportOpen;
+		for (auto& it : mToolbar1) {
+			it.first->Hide(!tools);
+		}
+		for (auto& it : mToolbar2) {
+			it.first->Hide(!tools);
+		}
+		for (auto& it : mModRow1) {
+			it.first->Hide(!mModOpen);
+		}
+		for (auto& it : mModRow2) {
+			it.first->Hide(!mModOpen);
+		}
+		for (auto& it : mExportRow1) {
+			it.first->Hide(!mExportOpen);
+		}
+		for (auto& it : mExportRow2) {
+			it.first->Hide(!mExportOpen);
 		}
 	}
 
@@ -832,7 +897,9 @@ private:
 	bool mPerform = false;
 	fg_rng mRng;
 
-	std::vector<std::pair<IControl*, float>> mTransport, mHeader, mToolbar1, mToolbar2, mModRow1, mModRow2;
+	std::vector<std::pair<IControl*, float>> mTransport, mHeader, mToolbar1, mToolbar2, mModRow1, mModRow2, mExportRow1, mExportRow2;
+	bool mModOpen = false, mExportOpen = false;
+	DragControl *mExportNote = nullptr, *mExportStatusChip = nullptr;
 	WaveformControl* mWaveform = nullptr;
 	TileRowControl* mTiles = nullptr;
 	ModLaneControl* mModLane = nullptr;

@@ -32,6 +32,10 @@ typedef struct {
 
 bool fg_render_session(const fg_session* s, const fg_render_opts* opts, const char* outPath, fg_render_stats* stats);
 
+/* One loop of the session in beats: the LCM of the tracks' beat counts (the
+ * default length when opts.beats and opts.seconds are 0). */
+double fg_render_loop_beats(const fg_session* s);
+
 #ifdef __cplusplus
 }
 #endif

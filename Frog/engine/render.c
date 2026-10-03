@@ -24,6 +24,15 @@ static void join_path(char* out, size_t cap, const char* dir, const char* name) 
 	}
 }
 
+double fg_render_loop_beats(const fg_session* s) {
+	int l = 1;
+	for (int i = 0; i < s->nTracks; i++) {
+		const int b = s->tracks[i].pattern.beats > 0 ? s->tracks[i].pattern.beats : 4;
+		l = l / gcd(l, b) * b;
+	}
+	return (double)l;
+}
+
 bool fg_render_session(const fg_session* s, const fg_render_opts* o, const char* outPath, fg_render_stats* stats) {
 	const double sr = o->sampleRate > 0.0 ? o->sampleRate : 48000.0;
 	const int block = o->blockSize > 0 ? o->blockSize : 128;
@@ -31,12 +40,7 @@ bool fg_render_session(const fg_session* s, const fg_render_opts* o, const char*
 
 	double beats = o->beats;
 	if (o->seconds <= 0.0 && beats <= 0.0) {
-		int l = 1;
-		for (int i = 0; i < s->nTracks; i++) {
-			const int b = s->tracks[i].pattern.beats > 0 ? s->tracks[i].pattern.beats : 4;
-			l = l / gcd(l, b) * b;
-		}
-		beats = l;
+		beats = fg_render_loop_beats(s);
 	}
 	const int64_t frames = o->seconds > 0.0 ? (int64_t)llround(o->seconds * sr) : (int64_t)llround(beats * 60.0 / bpm * sr);
 	if (frames <= 0) {

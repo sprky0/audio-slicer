@@ -560,15 +560,32 @@ void Frog::ServiceRecord() {
 
 // --- bounce --------------------------------------------------------------
 
-bool Frog::Bounce() {
+bool Frog::Bounce(const ExportOpts& opts) {
 	if (mBounceRunning.load()) {
 		return false;
 	}
 	if (mBounceThread.joinable()) {
 		mBounceThread.join();
 	}
+	mExportOpts = opts;
 	fg_session* s = (fg_session*)calloc(1, sizeof(fg_session));
 	SnapshotSession(*s);
+	// which tracks sound: the others are muted in the snapshot
+	const int focus = std::max(0, std::min(mFocusTrack, mNumTracks - 1));
+	std::vector<int> solo;   // one render per entry; empty = the mix
+	if (opts.subset == kExportFocused) {
+		solo.push_back(focus);
+	} else if (opts.subset == kExportStems) {
+		for (int t = 0; t < mNumTracks; t++) {
+			if (!mTrackPaths[t].empty()) {
+				solo.push_back(t);
+			}
+		}
+		if (solo.empty()) {
+			free(s);
+			return false;
+		}
+	}
 	// paths are resolved against the samples dir; absolute ones pass through
 	const std::string samplesDir = SamplesDir();
 	const std::string exportsDir = ExportsDir();
@@ -576,20 +593,43 @@ bool Frog::Bounce() {
 	char stamp[32];
 	const time_t now = time(nullptr);
 	strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", localtime(&now));
-	mBouncePath = exportsDir + "/frog-" + stamp + ".wav";
+	const std::string prefix = exportsDir + "/frog-" + stamp;
+	mBouncePath = solo.size() == 1 ? prefix + "-t" + std::to_string(solo[0] + 1) + ".wav" : solo.empty() ? prefix + ".wav" : prefix;
 	const double sr = mSampleRate;
+	const double beats = std::max(1, opts.loops) * fg_render_loop_beats(s);
+	const bool normalize = opts.normalize && opts.subset != kExportStems;
+	mBounceSteps = std::max<int>(1, (int)solo.size());
+	mBounceStep.store(0);
 	mBounceRunning.store(true);
 	mBounceDone.store(0);
 	mBounceStatus = "Exporting";
-	mBounceThread = std::thread([this, s, samplesDir, sr] {
+	mBounceThread = std::thread([this, s, solo, prefix, samplesDir, sr, beats, normalize] {
 		fg_render_opts o = {0};
 		o.sampleRate = sr;
 		o.blockSize = 128;
-		o.normalize = true;
+		o.beats = beats;
+		o.normalize = normalize;
 		o.seed = (uint32_t)time(nullptr);
 		o.samplesDir = samplesDir.c_str();
-		fg_render_stats st = {0};
-		const bool ok = fg_render_session(s, &o, mBouncePath.c_str(), &st);
+		bool ok = true;
+		if (solo.empty()) {
+			fg_render_stats st = {0};
+			ok = fg_render_session(s, &o, mBouncePath.c_str(), &st);
+		} else {
+			bool wasMuted[FG_MAX_TRACKS];
+			for (int t = 0; t < s->nTracks; t++) {
+				wasMuted[t] = s->tracks[t].mix.muted;
+			}
+			for (size_t k = 0; k < solo.size() && ok; k++) {
+				for (int t = 0; t < s->nTracks; t++) {
+					s->tracks[t].mix.muted = t != solo[k] || wasMuted[t];
+				}
+				const std::string path = prefix + "-t" + std::to_string(solo[k] + 1) + ".wav";
+				fg_render_stats st = {0};
+				ok = fg_render_session(s, &o, path.c_str(), &st);
+				mBounceStep.store((int)k + 1);
+			}
+		}
 		free(s);
 		mBounceDone.store(ok ? 1 : -1);
 		mBounceRunning.store(false);
@@ -598,6 +638,9 @@ bool Frog::Bounce() {
 }
 
 void Frog::ServiceBounce() {
+	if (mBounceRunning.load() && mBounceSteps > 1) {
+		mBounceStatus = "Exporting " + std::to_string(mBounceStep.load() + 1) + "/" + std::to_string(mBounceSteps);
+	}
 	const int done = mBounceDone.exchange(0);
 	if (done == 0) {
 		return;

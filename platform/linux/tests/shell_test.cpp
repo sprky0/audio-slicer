@@ -240,6 +240,42 @@ int main() {
 		}
 	}
 
+	std::printf("=== export options: loops, focused, stems ===\n");
+	{
+		auto bounceAndWait = [&](const Frog::ExportOpts& o) {
+			if (!b.plug.Bounce(o)) {
+				return false;
+			}
+			for (int i = 0; i < 4000 && b.plug.Bouncing(); i++) {
+				usleep(5000);
+			}
+			b.proc.idle();
+			return !b.plug.Bouncing() && !b.plug.LastBounce().empty() && b.plug.LastBounce()[0] != '!';
+		};
+		auto frames = [](const std::string& path) {
+			fg_sample* s = fg_sample_load_wav(path.c_str(), 0.0, 0.0);
+			const int64_t n = s ? s->frames : -1;
+			fg_sample_free(s);
+			return n;
+		};
+		const int64_t bar = (int64_t)std::llround(4.0 * 60.0 / 133.0 * 48000.0);
+		Frog::ExportOpts o;
+		o.loops = 2;
+		check(bounceAndWait(o), "two loops render", b.plug.LastBounce());
+		check(std::llabs(frames(b.plug.LastBounce()) - 2 * bar) <= 1, "twice the bar long", std::to_string(frames(b.plug.LastBounce())));
+		check(b.plug.DuplicateTrack(0), "a second track for stems");
+		b.proc.idle();   // its sample loads
+		o.loops = 1;
+		o.subset = Frog::kExportFocused;
+		check(bounceAndWait(o), "the focused track alone", b.plug.LastBounce());
+		check(b.plug.LastBounce().size() > 7 && b.plug.LastBounce().substr(b.plug.LastBounce().size() - 7) == "-t1.wav", "named after the track", b.plug.LastBounce());
+		o.subset = Frog::kExportStems;
+		check(bounceAndWait(o), "stems", b.plug.LastBounce());
+		check(frames(b.plug.LastBounce() + "-t1.wav") == bar && frames(b.plug.LastBounce() + "-t2.wav") == bar, "one WAV per track, a bar each");
+		check(b.plug.RemoveTrack(), "back to one track");
+		b.proc.idle();
+	}
+
 	std::printf("=== sessions as presets ===\n");
 	check(!b.proc.stepPreset(1), "no sessions yet: stepPreset says so");
 	check(b.plug.SaveSession("alpha") && b.plug.SaveSession("beta"), "two sessions saved");

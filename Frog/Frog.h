@@ -111,9 +111,22 @@ public:
 	std::string GetCurrentPresetName() const { return mSessionName.empty() ? "unsaved" : mSessionName; }
 	int GetCurrentPresetBank() const { return 0; }
 	int GetCurrentPresetProgram() const { return mSessionIndex; }
-	bool Bounce();
+	// Export options (F17.4): length in loops of the session's bar, which
+	// tracks (the mix, the focused track alone, or one stem per track in
+	// use), peak normalisation (stems keep their relative levels: never
+	// normalised). Remembered for the next export.
+	enum EExportSubset { kExportAll = 0, kExportFocused, kExportStems };
+	struct ExportOpts {
+		int loops = 1;
+		int subset = kExportAll;
+		bool normalize = true;
+	};
+	ExportOpts& Export() { return mExportOpts; }
+	bool Bounce() { return Bounce(mExportOpts); }
+	bool Bounce(const ExportOpts& opts);
 	bool Bouncing() const { return mBounceRunning.load(); }
-	const std::string& LastBounce() const { return mBounceResult; }   // path, or an error after "!"
+	// the last result: a path (All / Focused), the stems' common prefix (Stems), or an error after "!"
+	const std::string& LastBounce() const { return mBounceResult; }
 	std::string ExportsDir() const;
 	const std::string& TrackPath(int track) const { return mTrackPaths[track]; }
 	const char* TrackName(int track) const { return mTrackNames[track].c_str(); }
@@ -140,6 +153,9 @@ public:
 	// frogui::Host
 	void Publish(int track) override { fg_engine_publish(mEngine, track); }
 	void StartBounce() override { Bounce(); }
+	int& ExportLoops() override { return mExportOpts.loops; }
+	int& ExportSubset() override { return mExportOpts.subset; }
+	bool& ExportNormalize() override { return mExportOpts.normalize; }
 	void SaveSessionUI() override { SaveSession(mSessionName); }
 	void LoadSessionUI(const std::string& path) override { RequestLoadSession(path); }
 	std::string SessionsDirUI() const override { return SessionsDir(); }
@@ -237,9 +253,12 @@ private:
 	std::thread mBounceThread;
 	std::atomic<bool> mBounceRunning{false};
 	std::atomic<int> mBounceDone{0};   // 1 ok, -1 failed, 0 none
-	std::string mBouncePath;           // written by the worker before mBounceDone
+	std::string mBouncePath;           // written before the worker starts
 	std::string mBounceResult;
 	std::string mBounceStatus = "Export";
+	ExportOpts mExportOpts;
+	std::atomic<int> mBounceStep{0};   // stems: files done so far (worker → main)
+	int mBounceSteps = 1;
 	// the recent slots per track, from the engine's visual ring (main thread)
 	static constexpr int kNoteRing = 32;
 	fg_visual mNotes[FG_MAX_TRACKS][kNoteRing];

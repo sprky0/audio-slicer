@@ -212,6 +212,27 @@ int main(int argc, char** argv) {
 			check(proc.editorScreenshot(shots + "/tracks.png"), "tracks.png written");
 		}
 	}
+	// the export panel: Export opens it in place of the toolbars, Close puts them back
+	if (ui) {
+		auto* exportBtn = buttonLabelled(*ui, "Export");
+		auto* go = buttonLabelled(*ui, "Export now");
+		check(exportBtn && go && go->IsHidden(), "Export now is hidden until the panel opens");
+		if (exportBtn && go) {
+			const IRECT er = exportBtn->GetRECT();
+			tap(*ui, er.MW(), er.MH());
+			check(!go->IsHidden(), "a tap on Export shows the options");
+			proc.idle();
+			proc.editorTurn();
+			if (!shots.empty()) {
+				check(proc.editorScreenshot(shots + "/export.png"), "export.png written");
+			}
+			if (auto* close = buttonLabelled(*ui, "Close")) {
+				const IRECT cr = close->GetRECT();
+				tap(*ui, cr.MW(), cr.MH());
+			}
+			check(go->IsHidden(), "Close hides them again");
+		}
+	}
 	plug.StopAll();
 	proc.process(outs, 2, 128);
 

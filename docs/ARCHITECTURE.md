@@ -1,4 +1,4 @@
-# Frog — architecture (as built, 0.18.6)
+# Frog — architecture (as built, 0.18.7)
 
 Frog is a sample slicer and loop performer: load a clip, declare how many
 beats it spans, and it is cut into a grid of slices you rearrange, resize,
@@ -122,6 +122,9 @@ every lane under ThreadSanitizer.
   all eight sequencers.
 - Bounce: a worker thread renders a snapshot of the session through its own
   engine into `exports/`; one at a time, status collected on the idle tick.
+  Options: loops of the bar (`fg_render_loop_beats`, the LCM across tracks),
+  the mix / the focused track / stems (other tracks muted in the snapshot,
+  one render per stem, no normalisation so levels hold), normalise.
 - Record: arm a capture buffer for a track; the audio thread appends the
   block's inputs; on stop the take is written to `samples/rec-<stamp>.wav`
   and swapped into the track (desktop formats with inputs; the appliance
