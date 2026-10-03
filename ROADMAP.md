@@ -289,6 +289,12 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **0.18.8 — crash on tapping the build stamp.** `FrogVersionReadout`
+  showed its full version through `ShowBubbleControl`, but no bubble control
+  had been attached; the guard is an assert, compiled out in Release, so the
+  first tap dereferenced null (owner's crash report, 0.18.7). A styled
+  `IBubbleControl` is attached with the panel and the readout checks for one;
+  `editor_shot_test` taps the stamp.
 - **F17.4 export options (0.18.7).** Owner chose loops (1 / 2 / 4 / 8),
   All / Focused / Stems, and a two-row panel opened by Export. Stems keep
   their relative levels (no per-file normalisation); the mix and the

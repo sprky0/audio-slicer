@@ -12,6 +12,7 @@
 #include "IGraphicsKMS.h"
 #include "engine/sample.h"
 #include "ui/DragControl.h"
+#include "ui/FrogVersion.h"
 #include "ui/ModLaneControl.h"
 #include "ui/TileRowControl.h"
 #include "ui/TrackStripControl.h"
@@ -210,6 +211,19 @@ int main(int argc, char** argv) {
 		proc.editorTurn();
 		if (!shots.empty()) {
 			check(proc.editorScreenshot(shots + "/tracks.png"), "tracks.png written");
+		}
+	}
+	// the build stamp: a tap shows the full version in a bubble (0.18.8: it crashed without one)
+	if (ui) {
+		for (int i = 0; i < ui->NControls(); ++i) {
+			if (auto* v = dynamic_cast<FrogVersionReadout*>(ui->GetControl(i))) {
+				const IRECT vr = v->GetRECT();
+				tap(*ui, vr.MW(), vr.MH());
+				check(ui->NBubbleControls() == 1, "a bubble control is attached for the version readout");
+				proc.idle();
+				proc.editorTurn();
+				break;
+			}
 		}
 	}
 	// the export panel: Export opens it in place of the toolbars, Close puts them back

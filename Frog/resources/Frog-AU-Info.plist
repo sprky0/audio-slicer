@@ -20,17 +20,17 @@
 			<key>type</key>
 			<string>aumu</string>
 			<key>version</key>
-			<integer>4615</integer>
+			<integer>4616</integer>
 		</dict>
 	</array>
 	<key>AudioUnit Version</key>
-	<string>0x00001207</string>
+	<string>0x00001208</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleExecutable</key>
 	<string>Frog</string>
 	<key>CFBundleGetInfoString</key>
-	<string>Frog v0.18.7 Copyright 2026 Rat Factory</string>
+	<string>Frog v0.18.8 Copyright 2026 Rat Factory</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.ratfactory.audiounit.Frog</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -40,11 +40,11 @@
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.18.7</string>
+	<string>0.18.8</string>
 	<key>CFBundleSignature</key>
 	<string>Frog</string>
 	<key>CFBundleVersion</key>
-	<string>0.18.7</string>
+	<string>0.18.8</string>
 	<key>CSResourcesFileMapped</key>
 	<true/>
 	<key>LSMinimumSystemVersion</key>

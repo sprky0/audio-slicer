@@ -51,6 +51,9 @@ public:
 	}
 
 	void OnMouseDown(float x, float y, const IMouseMod& mod) override {
+		if (GetUI()->NBubbleControls() == 0) {
+			return;   /* no bubble attached: ShowBubbleControl would dereference null in Release */
+		}
 		GetUI()->ShowBubbleControl(this, mRECT.MW(), mRECT.T, FROG_VERSION_FULL,
 		                           EDirection::Horizontal, IRECT(0.f, 0.f, 360.f, 28.f));
 	}

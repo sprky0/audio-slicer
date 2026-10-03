@@ -63,6 +63,8 @@ Frog::Frog(const InstanceInfo& info)
 		pGraphics->AttachCornerResizer(EUIResizerMode::Size, false);
 		pGraphics->AttachPanelBackground(frogui::kBg);
 		pGraphics->LoadFont(frogui::kFont, ROBOTO_FN);
+		// the build stamp's tap shows its full version in a bubble: one must exist
+		pGraphics->AttachBubbleControl(new IBubbleControl(IText(14.f, frogui::kText, frogui::kFont, EAlign::Center), frogui::kPanel, frogui::kLine, 4.f));
 		mView = std::make_unique<frogui::FrogView>(*this, pGraphics);
 	};
 #endif
