@@ -12,15 +12,17 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 namespace {
 
 int gFail = 0;
 
-void check(bool ok, const char* what) {
-	std::printf("  %-4s %s\n", ok ? "PASS" : "FAIL", what);
+void check(bool ok, const char* what, const std::string& detail = "") {
+	std::printf("  %-4s %s %s\n", ok ? "PASS" : "FAIL", what, detail.c_str());
 	if (!ok) {
 		++gFail;
 	}
@@ -197,6 +199,30 @@ int main() {
 	check(b.peakIn(0, 16) > 0.5 * m / 16.0, "the restored instance plays the sample again (at 133 bpm)");
 	check(b.peakIn(5300, 10800) == 0.0, "the restored mute on unit 1 holds");
 	check(b.peakIn(16241, 16260) > 0.5 * m * 4.0 / 16.0, "unit 3 follows at the restored tempo (unit 2 is the reversed one)");
+
+	std::printf("=== bounce from the plugin ===\n");
+	setenv("RF_DATA_DIR", "/tmp/frog-shell-data", 1);
+	check(b.plug.Bounce(), "Bounce() starts a worker");
+	check(!b.plug.Bounce(), "a second one is refused while it runs");
+	for (int i = 0; i < 2000 && b.plug.Bouncing(); i++) {
+		usleep(5000);
+	}
+	b.proc.idle();
+	check(!b.plug.Bouncing() && !b.plug.LastBounce().empty() && b.plug.LastBounce()[0] != '!', "the bounce finished", b.plug.LastBounce());
+	{
+		fg_sample* out = fg_sample_load_wav(b.plug.LastBounce().c_str(), 0.0, 0.0);
+		check(out != nullptr && out->frames > 0, "the WAV reads back");
+		if (out) {
+			double peak = 0.0;
+			for (int64_t i = 0; i < out->frames; i++) {
+				peak = std::max(peak, (double)std::fabs(out->ch[0][i]));
+			}
+			check(peak > 0.9, "normalised to 0.99", std::to_string(peak));
+			// 4 beats at 133 bpm (the restored tempo) at 48 k
+			check(std::llabs(out->frames - (int64_t)std::llround(4.0 * 60.0 / 133.0 * 48000.0)) <= 1, "one bar long at the session tempo", std::to_string(out->frames));
+			fg_sample_free(out);
+		}
+	}
 
 	std::printf("%s\n", gFail == 0 ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED");
 	return gFail == 0 ? 0 : 1;

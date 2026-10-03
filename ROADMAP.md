@@ -49,7 +49,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F14 | Ratchet + pattern tools — even / ramp / pitch hit layouts, span absorption, randomize with lock buckets, Reset Order / Reset All, lock, dup, refill, split / merge, Packed vs Gaps (rasterize → rebuild), grid-change inheritance, the All broadcast, zoom (Trim / Full) | Done 0.14.0 |
 | F15 | Multi-track — up to `max_tracks` (4 on Pi 3), focus track + summary rows, add / duplicate / remove, in-phase join, master mix | Planned |
 | F16 | Performance MIDI — note-triggered slices, CC map (learn), program change = session, `appliance.conf` keys | Planned |
-| F17 | Bounce — offline render of the master mix to `RF_DATA_DIR/exports`, length in beats, normalise | Planned |
+| F17 | Bounce — offline render of the master mix to `RF_DATA_DIR/exports`, one bar (LCM of the tracks' beats), normalised | Done 0.17.0 |
 | F18 | Record — runs in parallel with the MVP (decided 2026-10-03). Two halves with one status: **host capture** (ALSA capture PCM + an input path on `Processor`), an L-item to open in ratfactory-linux-host and link here once numbered; **Frog side** (record into a track, re-slice live), developed on the Mac first. Both rows move together, same commit | Planned |
 | F19 | Transient markers — detection + draggable non-uniform slice points (needs the model change noted in the JS NEXT.md) | Planned |
 
@@ -62,6 +62,15 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F1.3 | Write docs/PORT_PLAN.md: architecture, stretch strategy, clock sources, caps, UI adaptation, milestones, tests, risks | Done |
 | F1.4 | Branches: `js` preserves the browser app at its last commit; `native` carries the port | Done |
 | F1.5 | Decisions (2026-10-03, **0.1.1**): name **Frog**; record (F18) runs in parallel with the MVP with both halves tracked in sync; float32 sample storage accepted, all shared math stays `double` | Done |
+
+### F17 — Bounce
+
+| ID | Subtask | Status |
+|----|---------|--------|
+| F17.1 | `Frog::Bounce()`: snapshot the session, render it on a worker thread through `fg_render_session` (its own engine; samples reloaded from their paths) to `<data dir>/exports/frog-<stamp>.wav`, normalised, LCM-of-beats long at the current tempo; one at a time; results collected on the idle tick | Done |
+| F17.2 | Export button in the transport bar whose text follows the status (Export / Exporting / Exported / Export failed) | Done |
+| F17.3 | `shell_test`: a bounce from the restored instance finishes, reads back, peaks at 0.99 and is one bar long at the session tempo | Done |
+| F17.4 | Length in beats and a track subset from the UI (the browser's export panel) | Planned |
 
 ### F14 — Ratchet + pattern tools
 
@@ -253,6 +262,9 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F17 bounce (0.17.0).** Export from the transport bar renders the
+  session off the UI thread into the data dir; the headless test exercises
+  it on arm64. Length / subset choices stay open (F17.4).
 - **F14 complete (0.14.0).** The All broadcast and the Trim / Full zoom
   close the pattern-tool list; everything else in F14 had landed with F6
   and F10. Next: F17 (bounce from the UI) and F15 (multi-track), then F16.

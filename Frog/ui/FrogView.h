@@ -42,6 +42,8 @@ public:
 	virtual std::string SamplesDir() const = 0;
 	virtual void PlayAll() = 0;
 	virtual void StopAll() = 0;
+	virtual void StartBounce() = 0;
+	virtual const char* BounceStatus() const = 0;   // "Export", "Exporting", "Exported", ...
 	virtual int& NextColor(int track) = 0;
 	virtual fg_edit_mode& EditMode() = 0;
 	// the latest sounding slot for the track, or nullptr
@@ -106,6 +108,10 @@ public:
 
 	// Per idle tick from the plugin (the UI thread): playback feedback.
 	void Idle() {
+		if (mExportStatus != mHost.BounceStatus()) {
+			mExportStatus = mHost.BounceStatus();
+			mExportBtn->SetDirty(false);
+		}
 		const fg_visual* v = mHost.CurrentNote(mTrack);
 		const int64_t now = fg_engine_now(mHost.Engine());
 		const double sr = 48000.0;   // flash timing only; a 180 ms window
@@ -222,6 +228,8 @@ private:
 			mPerform = v >= 0.5;
 			Layout(g);
 		}), mTransport, 1.f));
+		mExportBtn = drag(add(DragControl::Button(z, "Export", Intent::Neutral, [this](double) { mHost.StartBounce(); }), mTransport, 1.f));
+		mExportBtn->WithFormat([this](double) { return std::string(mHost.BounceStatus()); });
 		g->AttachControl(mVersion = new FrogVersionReadout(z));
 		mTransport.push_back({mVersion, 2.f});
 
@@ -644,6 +652,8 @@ private:
 	DragControl *mModHits = nullptr, *mModTo = nullptr, *mModPitch = nullptr, *mModLen = nullptr;
 	FrogVersionReadout* mVersion = nullptr;
 	FileListControl* mFileList = nullptr;
+	DragControl* mExportBtn = nullptr;
+	std::string mExportStatus;
 	DragControl *mPerformBtn = nullptr, *mFileChip = nullptr, *mBeats = nullptr, *mStep = nullptr, *mPitch = nullptr, *mLoop = nullptr;
 	DragControl* mAll = nullptr;
 	DragControl *mMute = nullptr, *mLock = nullptr, *mRev = nullptr, *mGain = nullptr, *mFadeIn = nullptr, *mCurveIn = nullptr, *mFadeOut = nullptr, *mCurveOut = nullptr, *mOffset = nullptr;

@@ -10,8 +10,10 @@
 #include "ui/Peaks.h"
 #endif
 
+#include <atomic>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 // Frog — sample slicer and loop performer. The plugin class is the shell
@@ -73,12 +75,20 @@ public:
 	void PlayAll();
 	void StopAll();
 	int PendingLoadCount() const { return (int)mPendingLoads.size(); }
+	// Bounce the session to <data dir>/exports/frog-<stamp>.wav on a worker
+	// thread (its own engine, samples reloaded from their paths). One at a time.
+	bool Bounce();
+	bool Bouncing() const { return mBounceRunning.load(); }
+	const std::string& LastBounce() const { return mBounceResult; }   // path, or an error after "!"
+	std::string ExportsDir() const;
 	const std::string& TrackPath(int track) const { return mTrackPaths[track]; }
 	const char* TrackName(int track) const { return mTrackNames[track].c_str(); }
 
 #if IPLUG_EDITOR
 	// frogui::Host
 	void Publish(int track) override { fg_engine_publish(mEngine, track); }
+	void StartBounce() override { Bounce(); }
+	const char* BounceStatus() const override;
 	const frogui::Peaks& TrackPeaks(int track) const override { return mPeaks[track]; }
 	void LoadSample(int track, const std::string& path) override { RequestLoadSample(track, path); }
 	int& NextColor(int track) override { return mNextColor[track]; }
@@ -119,6 +129,7 @@ private:
 	void ServiceLoads();
 	void ServiceRetired();
 	void PollVisuals();
+	void ServiceBounce();
 
 	fg_engine* mEngine = nullptr;
 	std::vector<PendingLoad> mPendingLoads;   // main thread only
@@ -128,6 +139,12 @@ private:
 	int mNextColor[FG_MAX_TRACKS] = {0};
 	fg_edit_mode mEditMode = FG_EDIT_PACK;
 	double mSampleRate = 48000.;
+	std::thread mBounceThread;
+	std::atomic<bool> mBounceRunning{false};
+	std::atomic<int> mBounceDone{0};   // 1 ok, -1 failed, 0 none
+	std::string mBouncePath;           // written by the worker before mBounceDone
+	std::string mBounceResult;
+	std::string mBounceStatus = "Export";
 	// the recent slots per track, from the engine's visual ring (main thread)
 	static constexpr int kNoteRing = 32;
 	fg_visual mNotes[FG_MAX_TRACKS][kNoteRing];

@@ -2,8 +2,12 @@
 #include "IPlug_include_in_plug_src.h"
 #include "IPlugPaths.h"
 
+#include "engine/render.h"
 #include "engine/sample.h"
 #include "engine/session.h"
+
+#include <ctime>
+#include <sys/stat.h>
 
 #include <cmath>
 #include <cstdlib>
@@ -57,6 +61,9 @@ Frog::Frog(const InstanceInfo& info)
 }
 
 Frog::~Frog() {
+	if (mBounceThread.joinable()) {
+		mBounceThread.join();
+	}
 	// Audio is stopped by the time the plugin is destroyed: every store the
 	// engine still holds, and every retired one, is ours to free.
 	for (int t = 0; t < FG_MAX_TRACKS && mEngine; t++) {
@@ -103,6 +110,88 @@ std::string Frog::SamplesDir() const {
 	dir.Append("/Frog/samples");
 	return dir.Get();
 }
+
+std::string Frog::ExportsDir() const {
+	if (const char* rf = getenv("RF_DATA_DIR")) {
+		return std::string(rf) + "/exports";
+	}
+	WDL_String dir;
+	AppSupportPath(dir, false);
+	dir.Append("/Frog/exports");
+	return dir.Get();
+}
+
+static void EnsureDir(const std::string& path) {
+	std::string acc;
+	for (size_t i = 1; i <= path.size(); i++) {
+		if (i == path.size() || path[i] == '/') {
+			acc = path.substr(0, i);
+			mkdir(acc.c_str(), 0755);
+		}
+	}
+}
+
+// --- bounce --------------------------------------------------------------
+
+bool Frog::Bounce() {
+	if (mBounceRunning.load()) {
+		return false;
+	}
+	if (mBounceThread.joinable()) {
+		mBounceThread.join();
+	}
+	fg_session* s = (fg_session*)calloc(1, sizeof(fg_session));
+	SnapshotSession(*s);
+	// paths are resolved against the samples dir; absolute ones pass through
+	const std::string samplesDir = SamplesDir();
+	const std::string exportsDir = ExportsDir();
+	EnsureDir(exportsDir);
+	char stamp[32];
+	const time_t now = time(nullptr);
+	strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", localtime(&now));
+	mBouncePath = exportsDir + "/frog-" + stamp + ".wav";
+	const double sr = mSampleRate;
+	mBounceRunning.store(true);
+	mBounceDone.store(0);
+	mBounceStatus = "Exporting";
+	mBounceThread = std::thread([this, s, samplesDir, sr] {
+		fg_render_opts o = {0};
+		o.sampleRate = sr;
+		o.blockSize = 128;
+		o.normalize = true;
+		o.seed = (uint32_t)time(nullptr);
+		o.samplesDir = samplesDir.c_str();
+		fg_render_stats st = {0};
+		const bool ok = fg_render_session(s, &o, mBouncePath.c_str(), &st);
+		free(s);
+		mBounceDone.store(ok ? 1 : -1);
+		mBounceRunning.store(false);
+	});
+	return true;
+}
+
+void Frog::ServiceBounce() {
+	const int done = mBounceDone.exchange(0);
+	if (done == 0) {
+		return;
+	}
+	if (mBounceThread.joinable()) {
+		mBounceThread.join();
+	}
+	if (done > 0) {
+		mBounceResult = mBouncePath;
+		mBounceStatus = "Exported";
+	} else {
+		mBounceResult = "!" + mBouncePath;
+		mBounceStatus = "Export failed";
+	}
+}
+
+#if IPLUG_EDITOR
+const char* Frog::BounceStatus() const {
+	return mBounceStatus.c_str();
+}
+#endif
 
 static std::string ResolvePath(const std::string& dir, const std::string& p) {
 	if (p.empty() || p[0] == '/') {
@@ -388,6 +477,7 @@ void Frog::OnParamChange(int paramIdx) {
 void Frog::OnIdle() {
 	ServiceLoads();
 	ServiceRetired();
+	ServiceBounce();
 	PollVisuals();
 	for (int t = 0; t < FG_MAX_TRACKS; t++) {
 		if (fg_engine_take_pattern_change(mEngine, t)) {
