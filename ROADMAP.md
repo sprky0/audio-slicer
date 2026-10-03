@@ -158,7 +158,7 @@ after cloning (it lands gitignored inside the submodule).
 | F2.4 | Version stamp: `scripts/stamp-version.sh` → gitignored `version.h` (`FROG_*`), `ui/FrogVersion.h` readout with `__has_include` fallback; Run Script phase on all nine Xcode targets; `FrogVersionStamp` CMake target wired to every `Frog-<fmt>` target | Done |
 | F2.5 | Builds: `xcodebuild -target APP / VST3 / AU -configuration Release` all succeed; APP launches and quits cleanly; `auval -v aumu Frog RatF` → AU VALIDATION SUCCEEDED; `cmake -S Frog -B build` configures | Done |
 | F2.6 | Root `.gitignore` in Tink's shape (build dirs, stamp outputs, Linux cross-build output) | Done |
-| F2.7 | Brand assets stored (**0.2.1**): `resources/img/frog-wordmark.svg` — FROG set in Cheltenham Bold, baked to outlines (no font needed at render time), fill `#E0332E`; `resources/img/rat-factory.svg` — the family maker mark, unmodified from tink-vst. The Cheltenham Bold OTF itself is **not** committed: the supplied file is Bitstream's (`CheltenhamBT-Bold`, "Confidential" in its name table) from a free-font site, so its redistribution licence is unknown; the outlines are all the UI needs. Use in the panel is deferred to F10 | Done |
+| F2.7 | Brand assets stored (**0.2.1**): `resources/img/frog-wordmark.svg` — FROG set in Cheltenham Bold, baked to outlines (no font needed at render time), fill `#E0332E`; `resources/img/rat-factory.svg` — the family maker mark, unmodified from tink-vst. The Cheltenham Bold OTF itself is **not** committed: the supplied file is Bitstream's (`CheltenhamBT-Bold`, "Confidential" in its name table) from a free-font site, so its redistribution licence is unknown; the outlines are all the UI needs. Decided 0.18.3: the OTF stays with the owner outside the repo; `resources/img/README.md` says what it is and where, `tools/wordmark/make-wordmark.py` regenerates the SVG from it. Use in the panel is deferred to F10 | Done |
 
 ### F3 — Appliance target scaffold
 
@@ -287,6 +287,11 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **0.18.3 — F2.7 font decision.** The Cheltenham Bold OTF is kept out of
+  the repository for good (licence unknown); `resources/img/README.md`
+  records what the file is and that the owner holds it, and
+  `tools/wordmark/make-wordmark.py` bakes the wordmark from it (paths
+  identical to the stored SVG; the viewBox is now the ink box).
 - **0.18.2 — F10.1 background on resize.** The panel background is an
   `IPanelControl` sized once at attach; in Size mode the view's `Layout`
   re-ran on every resize but never touched it, so a grown window showed the
