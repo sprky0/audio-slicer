@@ -57,7 +57,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F21 | Modifier actions II (**0.21.0**, the browser's planned list): **Pitch** action — a one-shot transposition of the covered tile's pass (Shift ±12, mods under one tile add, the total over master + slice clamped ±24, through the stretch stage so timing holds); ratchet **Tail** — with Len shorter than the tile the remainder plays through from its own position after the hits (a late join, voice mods kept); ratchet **Keep** (pitch mode) — hits shift through the stretch stage at the same speed instead of varispeed; mute / rev / gain / pitch modifiers under a tile now reach its ratchet hits too (they did not); action and mode changes seed the browser's defaults (Gain 50 %, ratchet 2 hits / Len 1, pitch mode a whole tone per hit, Pitch +12). Session keys `pitchAmt`, `tail`, `keepPitch`; `sequencer_test` 4b | Done |
 | F22 | Solo per track (**0.22.0**): `T<n> Solo` parameters as a block after the mix params (older state chunks `FROGS001/002` read their shorter parameter block; the chunk is now `FROGS003`), the engine's mix target is volume unless muted or shut by another track's solo (snapped while silent, smoothed otherwise), a Solo toggle in the track header, a marker on the strip tab, `solo` in the session, hook `track.solo`; `shell_test` solos a second track and hears the first go silent | Done |
 | F23 | Export II (**0.23.0**): 16 / 24-bit (`fg_sample_write_wav` with a bit depth, `fg_render_opts.bits`), **Fixed seed** so probability modifiers roll the same way on every bounce (the browser left export unseeded by design; now a choice), stems leave muted tracks out as the browser's export unchecked them. Panel: Depth in the first row, Fixed seed in the second. `render_test` 24-bit round trip; `shell_test` bounces 24-bit twice with a 50 % Rand modifier and compares bytes, and stems with a muted track | Done |
-| F24 | Feature table — every browser feature and every Frog feature side by side with status, as the input to the UI discussion (what we can do vs. what we should) | Planned |
+| F24 | Feature table (**0.24.0**): `docs/FEATURES.md` — every browser behaviour beside Frog's, by area, with the gaps (audition preview, track reset, clock indicator, per-step chop) and the candidates neither has, plus the UI questions the table raises. Input to the F12 discussion | Done |
 | F19 | Transient markers — detection + draggable non-uniform slice points (needs the model change noted in the JS NEXT.md) | Planned |
 
 ### F1 — Plan
@@ -294,6 +294,10 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F24 feature table (0.24.0).** `docs/FEATURES.md`. The browser's audio
+  feature set is covered except the audition preview and the track Reset,
+  both UI questions; what remains open is design, not engine work. Next:
+  the owner's UI and feature notes → F12.
 - **F23 export II (0.23.0).** 24-bit, a fixed seed, muted tracks out of
   the stems. F17 and F23 together cover the browser's export panel and its
   "later" items.

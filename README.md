@@ -33,7 +33,9 @@ triggers, recording (where the format has inputs) and sessions as presets
 are in. The appliance build passes its headless and offscreen-editor tests
 in the cross-build container; the on-device gates and the host's capture
 path wait for the board and the host repo. See [ROADMAP.md](ROADMAP.md) for per-feature
-status and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
+status, [docs/FEATURES.md](docs/FEATURES.md) for the feature table against
+the browser version, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for
+the design.
 
 ## Building (Mac)
 
