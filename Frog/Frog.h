@@ -4,6 +4,10 @@
 
 #include "engine/engine.h"
 #include "engine/frog_types.h"
+#include "engine/midimap.h"
+#include "engine/pattern.h"
+
+#include "IPlugQueue.h"
 
 #if IPLUG_EDITOR
 #include "ui/FrogView.h"
@@ -11,6 +15,7 @@
 #endif
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <thread>
@@ -51,6 +56,13 @@ enum ECtrlTags {
 
 using namespace iplug;
 using namespace igraphics;
+
+// methods the view reaches through frogui::Host; plain methods in editor-less builds
+#if IPLUG_EDITOR
+#define FROG_HOST override
+#else
+#define FROG_HOST
+#endif
 
 class Frog final : public Plugin
 #if IPLUG_EDITOR
@@ -105,6 +117,24 @@ public:
 	std::string ExportsDir() const;
 	const std::string& TrackPath(int track) const { return mTrackPaths[track]; }
 	const char* TrackName(int track) const { return mTrackNames[track].c_str(); }
+	// <data dir>: FROG_DATA_DIR, else RF_DATA_DIR (appliance), else app support.
+	// samples/, exports/, sessions/ and midimap.json live under it.
+	std::string DataDir() const;
+	// --- MIDI CC map (F16.2) --------------------------------------------------
+	// CCs queue from ProcessMidiMsg and are applied on the idle tick: a learn
+	// armed for a hook binds the next CC (any channel) and saves the map;
+	// otherwise the binding's hook is driven (the view's control when the
+	// editor is open, the plugin's own fallbacks for mix / transport /
+	// pattern hooks when it is not). Track hooks act on the focused track.
+	std::string MidiMapPath() const;
+	const fg_midimap& MidiMap() const { return mMap; }
+	void ArmLearn(const char* hook) FROG_HOST;
+	const char* LearnArmed() const FROG_HOST { return mLearnHook.c_str(); }
+	void ClearBinding(const char* hook) FROG_HOST;
+	bool HookBound(const char* hook) const FROG_HOST { return fg_midimap_is_bound(&mMap, hook); }
+	int MapRevision() const FROG_HOST { return mMapRevision; }
+	void FocusChanged(int track) FROG_HOST { mFocusTrack = track; }
+	int FocusTrack() const FROG_HOST { return mFocusTrack; }
 
 #if IPLUG_EDITOR
 	// frogui::Host
@@ -169,6 +199,11 @@ private:
 	void ServiceRecord();
 	void ServiceSession();
 	void ScanSessions();
+	void ServiceMidiMap();
+	bool ApplyHook(const char* name, double norm, bool press);
+	void SetParamFromMidi(int idx, double norm);
+	void LoadMidiMap();
+	void SaveMidiMap();
 
 	fg_engine* mEngine = nullptr;
 	std::vector<PendingLoad> mPendingLoads;   // main thread only
@@ -184,6 +219,13 @@ private:
 	std::string mSessionName;             // the loaded / saved session's name (no extension)
 	std::string mPendingSession;          // path queued for the idle tick
 	std::atomic<int> mPendingProgram{-1}; // from MIDI Program Change
+	IPlugQueue<IMidiMsg> mCcQueue{256};   // CCs, ProcessMidiMsg → idle tick
+	fg_midimap mMap;
+	int mMapRevision = 0;
+	std::string mLearnHook;               // the hook learn is armed for, or ""
+	std::chrono::steady_clock::time_point mLearnSince;
+	int mFocusTrack = 0;
+	fg_rng mRng;
 	std::thread mBounceThread;
 	std::atomic<bool> mBounceRunning{false};
 	std::atomic<int> mBounceDone{0};   // 1 ok, -1 failed, 0 none

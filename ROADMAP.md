@@ -50,7 +50,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F13 | Modifier lane — one modifier per step, prob / every-N, mute / rev / gain actions, rand / reset pattern actions via `beforeTile`, pinned settings panel, chip flash / firing / superseded visuals | Done 0.13.0 |
 | F14 | Ratchet + pattern tools — even / ramp / pitch hit layouts, span absorption, randomize with lock buckets, Reset Order / Reset All, lock, dup, refill, split / merge, Packed vs Gaps (rasterize → rebuild), grid-change inheritance, the All broadcast, zoom (Trim / Full) | Done 0.14.0 |
 | F15 | Multi-track — up to `FG_MAX_TRACKS`, a track tab strip with the focused track in the editor, add / duplicate / remove, in-phase join, master mix | Done 0.17.1 (`max_tracks` conf key open) |
-| F16 | Performance MIDI — note-triggered slices, CC map (learn), program change = session, `appliance.conf` keys | In progress 0.18.1 (notes and sessions-as-presets done; CC map and conf keys open) |
+| F16 | Performance MIDI — note-triggered slices, CC map (learn), program change = session, `appliance.conf` keys | In progress 0.18.5 (notes, sessions-as-presets and the CC map done; conf keys and per-track overrides open) |
 | F17 | Bounce — offline render of the master mix to `RF_DATA_DIR/exports`, one bar (LCM of the tracks' beats), normalised | Done 0.17.0 |
 | F18 | Record — two halves with one status: **host capture** (ALSA capture PCM + an input path on `Processor`), an L-item to open in ratfactory-linux-host and link here once numbered; **Frog side** (record into a track, re-slice live), developed on the Mac first. Both rows move together, same commit | In progress 0.18.0 (Frog side done; host half awaiting the L-item) |
 | F19 | Transient markers — detection + draggable non-uniform slice points (needs the model change noted in the JS NEXT.md) | Planned |
@@ -70,7 +70,8 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | ID | Subtask | Status |
 |----|---------|--------|
 | F16.1 | Note triggers: Note On on channel n plays one unit of track n − 1 (note 36 = unit 0, chromatic) at its natural rate, velocity as level, one-shot, ringing out, on top of whatever the sequencer plays; a visual record with tileIndex −1 sweeps the waveform. `fg_engine_midi_msg` carries channel messages into the per-block event list; `trigger_test`; the appliance shell test sends a note through the adapter | Done |
-| F16.2 | CC map with learn (volume, pan, mute, randomize, Amt, master), stored in the session | Planned |
+| F16.2 | CC map with learn (**0.18.5**): every `DragControl` is a named hook (49 of them, plus `slice.select` and `track.focus`); `<data dir>/midimap.json` binds CC → hook, omni by default with the focused track taking the track hooks and the selected slice the slice hooks (so one DAW channel or one knob bank follows what is in front); learn = hold a control 600 ms, next CC binds, saved to the file; bound controls carry a dot; the learn chip replaces the build stamp while armed (tap unbinds, 10 s cancels). Defaults cover mix / transport, Randomize / Reset / Amt, and the slice fades, gain, pitch, mute / rev / lock, curves. `engine/midimap.c` + `midimap_test`; the appliance `shell_test` drives params, Play / Stop, learn, the file and state v2 (`FROGS002`) headless. Plugin instances restore the map from the project; the app and the appliance treat the file as the rig's single source | Done |
+| F16.5 | Per-track binding overrides: a `track` field on a binding (or channel = track) so a multi-channel rig can address tracks explicitly instead of through focus. Out of scope until a controller asks for it; the table and file format leave room (a binding is `{channel, cc, target}` today) | Planned — breadcrumb |
 | F16.3 | Sessions as presets (0.18.1): `<data dir>/sessions/*.json`, sorted; **Save** writes the current state (named after the loaded session or a stamp), **Sessions** lists them to load; `StepPreset` and MIDI Program Change pick one and the load lands on the idle tick (never the audio thread); `GetCurrentPresetName / Program` feed the appliance panel's status line. `shell_test` saves two, steps, wraps, program-changes | Done |
 | F16.4 | `appliance.conf` keys: `max_tracks=`, `midi_trigger_base=`, `clock=` | Planned |
 
@@ -287,6 +288,17 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F16.2 CC map (0.18.5).** Decided with the owner: learn on the panel
+  plus a hand-editable `midimap.json`, global to the rig; omni by default;
+  the focused track takes every track-level CC (a DAW routes one channel
+  in most cases, so one knob bank follows whatever is in front); first
+  defaults are the mix / transport basics, the Randomize / Reset buttons
+  and the slice fades and modifiers; long term every control is hookable
+  with defaults only where they serve the core workflow, and per-track
+  binding overrides are a breadcrumb (F16.5). Built as named hooks on the
+  controls themselves, so adding a mappable control is one name; the
+  plugin applies the no-editor subset on its own. CCs queue from the MIDI
+  thread and land on the idle tick, never the audio thread.
 - **0.18.4 — F10.1 window minimum.** Decided: the Mac window re-lays out
   freely at any aspect (Size mode, not Tink's uniform Scale) but cannot
   shrink below 1024 × 600; `PLUG_MIN_WIDTH / HEIGHT` in config.h, max 8192.

@@ -3,6 +3,7 @@
 #include "IControl.h"
 #include "Style.h"
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <string>
@@ -22,7 +23,13 @@
 //   Button  momentary; onChange(1) on release inside
 // A param-linked control (paramIdx != kNoParameter) reads and writes the
 // plugin parameter instead of a local value; the mode follows the parameter.
+//
+// A control with a hook name is a MIDI target (F16.2): Drive() moves it from
+// a CC exactly as a finger would, a long press (600 ms, still) arms learn
+// for it, and a dot marks it while a binding exists.
 namespace frogui {
+
+constexpr int kLongPressMs = 600;
 
 class DragControl : public IControl {
 public:
@@ -73,6 +80,55 @@ public:
 		SetDisabled(!on);
 		return this;
 	}
+	// --- MIDI hook ---------------------------------------------------------
+	DragControl* WithHook(const char* name) {
+		mHook = name;
+		return this;
+	}
+	const std::string& Hook() const { return mHook; }
+	void SetOnLongPress(std::function<void()> fn) { mOnLongPress = std::move(fn); }
+	void SetBound(bool on) {
+		if (mBound != on) {
+			mBound = on;
+			SetDirty(false);
+		}
+	}
+	// A CC arriving: `norm` is value / 127, `press` its value >= 64. Values
+	// and enums follow the position, toggles flip and buttons fire on a
+	// press. A disabled control (nothing selected) ignores it.
+	void Drive(double norm, bool press) {
+		if (IsDisabled()) {
+			return;
+		}
+		switch (mMode) {
+			case Mode::Button:
+				if (press && mOnChange) {
+					mOnChange(1.);
+				}
+				break;
+			case Mode::Toggle:
+				if (press) {
+					Apply(mValue >= 0.5 ? 0. : 1.);
+				}
+				break;
+			case Mode::Enum: {
+				const int n = (int)mOptions.size();
+				Apply((double)std::min(n - 1, (int)std::lround(norm * (n - 1))));
+				break;
+			}
+			case Mode::Value:
+				if (Linked() && IsStepped() && P()->Type() == IParam::kTypeBool) {
+					if (press) {
+						Apply(Current() >= 0.5 ? 0. : 1.);
+					}
+				} else if (Linked()) {
+					Apply(P()->FromNormalized(norm));
+				} else {
+					Apply(Snap(Min() + norm * (Max() - Min())));
+				}
+				break;
+		}
+	}
 
 	void SetLocalValue(double v, bool notify = false) {
 		mValue = Clamp(v);
@@ -95,8 +151,22 @@ public:
 		mMoved = 0.f;
 		mDragging = false;
 		mPressed = true;
+		mLongPressed = false;
 		mStartValue = Current();
 		mAccum = 0.f;
+		if (mOnLongPress) {
+			SetAnimation([](IControl* c) {
+				auto* d = static_cast<DragControl*>(c);
+				if (c->GetAnimationProgress() >= 1.0) {
+					d->mLongPressed = true;
+					d->mPressed = false;
+					c->OnEndAnimation();
+					if (d->mOnLongPress) {
+						d->mOnLongPress();
+					}
+				}
+			}, kLongPressMs);
+		}
 		SetDirty(false);
 	}
 
@@ -106,6 +176,9 @@ public:
 		mLastY = y;
 		if (mMoved < 4.f) {
 			return;
+		}
+		if (GetAnimationFunction()) {
+			OnEndAnimation();   /* moving: not a long press */
 		}
 		mDragging = true;
 		if (mMode == Mode::Button || mMode == Mode::Toggle) {
@@ -125,6 +198,15 @@ public:
 	void OnMouseUp(float x, float y, const IMouseMod& mod) override {
 		const bool inside = mRECT.Contains(x, y);
 		mPressed = false;
+		if (GetAnimationFunction()) {
+			OnEndAnimation();
+		}
+		if (mLongPressed) {
+			mLongPressed = false;
+			mDragging = false;
+			SetDirty(false);
+			return;
+		}
 		if (!mDragging) {
 			// a tap
 			switch (mMode) {
@@ -223,6 +305,14 @@ public:
 		if (mPressed && !mDragging && mMode != Mode::Button) {
 			g.DrawRoundRect(kText, r, radius, &BLEND_50);
 		}
+		if (mPressed && GetAnimationFunction()) {
+			// the hold filling toward learn
+			const float p = (float)GetAnimationProgress();
+			g.FillRect(kLabelText, IRECT(r.L + 2.f, r.T + 1.f, r.L + 2.f + (r.W() - 4.f) * p, r.T + 3.f));
+		}
+		if (mBound) {
+			g.FillCircle(kLabelText, r.R - 6.f, r.T + 6.f, 2.5f);
+		}
 		const float size = std::max(11.f, std::min(16.f, r.H() * 0.36f));
 		const IColor col = disabled ? kTextDim : (mIntent == Intent::Label ? kLabelText : kTextOnFill);
 		g.DrawText(Text(size, col), text.c_str(), r, &mBlend);
@@ -305,6 +395,9 @@ private:
 	Formatter mFormat;
 	OnChange mOnChange;
 	double mValue = 0.;
+	std::string mHook;
+	std::function<void()> mOnLongPress;
+	bool mBound = false, mLongPressed = false;
 	// drag state
 	float mDownX = 0.f, mDownY = 0.f, mLastX = 0.f, mLastY = 0.f, mMoved = 0.f, mAccum = 0.f;
 	double mStartValue = 0.;

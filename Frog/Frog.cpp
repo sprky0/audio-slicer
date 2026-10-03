@@ -2,6 +2,7 @@
 #include "IPlug_include_in_plug_src.h"
 #include "IPlugPaths.h"
 
+#include "engine/edit.h"
 #include "engine/render.h"
 #include "engine/sample.h"
 #include "engine/session.h"
@@ -16,8 +17,10 @@
 #include <cstring>
 
 // State chunk layout: magic, then iPlug2's parameter block, then the session
-// JSON (the browser version's save object plus `samplePath` per track).
-static const char kStateMagic[] = "FROGS001";
+// JSON (the browser version's save object plus `samplePath` per track), then
+// (FROGS002) the MIDI map JSON. FROGS001 chunks still load.
+static const char kStateMagic[] = "FROGS002";
+static const char kStateMagicV1[] = "FROGS001";
 
 Frog::Frog(const InstanceInfo& info)
     : Plugin(info, MakeConfig(kNumParams, kNumPresets)) {
@@ -38,6 +41,8 @@ Frog::Frog(const InstanceInfo& info)
 	for (int t = 0; t < FG_MAX_TRACKS; t++) {
 		mNextColor[t] = fg_unit_count(fg_engine_pattern(mEngine, t));
 	}
+	fg_rng_seed(&mRng, 0xF406);
+	LoadMidiMap();
 	// Developer hooks: FROG_AUTOLOAD=<wav> loads into track 1 at start and
 	// FROG_AUTOPLAY=1 presses Play once it has loaded (screenshots, benches).
 	if (const char* auto1 = getenv("FROG_AUTOLOAD")) {
@@ -100,27 +105,32 @@ const fg_visual* Frog::CurrentNote(int track) const {
 
 // --- paths --------------------------------------------------------------
 
+std::string Frog::DataDir() const {
+	if (const char* env = getenv("FROG_DATA_DIR")) {
+		return env;
+	}
+	if (const char* rf = getenv("RF_DATA_DIR")) {
+		return rf;
+	}
+	WDL_String dir;
+	AppSupportPath(dir, false);
+	dir.Append("/Frog");
+	return dir.Get();
+}
+
 std::string Frog::SamplesDir() const {
 	if (const char* env = getenv("FROG_SAMPLES_DIR")) {
 		return env;
 	}
-	if (const char* rf = getenv("RF_DATA_DIR")) {
-		return std::string(rf) + "/samples";
-	}
-	WDL_String dir;
-	AppSupportPath(dir, false);
-	dir.Append("/Frog/samples");
-	return dir.Get();
+	return DataDir() + "/samples";
 }
 
 std::string Frog::ExportsDir() const {
-	if (const char* rf = getenv("RF_DATA_DIR")) {
-		return std::string(rf) + "/exports";
-	}
-	WDL_String dir;
-	AppSupportPath(dir, false);
-	dir.Append("/Frog/exports");
-	return dir.Get();
+	return DataDir() + "/exports";
+}
+
+std::string Frog::MidiMapPath() const {
+	return DataDir() + "/midimap.json";
 }
 
 static void EnsureDir(const std::string& path) {
@@ -198,13 +208,153 @@ bool Frog::DuplicateTrack(int from) {
 // --- sessions ------------------------------------------------------------
 
 std::string Frog::SessionsDir() const {
-	if (const char* rf = getenv("RF_DATA_DIR")) {
-		return std::string(rf) + "/sessions";
+	return DataDir() + "/sessions";
+}
+
+// --- MIDI CC map -------------------------------------------------------------
+
+void Frog::LoadMidiMap() {
+	if (!fg_midimap_load_file(MidiMapPath().c_str(), &mMap)) {
+		fg_midimap_defaults(&mMap);
 	}
-	WDL_String dir;
-	AppSupportPath(dir, false);
-	dir.Append("/Frog/sessions");
-	return dir.Get();
+	mMapRevision++;
+}
+
+void Frog::SaveMidiMap() {
+	EnsureDir(DataDir());
+	fg_midimap_save_file(MidiMapPath().c_str(), &mMap);
+	mMapRevision++;
+}
+
+void Frog::ArmLearn(const char* hook) {
+	mLearnHook = hook ? hook : "";
+	mLearnSince = std::chrono::steady_clock::now();
+}
+
+void Frog::ClearBinding(const char* hook) {
+	if (hook && hook[0] && fg_midimap_unbind(&mMap, hook)) {
+		SaveMidiMap();
+	}
+	mLearnHook.clear();
+}
+
+void Frog::SetParamFromMidi(int idx, double norm) {
+	BeginInformHostOfParamChange(idx);
+	SetParameterValue(idx, norm);
+	EndInformHostOfParamChange(idx);
+	SendParameterValueFromDelegate(idx, norm, true);
+}
+
+bool Frog::ApplyHook(const char* name, double norm, bool press) {
+#if IPLUG_EDITOR
+	if (mView && mView->ApplyHook(name, norm, press)) {
+		return true;
+	}
+#endif
+	// editor closed (or no editor): what the plugin can do on its own
+	const int t = std::max(0, std::min(mFocusTrack, mNumTracks - 1));
+	fg_pattern* p = fg_engine_pattern(mEngine, t);
+	auto is = [name](const char* n) { return strcmp(name, n) == 0; };
+	auto flip = [&](int idx) {
+		if (press) {
+			SetParamFromMidi(idx, GetParam(idx)->Bool() ? 0. : 1.);
+		}
+	};
+	auto edited = [&] {
+		fg_engine_publish(mEngine, t);
+#if IPLUG_EDITOR
+		if (mView) {
+			mView->PatternChanged(t);
+		}
+#endif
+	};
+	if (is("transport.play")) {
+		if (press) {
+			PlayAll();
+		}
+	} else if (is("transport.stop")) {
+		if (press) {
+			StopAll();
+		}
+	} else if (is("transport.bpm")) {
+		SetParamFromMidi(kParamBpm, norm);
+	} else if (is("master.gain")) {
+		SetParamFromMidi(kParamMasterGain, norm);
+	} else if (is("clock.source")) {
+		SetParamFromMidi(kParamClockSource, norm);
+	} else if (is("track.vol")) {
+		SetParamFromMidi(TrackParam(t, kTrackVolume), norm);
+	} else if (is("track.pan")) {
+		SetParamFromMidi(TrackParam(t, kTrackPan), norm);
+	} else if (is("track.mute")) {
+		flip(TrackParam(t, kTrackMute));
+	} else if (is("track.focus")) {
+		mFocusTrack = std::min(mNumTracks - 1, (int)std::lround(norm * (mNumTracks - 1)));
+	} else if (is("track.pitch")) {
+		p->masterPitch = (int)std::lround(-12 + norm * 24);
+		edited();
+	} else if (is("track.loop")) {
+		if (press) {
+			p->loop = !p->loop;
+			edited();
+		}
+	} else if (is("pattern.amt")) {
+		p->randLevel = (int)std::lround(norm * 100);
+		edited();
+	} else if (is("pattern.randomize")) {
+		if (press && fg_edit_randomize(p, p->randLevel / 100.0, &mRng)) {
+			edited();
+		}
+	} else if (is("pattern.resetOrder")) {
+		if (press) {
+			fg_edit_reset_order(p);
+			edited();
+		}
+	} else if (is("pattern.resetAll")) {
+		if (press) {
+			fg_edit_reset_all(p);
+			edited();
+		}
+	} else if (is("session.next")) {
+		if (press) {
+			StepPreset(+1);
+		}
+	} else if (is("session.prev")) {
+		if (press) {
+			StepPreset(-1);
+		}
+	} else if (is("session.save")) {
+		if (press) {
+			SaveSession(mSessionName);
+		}
+	} else {
+		return false;
+	}
+	return true;
+}
+
+void Frog::ServiceMidiMap() {
+	using namespace std::chrono;
+	if (!mLearnHook.empty() && steady_clock::now() - mLearnSince > seconds(10)) {
+		mLearnHook.clear();   // armed and nothing came: give up
+	}
+	IMidiMsg msg;
+	while (mCcQueue.Pop(msg)) {
+		const int channel = (msg.mStatus & 0x0F) + 1;
+		const int cc = msg.mData1;
+		const int value = msg.mData2;
+		if (!mLearnHook.empty()) {
+			// learned bindings are omni; an explicit channel is a hand edit of the file
+			if (fg_midimap_bind(&mMap, 0, cc, mLearnHook.c_str())) {
+				SaveMidiMap();
+			}
+			mLearnHook.clear();
+			continue;
+		}
+		if (const fg_binding* b = fg_midimap_find(&mMap, channel, cc)) {
+			ApplyHook(b->target, value / 127.0, value >= 64);
+		}
+	}
 }
 
 void Frog::ScanSessions() {
@@ -511,13 +661,22 @@ bool Frog::SerializeState(IByteChunk& chunk) const {
 	chunk.Put(&len);
 	chunk.PutBytes(json, len);
 	free(json);
+	char* map = fg_midimap_write(&mMap);
+	if (!map) {
+		return false;
+	}
+	const int mlen = (int)strlen(map);
+	chunk.Put(&mlen);
+	chunk.PutBytes(map, mlen);
+	free(map);
 	return true;
 }
 
 int Frog::UnserializeState(const IByteChunk& chunk, int startPos) {
 	char magic[8];
 	int pos = chunk.GetBytes(magic, 8, startPos);
-	if (pos < 0 || memcmp(magic, kStateMagic, 8) != 0) {
+	const bool v1 = pos >= 0 && memcmp(magic, kStateMagicV1, 8) == 0;
+	if (pos < 0 || (!v1 && memcmp(magic, kStateMagic, 8) != 0)) {
 		// not ours (or an older layout): take the parameters only
 		return UnserializeParams(chunk, startPos);
 	}
@@ -538,6 +697,25 @@ int Frog::UnserializeState(const IByteChunk& chunk, int startPos) {
 	}
 	free(s);
 	OnParamReset(kPresetRecall);
+	if (v1) {
+		return pos;
+	}
+	int mlen = 0;
+	pos = chunk.Get(&mlen, pos);
+	if (pos < 0 || mlen <= 0 || mlen > (1 << 20)) {
+		return pos;
+	}
+	std::string map((size_t)mlen, '\0');
+	pos = chunk.GetBytes(&map[0], mlen, pos);
+#if !defined(APP_API) && !defined(HEADLESS_API)
+	// a plugin instance keeps the map its project saved; the standalone app
+	// and the appliance treat the file as the rig's single source
+	fg_midimap parsed;
+	if (pos >= 0 && fg_midimap_parse(map.c_str(), &parsed)) {
+		mMap = parsed;
+		mMapRevision++;
+	}
+#endif
 	return pos;
 }
 
@@ -667,6 +845,8 @@ void Frog::ProcessMidiMsg(const IMidiMsg& msg) {
 		fg_engine_midi(mEngine, (uint8_t)status, msg.mOffset);
 	} else if ((status & 0xF0) == 0xC0) {
 		mPendingProgram.store(msg.mData1);   // a session, loaded on the idle tick
+	} else if ((status & 0xF0) == 0xB0) {
+		mCcQueue.Push(msg);                  // the CC map, applied on the idle tick
 	} else if (status >= 0x80 && status < 0xF0) {
 		fg_engine_midi_msg(mEngine, (uint8_t)status, (uint8_t)msg.mData1, (uint8_t)msg.mData2, msg.mOffset);
 	}
@@ -721,6 +901,7 @@ void Frog::OnParamChange(int paramIdx) {
 }
 
 void Frog::OnIdle() {
+	ServiceMidiMap();
 	ServiceLoads();
 	ServiceRetired();
 	ServiceBounce();

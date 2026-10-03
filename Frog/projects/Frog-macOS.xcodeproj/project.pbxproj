@@ -386,6 +386,15 @@
 		6D867C1D73D9B174ABD5D067 /* cJSON.c in Sources */ = {isa = PBXBuildFile; fileRef = 7F16AFF35BE875299D55C55A /* cJSON.c */; };
 		53E049EBB4569A0CCB83B992 /* cJSON.c in Sources */ = {isa = PBXBuildFile; fileRef = 7F16AFF35BE875299D55C55A /* cJSON.c */; };
 		4841658E413DE028C1E6CC60 /* cJSON.c in Sources */ = {isa = PBXBuildFile; fileRef = 7F16AFF35BE875299D55C55A /* cJSON.c */; };
+		B6C85B79D99E8C413CAA7A58 /* midimap.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A2C92C7680EC3277D5307F1 /* midimap.c */; };
+		8639B0467B1E3FD6BDF990FB /* midimap.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A2C92C7680EC3277D5307F1 /* midimap.c */; };
+		AED4B03E6E59C5388E32062B /* midimap.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A2C92C7680EC3277D5307F1 /* midimap.c */; };
+		E0225B7C5D8200BF33004FD1 /* midimap.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A2C92C7680EC3277D5307F1 /* midimap.c */; };
+		F922D13B50C6884CEC0F1228 /* midimap.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A2C92C7680EC3277D5307F1 /* midimap.c */; };
+		361B079FFAE62A384DAC8361 /* midimap.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A2C92C7680EC3277D5307F1 /* midimap.c */; };
+		9F5BAF02550421BDA43204FE /* midimap.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A2C92C7680EC3277D5307F1 /* midimap.c */; };
+		EF3D73142517258DD3EE8D3E /* midimap.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A2C92C7680EC3277D5307F1 /* midimap.c */; };
+		AE17F3FB899F9EF5842C2A90 /* midimap.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A2C92C7680EC3277D5307F1 /* midimap.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -914,6 +923,7 @@
 		5676CF7F46C7D8211C1BB8D0 /* voice.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = voice.c; path = ../engine/voice.c; sourceTree = "<group>"; };
 		1AB86988970C69D1D7FA883D /* wsola.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = wsola.c; path = ../engine/wsola.c; sourceTree = "<group>"; };
 		7F16AFF35BE875299D55C55A /* cJSON.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cJSON.c; path = ../engine/third_party/cJSON.c; sourceTree = "<group>"; };
+		1A2C92C7680EC3277D5307F1 /* midimap.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = midimap.c; path = ../engine/midimap.c; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -985,6 +995,7 @@
 				52FBBED30D0CF143001C8B8A /* config.h */,
 				4F3862EE2014BBEC0009F402 /* Frog.h */,
 				4F3862ED2014BBEC0009F402 /* Frog.cpp */,
+				1A2C92C7680EC3277D5307F1 /* midimap.c */,
 				7F16AFF35BE875299D55C55A /* cJSON.c */,
 				1AB86988970C69D1D7FA883D /* wsola.c */,
 				5676CF7F46C7D8211C1BB8D0 /* voice.c */,
@@ -2461,6 +2472,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B6C85B79D99E8C413CAA7A58 /* midimap.c in Sources */,
 				58DB634F8624119A165A5A30 /* cJSON.c in Sources */,
 				6289875882A0A2975867F72A /* wsola.c in Sources */,
 				FAAE0C851B4A8E31935D227D /* voice.c in Sources */,
@@ -2501,6 +2513,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8639B0467B1E3FD6BDF990FB /* midimap.c in Sources */,
 				BE4E0EDFFA26FC0896666CAF /* cJSON.c in Sources */,
 				9E60E84CA02CCE56CD82F586 /* wsola.c in Sources */,
 				62D5591BE68F7145D939E69E /* voice.c in Sources */,
@@ -2522,6 +2535,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AED4B03E6E59C5388E32062B /* midimap.c in Sources */,
 				F36F7A045E3F823DAE7F1325 /* cJSON.c in Sources */,
 				AE873E1C8BC60DA0CC5933C5 /* wsola.c in Sources */,
 				AAF41715A9F048F914720DEC /* voice.c in Sources */,
@@ -2564,6 +2578,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E0225B7C5D8200BF33004FD1 /* midimap.c in Sources */,
 				B77953058135DB46D4948EF7 /* cJSON.c in Sources */,
 				FDCC4FF3F73974F2B0AD4612 /* wsola.c in Sources */,
 				31DD065B6577C01807EA4516 /* voice.c in Sources */,
@@ -2620,6 +2635,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F922D13B50C6884CEC0F1228 /* midimap.c in Sources */,
 				320B2FDE4C4C86B3E1D63342 /* cJSON.c in Sources */,
 				B87B256789D07B754A871D36 /* wsola.c in Sources */,
 				0C8DF580DDBB45AFA319BEDD /* voice.c in Sources */,
@@ -2663,6 +2679,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				361B079FFAE62A384DAC8361 /* midimap.c in Sources */,
 				E065F80F9CF72799357B4D62 /* cJSON.c in Sources */,
 				332CB2AAEEEEE1896F26B8A8 /* wsola.c in Sources */,
 				D357A5AE174DD73FDF60FA43 /* voice.c in Sources */,
@@ -2734,6 +2751,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9F5BAF02550421BDA43204FE /* midimap.c in Sources */,
 				6D867C1D73D9B174ABD5D067 /* cJSON.c in Sources */,
 				C71DBB50366C5F0AF9D7426E /* wsola.c in Sources */,
 				3A02B6DEB72804525B5508C7 /* voice.c in Sources */,
@@ -2777,6 +2795,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EF3D73142517258DD3EE8D3E /* midimap.c in Sources */,
 				53E049EBB4569A0CCB83B992 /* cJSON.c in Sources */,
 				F97BFD1AD73337DA4E95E998 /* wsola.c in Sources */,
 				5D3E8CC50304F6642DED203C /* voice.c in Sources */,
@@ -2833,6 +2852,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AE17F3FB899F9EF5842C2A90 /* midimap.c in Sources */,
 				4841658E413DE028C1E6CC60 /* cJSON.c in Sources */,
 				B270D37E1A84B4226046487B /* wsola.c in Sources */,
 				37E2D735A35B58685E7A1032 /* voice.c in Sources */,

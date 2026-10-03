@@ -1,4 +1,4 @@
-# Frog — architecture (as built, 0.18)
+# Frog — architecture (as built, 0.18.5)
 
 Frog is a sample slicer and loop performer: load a clip, declare how many
 beats it spans, and it is cut into a grid of slices you rearrange, resize,
@@ -129,6 +129,16 @@ every lane under ThreadSanitizer.
 - Sessions as presets: `sessions/*.json`; Save, a list to load, `StepPreset`
   and MIDI Program Change pick one and the load lands on the idle tick;
   `GetCurrentPresetName / Program` feed the appliance panel.
+- CC map (`engine/midimap.c` holds the table and its JSON; the shell
+  resolves hook names): CCs queue from `ProcessMidiMsg` (SPSC) and are
+  applied on the idle tick. A hook is a named `DragControl`; with the
+  editor open the control is driven exactly as by a finger (`Drive`), with
+  it closed the plugin applies the mix / transport / pattern / session
+  subset itself on the focused track. Learn is a 600 ms hold on a control
+  (an IControl animation), the next CC binds omni and the map is saved to
+  `<data dir>/midimap.json`. The state chunk (`FROGS002`) carries the map
+  too; plugin instances restore it, the app and the appliance keep the
+  file as the single source.
 
 ## 7. The UI (`ui/`)
 

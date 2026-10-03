@@ -69,7 +69,43 @@ headless shell test and renders the editor offscreen as a check. See
   `exports/`, sessions to `sessions/` beside it.
 - **MIDI**: clock (0xF8 / Start / Continue / Stop) when Clock is set to
   MIDI; Note On on channel n plays a slice of track n (note 36 = slice 1);
-  Program Change loads a session by index.
+  Program Change loads a session by index; CCs drive the panel through the
+  map below.
+- **CC map**: every control is a named *hook*; `<data dir>/midimap.json`
+  says which CC drives which. **Learn**: hold a control still for 0.6 s,
+  then move the controller; the chip at the top right names the hook while
+  armed, a tap on it unbinds, and 10 s without a CC cancels. A dot marks a
+  bound control. Learned bindings answer on any channel; set `"channel"` to
+  1–16 in the file for a specific one (an explicit channel outranks `any`).
+  Track hooks act on the focused track and slice hooks on the selected
+  slice, so one single-channel controller follows whatever is in front.
+  Values and enums follow the CC position, toggles flip and buttons fire on
+  a value ≥ 64. The file is the rig's single source for the app and the
+  appliance; a plugin instance also keeps its map in the project.
+
+  Defaults (all `any` channel):
+
+  | CC | hook | CC | hook | CC | hook |
+  |---|---|---|---|---|---|
+  | 7 | track.vol | 20 | track.mute | 70 | slice.fadeIn |
+  | 10 | track.pan | 21 | track.pitch | 71 | slice.fadeOut |
+  | 14 | master.gain | 22 | pattern.amt | 72 | slice.gain |
+  | 27 | transport.perform | 23 | track.loop | 73 | slice.pitch |
+  | 28 | transport.play | 24 | pattern.randomize | 74 | slice.mute |
+  | 29 | transport.stop | 25 | pattern.resetOrder | 75 | slice.rev |
+  | 30 | session.prev | 26 | pattern.resetAll | 76 | slice.lock |
+  | 31 | session.next | 79 | slice.select | 77 | slice.curveIn |
+  | | | 80 | track.focus | 78 | slice.curveOut |
+
+  Also hookable, no default: `transport.bpm`, `clock.source`, `export.start`,
+  `session.save`, `record.toggle`, `track.load`, `track.beats`, `track.step`,
+  `slice.all`, `slice.split`, `slice.merge`, `pattern.dupPrev`,
+  `pattern.dupNext`, `pattern.refill`, `pattern.mode`, `view.trim`,
+  `view.full`, and the modifier panel's `mod.action`, `mod.fire`,
+  `mod.chance`, `mod.level`, `mod.mode`, `mod.hits`, `mod.to`, `mod.pitch`,
+  `mod.len`, `mod.remove`, `mod.done`. With the editor closed (a plugin
+  with its window shut) the mix, transport, pattern and session hooks still
+  respond; slice and modifier hooks need the panel.
 - **Developer hooks**: `FROG_AUTOLOAD=<wav>` loads a file into track 1 at
   start, `FROG_AUTOPLAY=1` presses Play once it has loaded.
 - **Offline**: `frog-render session.json out.wav [--beats N] [--rate HZ]`

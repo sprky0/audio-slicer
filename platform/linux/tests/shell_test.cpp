@@ -8,6 +8,7 @@
 
 #include "Frog.h"
 #include "FrogProcessor.h"
+#include "engine/midimap.h"
 #include "engine/sample.h"
 
 #include <cmath>
@@ -256,6 +257,78 @@ int main() {
 	b.proc.idle();
 	check(b.proc.currentPreset().name == "alpha", "then loads program 0", b.proc.currentPreset().name);
 	check(fg_engine_pattern(b.plug.Engine(), 0)->tiles[1].muted, "the restored pattern came with it");
+
+	std::printf("=== CC map: defaults, learn, file, state ===\n");
+	remove("/tmp/frog-shell-data/midimap.json");
+	auto cc = [&](Rig& r, int channel, int num, int value) {
+		const unsigned char m[3] = {(unsigned char)(0xB0 | (channel - 1)), (unsigned char)num, (unsigned char)value};
+		r.proc.midi(m, 3, 0);
+		r.blocks(1);
+	};
+	cc(b, 5, 7, 64);
+	check(b.plug.GetParam(TrackParam(0, kTrackVolume))->Value() == 100., "a CC waits for the idle tick");
+	b.proc.idle();
+	check(std::fabs(b.plug.GetParam(TrackParam(0, kTrackVolume))->Value() - 100. * 64. / 127.) < 1e-6, "CC 7 on channel 5 (omni) sets the focused track's volume");
+	cc(b, 1, 20, 127);
+	b.proc.idle();
+	check(b.plug.GetParam(TrackParam(0, kTrackMute))->Bool(), "CC 20 press toggles mute on");
+	cc(b, 1, 20, 0);
+	b.proc.idle();
+	check(b.plug.GetParam(TrackParam(0, kTrackMute))->Bool(), "its release is ignored");
+	cc(b, 1, 20, 100);
+	b.proc.idle();
+	check(!b.plug.GetParam(TrackParam(0, kTrackMute))->Bool(), "the next press toggles it off");
+	b.plug.StopAll();
+	b.blocks(1);
+	cc(b, 1, 28, 127);
+	b.proc.idle();
+	b.blocks(1);   // the Play command lands on the next block
+	check(fg_engine_grid_running(b.plug.Engine()), "CC 28 is Play");
+	cc(b, 1, 29, 127);
+	b.proc.idle();
+	b.blocks(1);
+	check(!fg_engine_grid_running(b.plug.Engine()), "CC 29 is Stop");
+	// learn: arm for a hook, the next CC binds it (any channel) and the map is saved
+	const double panBefore = b.plug.GetParam(TrackParam(0, kTrackPan))->Value();
+	b.plug.ArmLearn("track.pan");
+	check(std::string(b.plug.LearnArmed()) == "track.pan", "learn armed");
+	cc(b, 3, 33, 5);
+	b.proc.idle();
+	check(b.plug.LearnArmed()[0] == 0, "the CC disarmed learn");
+	const fg_binding* bd = fg_midimap_find(&b.plug.MidiMap(), 1, 33);
+	check(bd && std::string(bd->target) == "track.pan" && bd->channel == 0, "CC 33 is now track.pan on any channel");
+	check(fg_midimap_find(&b.plug.MidiMap(), 1, 10) == nullptr, "the old CC 10 binding is gone");
+	check(b.plug.GetParam(TrackParam(0, kTrackPan))->Value() == panBefore, "the learning CC itself was not applied");
+	cc(b, 1, 33, 127);
+	b.proc.idle();
+	check(std::fabs(b.plug.GetParam(TrackParam(0, kTrackPan))->Value() - 100.) < 1e-6, "CC 33 drives the pan");
+	{
+		fg_midimap onDisk;
+		check(fg_midimap_load_file("/tmp/frog-shell-data/midimap.json", &onDisk), "midimap.json written under RF_DATA_DIR");
+		const fg_binding* d = fg_midimap_find(&onDisk, 1, 33);
+		check(d && std::string(d->target) == "track.pan", "with the learned binding");
+	}
+	Rig c;
+	bd = fg_midimap_find(&c.plug.MidiMap(), 1, 33);
+	check(bd && std::string(bd->target) == "track.pan", "a new instance starts from the saved file");
+	c.plug.ClearBinding("track.pan");
+	check(!c.plug.HookBound("track.pan"), "ClearBinding unbinds");
+	{
+		fg_midimap onDisk;
+		fg_midimap_load_file("/tmp/frog-shell-data/midimap.json", &onDisk);
+		check(!fg_midimap_is_bound(&onDisk, "track.pan"), "and saves");
+	}
+	{
+		iplug::IByteChunk ch;
+		check(c.plug.SerializeState(ch), "state v2 serialises (session + map)");
+		Rig d;
+		check(d.plug.UnserializeState(ch, 0) == ch.Size(), "and a fresh instance consumes the whole chunk");
+	}
+	// an unbound CC does nothing; a bound hook that needs the editor (slice.*) is simply ignored headless
+	cc(c, 1, 99, 127);
+	cc(c, 1, 70, 127);
+	c.proc.idle();
+	check(true, "unbound and editor-only hooks are ignored without the editor");
 
 	std::printf("%s\n", gFail == 0 ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED");
 	return gFail == 0 ? 0 : 1;
