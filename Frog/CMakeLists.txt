@@ -18,6 +18,12 @@ add_custom_target(FrogVersionStamp ALL
 	VERBATIM
 )
 
+# The C11 engine: a static library every plugin format links, plus the
+# frog-render tool (session JSON + samples → WAV).
+include(engine/engine.cmake)
+frog_add_engine_library()
+frog_add_render_tool()
+
 iplug_add_plugin(${PROJECT_NAME}
 	SOURCES
 		Frog.cpp
@@ -32,5 +38,6 @@ iplug_add_plugin(${PROJECT_NAME}
 foreach(fmt app vst3 au clap aax)
 	if(TARGET ${PROJECT_NAME}-${fmt})
 		add_dependencies(${PROJECT_NAME}-${fmt} FrogVersionStamp)
+		target_link_libraries(${PROJECT_NAME}-${fmt} PRIVATE frog_engine)
 	endif()
 endforeach()

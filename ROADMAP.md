@@ -35,8 +35,8 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F1 | Plan — survey tink-vst / ratfactory-linux-host, inventory the JS app, write PORT_PLAN.md + this roadmap, split `js` / `native` branches, settle name / record / storage decisions | Done 0.1.0, 0.1.1 |
 | F2 | Scaffold — iPlug2 fork submodule (`Rat-Factory/iPlug2` @ ratfactory-linux, same pin as tink-vst), `Frog/config.h`, CMake + Xcode, empty plugin builds APP / VST3 / AU on the Mac, `.clang-format`, version stamp | Done 0.2.0, 0.2.1 |
 | F3 | Appliance target scaffold — `platform/linux/` in tink-vst's shape (plugin lib, appliance binary, systemd unit, Docker arm64 build, deploy script); the arm64 cross-build must succeed from the Mac. On-device gates (boots on the Pi 3B with silence, `--render-wav`) are recorded when the board is at hand and do not block F4–F11 (↔ L5, L15) | Done 0.3.0 (cross-build); on-device gate open |
-| F4 | Test harness — `engine/tests/run-tests.sh` (no framework, "ALL CHECKS PASSED"), `tools/render` CLI, fixtures dir, TSan race target | Planned |
-| F5 | Engine: model + grid — C11 `sl_pattern` (tiles, gaps, mods, caps), beat grid in samples (tempo re-anchor, sync phase, nudge), session JSON v1 = JS `version: 3` import / export | Planned |
+| F4 | Test harness — `engine/tests/run-tests.sh` (no framework, "ALL CHECKS PASSED"), `tools/render` CLI, fixtures dir, TSan race target | In progress 0.5.0 (race target with F6) |
+| F5 | Engine: model + grid — C11 `fg_pattern` (tiles, gaps, mods, caps), beat grid in samples (tempo re-anchor, sync phase, nudge), session JSON v1 = JS `version: 3` import / export | Done 0.5.0 |
 | F6 | Engine: sequencer + voices — per-block absolute scheduling (skip-past, late-join offset), voice pool, raw / reversed region reader, envelopes (lin / exp / log / s, gain ceiling), declick, track vol / pan / mute, stereo mix | Planned |
 | F7 | Engine: time-stretch + pitch — streaming WSOLA per voice (coarse-to-fine lag search), 4-point interpolating pitch / varispeed reader, bypass at factor 1, Pi 3 cost measured | Planned |
 | F8 | Engine: parity — bounce JS fixtures natively, unstretched paths within −80 dBFS, stretched paths by per-step RMS + onset; remove `public/` from this branch | Planned |
@@ -106,6 +106,29 @@ README documents the series.
 | F3.5 | **Cross-repo action, pending:** `ratfactory-linux-host/scripts/pi-switch-unit.sh` lists the appliance units it will switch between (`APPLIANCE_UNITS`); `frog-appliance.service` must be added there before `deploy-to-pi.sh --service` can make Frog the boot unit. Owner edit in the host repo; link the L-item or commit here when done | Planned — awaiting the host edit |
 | F3.6 | On-device gate: deploy to the Pi 3B, boots to silence with 0 xruns, `--render-wav` on the board. Recorded when the board is at hand | Planned — needs the board |
 
+### F4 — Test harness
+
+| ID | Subtask | Status |
+|----|---------|--------|
+| F4.1 | `Frog/engine/tests/run-tests.sh` — compiles every `*_test.c` against `engine/*.c` with plain `cc -std=c11`, passes on "ALL CHECKS PASSED"; `check.h` holds the two macros; `FROG_TESTS_OUT / BUILD_ONLY / PREBUILT` for cross-running on the Pi | Done |
+| F4.2 | `Frog/tools/render/main.c` — loads a session and prints its summary; `--seconds / --bars / --rate / --samples / --seed` parsed, the bounce itself lands with F6. Built by `frog_add_render_tool()` (engine.cmake) from Frog/CMakeLists.txt | Done |
+| F4.3 | `engine/tests/fixtures/` — `js-session-basic.json`, a browser-version save exercising every tile and modifier field | Done |
+| F4.4 | TSan race target (`*_race_test.c`, `run-tests.sh race`) for the pattern mailbox and sample swap | Planned — with F6 |
+
+### F5 — Engine: model + grid
+
+Namespace prefix is `fg_` (PORT_PLAN.md sketched `sl_` before the name was
+chosen). Vendored: cJSON 1.7.18 (MIT) and dr_wav 0.14 (MIT-0 / public
+domain) under `engine/third_party/`.
+
+| ID | Subtask | Status |
+|----|---------|--------|
+| F5.1 | `frog_types.h` — caps (8 tracks, 128 units, 512 tiles, 128 mods, 8 voices, 128 hits), `fg_tile`, `fg_mod`, `fg_pattern` (grid, region, pitch, rand level, loop, tiles, mods), `fg_track_state`, `fg_session`; all fixed-size | Done |
+| F5.2 | `grid.c` — beat ↔ sample mapping, restart, phase-continuous `set_tempo`, `sync_phase`, `nudge`; `grid_test` | Done |
+| F5.3 | `pattern.c` — unit count, step beats, lattice snap, default row, validation (clamps, duplicate / out-of-range mods dropped, broken rows rebuilt), `mods_in_span`, `bar_pos`, `mod_fires` on a seedable xorshift, ratchet hit layout + per-hit rate; `pattern_test` checks the layouts against the browser version's formulas | Done |
+| F5.4 | `session.c` — cJSON read / write of the browser save object (`slicers`, `seq.tiles`, `seq.mods`, `master`, `midi`, `seqEditMode`) plus `format` / `formatVersion` / `samplePath`; round trip is byte-equal on the pattern; `session_test` | Done |
+| F5.5 | `engine/engine.cmake` — `frog_engine` static library + `frog-render`, included by Frog/CMakeLists.txt and linked into every format target; the Xcode project gains the engine when the plugin shell consumes it (F9) | Done |
+
 ### F7 — Time-stretch + pitch
 
 Streaming WSOLA inside the voice replaces the JS pre-render cache (reasoning
@@ -154,6 +177,10 @@ pre-render cache and record the measurement.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F5 complete, F4 in progress (0.5.0).** The engine's model, grid and
+  session format exist in C11 with 108 checks across three tests; the
+  browser fixture imports field for field and round-trips. The render tool
+  loads sessions; it bounces once F6 lands.
 - **F3 scaffold complete (0.3.0).** `platform/linux/` in tink-vst's shape;
   the arm64 cross-build runs from the Mac in the host repo's Docker image and
   ends in a 2 s offline render. Binary links no GPU library; the editor is a
