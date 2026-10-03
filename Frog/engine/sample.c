@@ -1,4 +1,5 @@
 #include "sample.h"
+#include "frog_types.h"
 
 #define DR_WAV_IMPLEMENTATION
 #include "third_party/dr_wav.h"
@@ -83,7 +84,7 @@ int64_t fg_resample(const float* in, int64_t inFrames, double inRate, float* out
 				continue;
 			}
 			const double win = bessel_i0(beta * sqrt(1.0 - u * u)) / i0b;
-			const double arg = M_PI * d * cutoff;
+			const double arg = FG_PI * d * cutoff;
 			const double sinc = fabs(arg) < 1e-9 ? 1.0 : sin(arg) / arg;
 			const double w = sinc * win * cutoff;
 			wsum += sinc * win;  /* unity-gain normalisation */

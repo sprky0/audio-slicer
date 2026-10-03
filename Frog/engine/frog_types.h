@@ -22,6 +22,7 @@ extern "C" {
 #define FG_EPS 1e-6
 #define FG_NAME_MAX 256
 #define FG_PATH_MAX 512
+#define FG_PI 3.14159265358979323846   /* M_PI is not strict C11 */
 
 typedef enum {
 	FG_CURVE_LINEAR = 0,

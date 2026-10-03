@@ -1,4 +1,5 @@
 #include "wsola.h"
+#include "frog_types.h"
 
 #include <math.h>
 #include <string.h>
@@ -11,7 +12,7 @@ static void ensure_window(void) {
 		return;
 	}
 	for (int i = 0; i < FG_WSOLA_FRAME; i++) {
-		g_win[i] = (float)(0.5 - 0.5 * cos((2.0 * M_PI * i) / (FG_WSOLA_FRAME - 1)));
+		g_win[i] = (float)(0.5 - 0.5 * cos((2.0 * FG_PI * i) / (FG_WSOLA_FRAME - 1)));
 	}
 	g_winReady = true;
 }

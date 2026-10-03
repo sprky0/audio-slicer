@@ -20,7 +20,7 @@ double fg_curve_shape(int curve, double x) {
 		case FG_CURVE_LOG:
 			return sqrt(x);
 		case FG_CURVE_S:
-			return (1.0 - cos(M_PI * x)) * 0.5;
+			return (1.0 - cos(FG_PI * x)) * 0.5;
 		default:
 			return x;
 	}

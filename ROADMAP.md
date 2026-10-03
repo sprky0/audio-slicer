@@ -38,7 +38,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F4 | Test harness — `engine/tests/run-tests.sh` (no framework, "ALL CHECKS PASSED"), `tools/render` CLI, fixtures dir, TSan race target | Done 0.5.0, 0.6.0 |
 | F5 | Engine: model + grid — C11 `fg_pattern` (tiles, gaps, mods, caps), beat grid in samples (tempo re-anchor, sync phase, nudge), session JSON v1 = JS `version: 3` import / export | Done 0.5.0 |
 | F6 | Engine: sequencer + voices — per-block absolute scheduling (skip-past, late-join offset), voice pool, raw / reversed region reader, envelopes (lin / exp / log / s, gain ceiling), declick, track vol / pan / mute, stereo mix | Done 0.6.0 |
-| F7 | Engine: time-stretch + pitch — streaming WSOLA per voice (coarse-to-fine lag search), 4-point interpolating pitch / varispeed reader, bypass at factor 1, Pi 3 cost measured | In progress (code landed with 0.6.0; tests + measurement open) |
+| F7 | Engine: time-stretch + pitch — streaming WSOLA per voice (coarse-to-fine lag search), 4-point interpolating pitch / varispeed reader, bypass at factor 1, Pi 3 cost measured | Done 0.7.0 (F7.4 board measurement open) |
 | F8 | Engine: parity — bounce JS fixtures natively, unstretched paths within −80 dBFS, stretched paths by per-step RMS + onset; remove `public/` from this branch | Planned |
 | F9 | Plugin shell — iPlug2 params (BPM, per-track vol / pan / pitch / mute, edit mode), state chunks with version, `OnIdle` loading + decode + resample, MIDI clock PLL (appliance stamps + plugin offsets), Start / Continue / Stop, host transport sync in DAWs | Planned |
 | F10 | MVP UI — owned controls: DragControl, TransportBar, WaveformControl (region handles, zoom / trim, playhead), TileRowControl (select, drag, edge-resize, mini waveforms), slice toolbar, FileList; band layout engine with stable IDs; edit / perform layouts; Pi 3 render budget | Planned |
@@ -151,10 +151,10 @@ pre-render cache and record the measurement.
 
 | ID | Subtask | Status |
 |----|---------|--------|
-| F7.1 | Port `createTimeStretcher` as a streaming stage with fixed work buffers (frame 1024, hop 256, Hann, COLA normalisation) | Planned |
-| F7.2 | Coarse-to-fine lag search; stereo lag from channel 0 | Planned |
-| F7.3 | 4-point interpolating reader after the stretch stage: pitch ratio × ratchet hit rate (varispeed), cumulative clamp ±48 st | Planned |
-| F7.4 | Measure on the Pi 3B: `--render-wav` realtime ratio and load-meter peaks for 1 / 4 / 8 stretched voices; record in docs/ | Planned |
+| F7.1 | `wsola.c`: streaming port of `createTimeStretcher` — frame 1024, hop 256, Hann, COLA normalisation into an 8192-sample ring, output on demand (`fg_wsola_get`), late join at any output offset, reversed input read backwards without a copy; `wsola_test` (identity at 1×, length + pitch + level at 2× and 0.5×, reverse, late join) | Done |
+| F7.2 | Coarse-to-fine lag search (every 4th lag over ±256, then ±3), stereo lag from channel 0 | Done |
+| F7.3 | Voice reader: 4-point Hermite at pitch ratio × ratchet hit rate; through the engine a +12 st tile keeps its slot at 880 Hz, −12 st at 220 Hz, a pitch-mode ratchet plays hit 1 an octave up, and an 80 bpm fill stretches 1.5× at 440 Hz with no gap before the cut (`wsola_test`) | Done |
+| F7.4 | Measure. `engine/tests/bench_stretch.c` (every slot stretched + pitched, stereo). **Apple M1 Pro, 48 k / 128:** 1 track 0.90 % of a core (worst block 2.8 % of the period), 4 tracks 3.68 % (0.92 % per track); at natural tempo the stage bypasses (4 tracks 0.50 %). The suite and the bench also build and pass under aarch64 GCC 12 in the host's build container (QEMU, so no timing). **Pi 3B figures: pending the board** — expected an order of magnitude above the M1 per core, inside the 25 % budget | In progress — needs the board |
 
 ### F10 — MVP UI
 
@@ -190,6 +190,12 @@ pre-render cache and record the measurement.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F7 complete bar the board measurement (0.7.0).** Streaming WSOLA
+  under test on its own and through the engine (pitch shift, varispeed
+  ratchet, slow-tempo fill). `M_PI` replaced by `FG_PI`: the engine is
+  strict C11 and now builds and passes under aarch64 GCC in the host's
+  container as well as clang on the Mac. Benchmark harness recorded with
+  M1 Pro numbers; the Pi 3B run waits for the hardware.
 - **F6 complete, F4 complete (0.6.0).** The engine plays: sequencer, voices,
   envelopes, mix, and the lock-free lanes between threads, all under test
   (sequencer_test 138 checks, TSan quiet). `frog-render` bounces sessions

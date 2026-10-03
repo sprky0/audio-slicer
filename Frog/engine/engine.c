@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "frog_types.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -155,8 +156,8 @@ static void pan_gains(double pan, double* gl, double* gr) {
 	/* equal-power pan as the Web Audio StereoPannerNode applies to a stereo
 	 * input: x = pan ≤ 0 ? pan + 1 : pan */
 	const double x = pan <= 0.0 ? pan + 1.0 : pan;
-	*gl = cos(x * M_PI / 2.0);
-	*gr = sin(x * M_PI / 2.0);
+	*gl = cos(x * FG_PI / 2.0);
+	*gr = sin(x * FG_PI / 2.0);
 }
 
 void fg_engine_reset(fg_engine* e, double sampleRate, int maxBlock) {
