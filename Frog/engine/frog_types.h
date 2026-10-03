@@ -120,6 +120,7 @@ typedef struct {
 	double volume;  /* 0..1 */
 	double pan;     /* −1..1 */
 	bool muted;
+	bool solo;      /* while any track is soloed, the others are silent */
 } fg_track_mix;
 
 typedef struct {

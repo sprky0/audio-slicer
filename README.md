@@ -102,14 +102,14 @@ headless shell test and renders the editor offscreen as a check. See
   | 31 | session.next | 79 | slice.select | 77 | slice.curveIn |
   | | | 80 | track.focus | 78 | slice.curveOut |
 
-  Also hookable, no default: `transport.bpm`, `clock.source`, `export.open`,
+  Also hookable, no default: `track.solo`, `transport.bpm`, `clock.source`, `export.open`,
   `export.loops`, `export.tracks`, `export.normalize`, `export.go`,
   `export.cancel`, `session.save`, `record.toggle`, `track.load`, `track.beats`, `track.step`,
   `slice.all`, `slice.split`, `slice.merge`, `pattern.dupPrev`,
   `pattern.dupNext`, `pattern.refill`, `pattern.mode`, `view.trim`,
   `view.full`, and the modifier panel's `mod.action`, `mod.fire`,
   `mod.chance`, `mod.level`, `mod.mode`, `mod.hits`, `mod.to`, `mod.pitch`,
-  `mod.len`, `mod.remove`, `mod.done`. With the editor closed (a plugin
+  `mod.len`, `mod.shift`, `mod.tail`, `mod.keep`, `mod.remove`, `mod.done`. With the editor closed (a plugin
   with its window shut) the mix, transport, pattern and session hooks still
   respond; slice and modifier hooks need the panel.
 - **Export**: the Export button opens a two-row panel: Length (1, 2, 4 or

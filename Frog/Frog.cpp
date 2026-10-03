@@ -20,8 +20,10 @@
 // State chunk layout: magic, then iPlug2's parameter block, then the session
 // JSON (the browser version's save object plus `samplePath` per track), then
 // (FROGS002) the MIDI map JSON. FROGS001 chunks still load.
-static const char kStateMagic[] = "FROGS002";
+static const char kStateMagic[] = "FROGS003";
 static const char kStateMagicV1[] = "FROGS001";
+static const char kStateMagicV2[] = "FROGS002";   /* params before the solo block */
+static const int kParamsBeforeSolo = kParamSoloBase;
 
 Frog::Frog(const InstanceInfo& info)
     : Plugin(info, MakeConfig(kNumParams, kNumPresets)) {
@@ -36,6 +38,11 @@ Frog::Frog(const InstanceInfo& info)
 		GetParam(TrackParam(t, kTrackPan))->InitDouble(name, 0., -100., 100., 1., "%");
 		snprintf(name, sizeof name, "T%d Mute", t + 1);
 		GetParam(TrackParam(t, kTrackMute))->InitBool(name, false);
+	}
+	for (int t = 0; t < FG_MAX_TRACKS; t++) {
+		char name[32];
+		snprintf(name, sizeof name, "T%d Solo", t + 1);
+		GetParam(TrackSoloParam(t))->InitBool(name, false);
 	}
 
 	mEngine = fg_engine_create(FG_MAX_TRACKS, 1);
@@ -691,6 +698,7 @@ void Frog::SnapshotSession(fg_session& out) const {
 		ts.mix.volume = GetParam(TrackParam(t, kTrackVolume))->Value() / 100.;
 		ts.mix.pan = GetParam(TrackParam(t, kTrackPan))->Value() / 100.;
 		ts.mix.muted = GetParam(TrackParam(t, kTrackMute))->Bool();
+		ts.mix.solo = GetParam(TrackSoloParam(t))->Bool();
 		ts.pattern = *fg_engine_pattern(const_cast<fg_engine*>(mEngine), t);
 	}
 }
@@ -716,6 +724,7 @@ void Frog::ApplySession(const fg_session& s) {
 		GetParam(TrackParam(t, kTrackVolume))->Set(ts.mix.volume * 100.);
 		GetParam(TrackParam(t, kTrackPan))->Set(ts.mix.pan * 100.);
 		GetParam(TrackParam(t, kTrackMute))->Set(ts.mix.muted ? 1. : 0.);
+		GetParam(TrackSoloParam(t))->Set(ts.mix.solo ? 1. : 0.);
 	}
 	if (s.masterBpm > 0.) {
 		GetParam(kParamBpm)->Set(s.masterBpm);
@@ -761,11 +770,21 @@ int Frog::UnserializeState(const IByteChunk& chunk, int startPos) {
 	char magic[8];
 	int pos = chunk.GetBytes(magic, 8, startPos);
 	const bool v1 = pos >= 0 && memcmp(magic, kStateMagicV1, 8) == 0;
-	if (pos < 0 || (!v1 && memcmp(magic, kStateMagic, 8) != 0)) {
+	const bool v2 = pos >= 0 && memcmp(magic, kStateMagicV2, 8) == 0;
+	if (pos < 0 || (!v1 && !v2 && memcmp(magic, kStateMagic, 8) != 0)) {
 		// not ours (or an older layout): take the parameters only
 		return UnserializeParams(chunk, startPos);
 	}
-	pos = UnserializeParams(chunk, pos);
+	if (v1 || v2) {
+		// the parameter block predates the solo params: read what it holds
+		for (int i = 0; i < kParamsBeforeSolo && pos >= 0; i++) {
+			double v = 0.;
+			pos = chunk.Get(&v, pos);
+			GetParam(i)->Set(v);
+		}
+	} else {
+		pos = UnserializeParams(chunk, pos);
+	}
 	int len = 0;
 	pos = chunk.Get(&len, pos);
 	if (pos < 0 || len <= 0 || len > (16 << 20)) {
@@ -972,7 +991,9 @@ void Frog::OnParamChange(int paramIdx) {
 			}
 			break;
 		default:
-			if (paramIdx >= kParamTrackBase) {
+			if (paramIdx >= kParamSoloBase) {
+				fg_engine_set_solo(mEngine, paramIdx - kParamSoloBase, GetParam(paramIdx)->Bool());
+			} else if (paramIdx >= kParamTrackBase) {
 				const int t = (paramIdx - kParamTrackBase) / kNumTrackParams;
 				const int which = (paramIdx - kParamTrackBase) % kNumTrackParams;
 				if (which == kTrackMute) {

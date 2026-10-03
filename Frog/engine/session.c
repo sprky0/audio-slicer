@@ -145,6 +145,7 @@ static void parse_track(const cJSON* o, fg_track_state* t) {
 	t->mix.volume = num(o, "volume", 1.0);
 	t->mix.pan = num(o, "pan", 0.0);
 	t->mix.muted = boolean(o, "muted", false);
+	t->mix.solo = boolean(o, "solo", false);
 
 	fg_pattern* p = &t->pattern;
 	fg_pattern_init(p);
@@ -310,6 +311,7 @@ static cJSON* write_track(const fg_track_state* t) {
 	cJSON_AddNumberToObject(o, "volume", t->mix.volume);
 	cJSON_AddNumberToObject(o, "pan", t->mix.pan);
 	cJSON_AddBoolToObject(o, "muted", t->mix.muted);
+	cJSON_AddBoolToObject(o, "solo", t->mix.solo);
 	cJSON_AddNumberToObject(o, "masterPitch", p->masterPitch);
 	cJSON_AddNumberToObject(o, "randLevel", p->randLevel);
 

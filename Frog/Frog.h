@@ -42,11 +42,17 @@ enum EParams {
 	kParamMasterGain,   // dB
 	kParamClockSource,  // fg_clock_source
 	kParamTrackBase,    // then FG_MAX_TRACKS × kNumTrackParams
-	kNumParams = kParamTrackBase + FG_MAX_TRACKS * kNumTrackParams
+	// Solo (F22) is a block of its own after the mix params, so the indices
+	// above (and state chunks written before it) keep their layout.
+	kParamSoloBase = kParamTrackBase + FG_MAX_TRACKS * kNumTrackParams,
+	kNumParams = kParamSoloBase + FG_MAX_TRACKS
 };
 
 inline int TrackParam(int track, ETrackParam which) {
 	return kParamTrackBase + track * kNumTrackParams + which;
+}
+inline int TrackSoloParam(int track) {
+	return kParamSoloBase + track;
 }
 
 enum ECtrlTags {
@@ -170,6 +176,7 @@ public:
 	bool DuplicateTrackUI(int from) override { return DuplicateTrack(from); }
 	bool TrackHasSample(int track) const override { return fg_engine_has_sample(mEngine, track); }
 	bool TrackMuted(int track) const override { return GetParam(TrackParam(track, kTrackMute))->Bool(); }
+	bool TrackSoloed(int track) const override { return GetParam(TrackSoloParam(track))->Bool(); }
 	const char* BounceStatus() const override;
 	const frogui::Peaks& TrackPeaks(int track) const override { return mPeaks[track]; }
 	void LoadSample(int track, const std::string& path) override { RequestLoadSample(track, path); }
@@ -185,6 +192,7 @@ public:
 	int ParamTrackVolume(int track) const override { return TrackParam(track, kTrackVolume); }
 	int ParamTrackPan(int track) const override { return TrackParam(track, kTrackPan); }
 	int ParamTrackMute(int track) const override { return TrackParam(track, kTrackMute); }
+	int ParamTrackSolo(int track) const override { return TrackSoloParam(track); }
 	void OnUIClose() override;
 #endif
 

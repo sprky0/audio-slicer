@@ -135,6 +135,30 @@ int main() {
 	a.plug.GetParam(TrackParam(0, kTrackVolume))->Set(100.);
 	a.plug.OnParamChange(TrackParam(0, kTrackVolume));
 
+	std::printf("=== solo ===\n");
+	check(a.plug.DuplicateTrack(0), "a second track to solo against");
+	a.proc.idle();
+	a.plug.GetParam(TrackSoloParam(1))->Set(1.);
+	a.plug.OnParamChange(TrackSoloParam(1));
+	a.plug.GetParam(TrackParam(1, kTrackMute))->Set(1.);   /* and mute it: nothing should sound */
+	a.plug.OnParamChange(TrackParam(1, kTrackMute));
+	a.plug.StopAll();
+	a.blocks(3);
+	a.capture.clear();
+	a.plug.PlayAll();
+	a.blocks(2);
+	check(a.peakIn(0, a.capture.size()) == 0.0, "track 2 soloed: track 1 is silent");
+	a.plug.GetParam(TrackSoloParam(1))->Set(0.);
+	a.plug.OnParamChange(TrackSoloParam(1));
+	a.plug.StopAll();
+	a.blocks(3);
+	a.capture.clear();
+	a.plug.PlayAll();
+	a.blocks(2);
+	check(std::fabs(a.capture[0] - m * 1.0 / 16.0) < 1e-6, "solo off: track 1 is back at its level");
+	check(a.plug.RemoveTrack(), "second track removed");
+	a.proc.idle();
+
 	std::printf("=== MIDI clock drives tempo and transport ===\n");
 	a.plug.StopAll();
 	a.plug.GetParam(kParamClockSource)->Set(FG_CLOCK_MIDI);

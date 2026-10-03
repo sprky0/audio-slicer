@@ -64,6 +64,7 @@ public:
 	virtual bool DuplicateTrackUI(int from) = 0;
 	virtual bool TrackHasSample(int track) const = 0;
 	virtual bool TrackMuted(int track) const = 0;
+	virtual bool TrackSoloed(int track) const = 0;
 	virtual int& NextColor(int track) = 0;
 	virtual fg_edit_mode& EditMode() = 0;
 	// the latest sounding slot for the track, or nullptr
@@ -76,6 +77,7 @@ public:
 	virtual int ParamTrackVolume(int track) const = 0;
 	virtual int ParamTrackPan(int track) const = 0;
 	virtual int ParamTrackMute(int track) const = 0;
+	virtual int ParamTrackSolo(int track) const = 0;
 	// MIDI CC map (F16.2): learn is armed for one hook at a time, bindings
 	// live in the plugin, the revision ticks when the map changes.
 	virtual void ArmLearn(const char* hook) = 0;
@@ -378,6 +380,7 @@ private:
 		mVol = hk("track.vol", add(new DragControl(z, "Vol", mHost.ParamTrackVolume(mTrack)), mHeader, 1.5f));
 		mPan = hk("track.pan", add(new DragControl(z, "Pan", mHost.ParamTrackPan(mTrack)), mHeader, 1.5f));
 		mTrackMute = hk("track.mute", add(new DragControl(z, "Mute", mHost.ParamTrackMute(mTrack), Intent::Stop), mHeader, 1.f));
+		mTrackSolo = hk("track.solo", add(new DragControl(z, "Solo", mHost.ParamTrackSolo(mTrack), Intent::Label), mHeader, 1.f));
 		mLoop = hk("track.loop", add(DragControl::Toggle(z, "Loop", true, Intent::Go, [this](double v) {
 			Pat()->loop = v >= 0.5;
 			Publish();
@@ -400,6 +403,7 @@ private:
 			             i.name = mHost.TrackName(t);
 			             i.hasSample = mHost.TrackHasSample(t);
 			             i.muted = mHost.TrackMuted(t);
+			             i.solo = mHost.TrackSoloed(t);
 			             const fg_visual* v = mHost.CurrentNote(t);
 			             i.playing = v && !v->silent && fg_engine_now(mHost.Engine()) < v->stop;
 			             return i;
@@ -683,6 +687,7 @@ private:
 		mVol->SetParamIdx(mHost.ParamTrackVolume(mTrack));
 		mPan->SetParamIdx(mHost.ParamTrackPan(mTrack));
 		mTrackMute->SetParamIdx(mHost.ParamTrackMute(mTrack));
+		mTrackSolo->SetParamIdx(mHost.ParamTrackSolo(mTrack));
 		SyncFromPattern();
 		SampleChanged(mTrack);
 		mStrip->SetDirty(false);
@@ -942,7 +947,7 @@ private:
 	TileRowControl* mTiles = nullptr;
 	ModLaneControl* mModLane = nullptr;
 	TrackStripControl* mStrip = nullptr;
-	DragControl *mVol = nullptr, *mPan = nullptr, *mTrackMute = nullptr;
+	DragControl *mVol = nullptr, *mPan = nullptr, *mTrackMute = nullptr, *mTrackSolo = nullptr;
 	DragControl *mModAction = nullptr, *mModFire = nullptr, *mModValue = nullptr, *mModLevel = nullptr, *mModMode = nullptr;
 	DragControl *mModHits = nullptr, *mModTo = nullptr, *mModPitch = nullptr, *mModLen = nullptr;
 	DragControl *mModShift = nullptr, *mModTail = nullptr, *mModKeep = nullptr;

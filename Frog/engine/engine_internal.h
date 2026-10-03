@@ -31,6 +31,7 @@ typedef struct {
 	double* busR;
 	double volume, pan;        /* targets */
 	bool muted;
+	bool solo;
 	double gainL, gainR;       /* smoothed applied gains (volume × mute × pan) */
 	double curL, curR;
 	bool hasPattern;

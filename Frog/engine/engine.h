@@ -34,6 +34,7 @@ typedef enum {
 	FG_CMD_GRID_NUDGE,   /* a = samples */
 	FG_CMD_SET_MIX,      /* track; a = volume, b = pan */
 	FG_CMD_SET_MUTE,     /* track; a = 0/1 */
+	FG_CMD_SET_SOLO,     /* track; a = 0/1 */
 	FG_CMD_CLOCK_SOURCE  /* a = fg_clock_source */
 } fg_cmd_type;
 
@@ -108,6 +109,7 @@ void fg_engine_track_stop(fg_engine* e, int track);
 void fg_engine_set_tempo(fg_engine* e, double bpm);
 void fg_engine_set_mix(fg_engine* e, int track, double volume, double pan);
 void fg_engine_set_mute(fg_engine* e, int track, bool muted);
+void fg_engine_set_solo(fg_engine* e, int track, bool solo);
 /* Linear master level applied to the mix (default 1). */
 void fg_engine_set_master_gain(fg_engine* e, double gain);
 

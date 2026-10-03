@@ -18,6 +18,7 @@ public:
 		std::string name;
 		bool playing = false;
 		bool muted = false;
+		bool solo = false;
 		bool hasSample = false;
 	};
 	using InfoFn = std::function<Info(int track)>;
@@ -44,7 +45,7 @@ public:
 		unsigned key = 0;
 		for (int t = 0; t < *mNum; t++) {
 			const Info i = mInfo(t);
-			key = key * 8u + (i.playing ? 1u : 0u) + (i.muted ? 2u : 0u) + (i.hasSample ? 4u : 0u);
+			key = key * 16u + (i.playing ? 1u : 0u) + (i.muted ? 2u : 0u) + (i.hasSample ? 4u : 0u) + (i.solo ? 8u : 0u);
 		}
 		key = key * 16u + (unsigned)*mFocus;
 		if (key != mKey) {
@@ -90,6 +91,9 @@ public:
 			}
 			if (i.muted) {
 				g.FillRoundRect(kBg, tab, 4.f, &BLEND_50);
+			}
+			if (i.solo) {
+				g.FillRoundRect(kLabelText, IRECT(tab.R - 10.f, tab.T + 3.f, tab.R - 3.f, tab.T + 10.f), 2.f);   /* solo marker */
 			}
 			if (t == *mFocus) {
 				g.DrawRoundRect(kText, tab, 4.f, 0, 2.f);

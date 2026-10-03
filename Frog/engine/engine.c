@@ -163,6 +163,8 @@ static void pan_gains(double pan, bool mono, double* gl, double* gr) {
 	*gr = sin(x * FG_PI / 2.0);
 }
 
+static double mix_target(const fg_engine* e, const fg_track* t);
+
 void fg_engine_reset(fg_engine* e, double sampleRate, int maxBlock) {
 	e->sampleRate = sampleRate > 0.0 ? sampleRate : 48000.0;
 	e->maxBlock = maxBlock > 0 ? maxBlock : 512;
@@ -183,23 +185,39 @@ void fg_engine_reset(fg_engine* e, double sampleRate, int maxBlock) {
 			fg_voice_stop(&t->voices[v]);
 		}
 		fg_seq_stop(&t->seq);
-		t->curL = t->gainL = t->muted ? 0.0 : t->volume;
+		t->curL = t->gainL = mix_target(e, t);
 		t->curR = t->gainR = t->curL;
 	}
 }
 
 /* --- audio thread --------------------------------------------------------- */
 
+/* The level a track's mix smooths toward: volume, unless muted or shut by
+ * another track's solo. */
+static double mix_target(const fg_engine* e, const fg_track* t) {
+	if (t->muted) {
+		return 0.0;
+	}
+	if (!t->solo) {
+		for (int i = 0; i < e->nTracks; i++) {
+			if (e->tracks[i].solo) {
+				return 0.0;
+			}
+		}
+	}
+	return t->volume;
+}
+
 /* A mix change while nothing sounds cannot click: take it at once, so a
  * level set before the first note (a loaded session, an offline render) is
  * exact from the first sample. */
-static void snap_gain_if_silent(fg_track* t) {
+static void snap_gain_if_silent(fg_engine* e, fg_track* t) {
 	for (int v = 0; v < FG_MAX_VOICES; v++) {
 		if (t->voices[v].active) {
 			return;
 		}
 	}
-	t->curL = t->curR = t->muted ? 0.0 : t->volume;
+	t->curL = t->curR = mix_target(e, t);
 }
 
 static void apply_cmd(fg_engine* e, const fg_cmd* c, int64_t blockStart) {
@@ -271,14 +289,22 @@ static void apply_cmd(fg_engine* e, const fg_cmd* c, int64_t blockStart) {
 				fg_track* t = &e->tracks[c->track];
 				t->volume = c->a < 0.0 ? 0.0 : (c->a > 1.0 ? 1.0 : c->a);
 				t->pan = c->b < -1.0 ? -1.0 : (c->b > 1.0 ? 1.0 : c->b);
-				snap_gain_if_silent(t);
+				snap_gain_if_silent(e, t);
 			}
 			break;
 		case FG_CMD_SET_MUTE:
 			if (c->track >= 0 && c->track < e->nTracks) {
 				fg_track* t = &e->tracks[c->track];
 				t->muted = c->a != 0.0;
-				snap_gain_if_silent(t);
+				snap_gain_if_silent(e, t);
+			}
+			break;
+		case FG_CMD_SET_SOLO:
+			if (c->track >= 0 && c->track < e->nTracks) {
+				e->tracks[c->track].solo = c->a != 0.0;
+				for (int i = 0; i < e->nTracks; i++) {
+					snap_gain_if_silent(e, &e->tracks[i]);   /* every track's target moved */
+				}
 			}
 			break;
 		case FG_CMD_CLOCK_SOURCE: {
@@ -469,7 +495,7 @@ void fg_engine_process(fg_engine* e, double* const* out, int nCh, int nFrames) {
 		}
 
 		/* volume × mute, smoothed, then equal-power pan into the output */
-		const double target = t->muted ? 0.0 : t->volume;
+		const double target = mix_target(e, t);
 		const bool mono = !t->smp || t->smp->nCh < 2;
 		double gl, gr;
 		pan_gains(t->pan, mono, &gl, &gr);
@@ -548,6 +574,11 @@ void fg_engine_set_mix(fg_engine* e, int track, double volume, double pan) {
 
 void fg_engine_set_master_gain(fg_engine* e, double gain) {
 	e->masterGain = (gain >= 0.0 && gain < 1e6) ? gain : 1.0;   /* read on the audio thread; a plain double store is atomic on our targets */
+}
+
+void fg_engine_set_solo(fg_engine* e, int track, bool solo) {
+	fg_cmd c = {FG_CMD_SET_SOLO, track, solo ? 1.0 : 0.0, 0.0, 0.0};
+	cmd_push(e, &c);
 }
 
 void fg_engine_set_mute(fg_engine* e, int track, bool muted) {
@@ -748,6 +779,7 @@ void fg_engine_load_session(fg_engine* e, const fg_session* s) {
 		fg_engine_publish(e, i);
 		fg_engine_set_mix(e, i, ts->mix.volume, ts->mix.pan);
 		fg_engine_set_mute(e, i, ts->mix.muted);
+		fg_engine_set_solo(e, i, ts->mix.solo);
 	}
 	if (s->masterBpm > 0.0) {
 		fg_engine_set_tempo(e, s->masterBpm);

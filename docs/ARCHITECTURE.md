@@ -1,4 +1,4 @@
-# Frog — architecture (as built, 0.21.0)
+# Frog — architecture (as built, 0.22.0)
 
 Frog is a sample slicer and loop performer: load a clip, declare how many
 beats it spans, and it is cut into a grid of slices you rearrange, resize,
@@ -108,9 +108,11 @@ every lane under ThreadSanitizer.
 
 ## 6. The plugin shell (`Frog.h/.cpp`)
 
-- Parameters: BPM, Master, Clock source, and Vol / Pan / Mute for all eight
-  tracks (a fixed list: parameters are added, never removed).
-- State chunk `FROGS001`: iPlug2 parameter block, then the session JSON.
+- Parameters: BPM, Master, Clock source, Vol / Pan / Mute for all eight
+  tracks, then a Solo block (a fixed list: parameters are added, never
+  removed; a new block goes after the existing ones).
+- State chunk `FROGS003`: iPlug2 parameter block, then the session JSON,
+  then the MIDI map JSON; `FROGS001/002` chunks still load.
   Restoring publishes the patterns, seeds the mix parameters and queues the
   sample loads.
 - `OnIdle` (main thread, ~20 ms on the appliance): one sample load per
@@ -144,7 +146,7 @@ every lane under ThreadSanitizer.
   it closed the plugin applies the mix / transport / pattern / session
   subset itself on the focused track. Learn is a 600 ms hold on a control
   (an IControl animation), the next CC binds omni and the map is saved to
-  `<data dir>/midimap.json`. The state chunk (`FROGS002`) carries the map
+  `<data dir>/midimap.json`. The state chunk (since `FROGS002`) carries the map
   too; plugin instances restore it, the app and the appliance keep the
   file as the single source.
 
