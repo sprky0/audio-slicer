@@ -48,6 +48,16 @@ bool fg_edit_move(fg_pattern* p, int from, int to) {
 	if (from < 0 || from >= p->nTiles || to < 0 || to >= p->nTiles || from == to) {
 		return false;
 	}
+	/* a lock is pinned in position: it cannot be dragged, and nothing
+	 * reorders across it (that would shift where it starts) */
+	if (p->tiles[from].locked) {
+		return false;
+	}
+	for (int k = from < to ? from + 1 : to; k <= (from < to ? to : from - 1); k++) {
+		if (p->tiles[k].locked) {
+			return false;
+		}
+	}
 	const fg_tile t = p->tiles[from];
 	if (from < to) {
 		memmove(&p->tiles[from], &p->tiles[from + 1], sizeof(fg_tile) * (size_t)(to - from));
@@ -181,9 +191,15 @@ void fg_edit_resize_end(const fg_pattern* snap, int i, double dU, fg_pattern* ou
 	dU = fg_snap_unit(dU);
 	double want = dU > 0.0 ? fmin(dU, U - s[i].src - s[i].w) : fmax(dU, FG_MIN_W - s[i].w);
 	double moved = 0.0;
+	if (s[i].locked) {
+		return;   /* a locked tile keeps its length */
+	}
 	if (want > 0.0) {
 		double need = want;
 		for (int k = i + 1; k <= last && need > FG_EPS; k++) {
+			if (s[k].locked) {
+				break;   /* a lock is a wall: growth stops at it */
+			}
 			const double give = fmin(need, s[k].w);
 			out->tiles[k].src = s[k].src + give;   /* head overwritten */
 			out->tiles[k].w = s[k].w - give;
@@ -193,6 +209,9 @@ void fg_edit_resize_end(const fg_pattern* snap, int i, double dU, fg_pattern* ou
 	} else if (want < 0.0) {
 		double surplus = -want;
 		for (int k = i + 1; k <= last && surplus > FG_EPS; k++) {
+			if (s[k].locked) {
+				break;
+			}
 			const double recv = fmin(surplus, U - s[k].src - s[k].w);
 			out->tiles[k].w = s[k].w + recv;
 			surplus -= recv;
@@ -213,9 +232,15 @@ void fg_edit_resize_start(const fg_pattern* snap, int i, double dU, fg_pattern* 
 	dU = fg_snap_unit(dU);
 	double want = fmin(fmax(dU, -(U - s[i].src - s[i].w)), s[i].w - FG_MIN_W);
 	double moved = 0.0;
+	if (s[i].locked) {
+		return;
+	}
 	if (want < 0.0) {
 		double need = -want;
 		for (int k = i - 1; k >= 0 && need > FG_EPS; k--) {
+			if (s[k].locked) {
+				break;
+			}
 			const double give = fmin(need, s[k].w);
 			out->tiles[k].w = s[k].w - give;   /* tail truncated */
 			need -= give;
@@ -224,6 +249,9 @@ void fg_edit_resize_start(const fg_pattern* snap, int i, double dU, fg_pattern* 
 	} else if (want > 0.0) {
 		double surplus = want;
 		for (int k = i - 1; k >= 0 && surplus > FG_EPS; k--) {
+			if (s[k].locked) {
+				break;
+			}
 			const double recv = fmin(surplus, U - s[k].src - s[k].w);
 			out->tiles[k].w = s[k].w + recv;
 			surplus -= recv;
@@ -267,8 +295,11 @@ bool fg_edit_split(fg_pattern* p, int i, int newColor) {
 }
 
 bool fg_edit_merge(fg_pattern* p, int i) {
-	if (p->nTiles <= 1 || i < 0 || i >= p->nTiles || p->tiles[i].gap) {
+	if (p->nTiles <= 1 || i < 0 || i >= p->nTiles || p->tiles[i].gap || p->tiles[i].locked) {
 		return false;
+	}
+	if ((i > 0 && p->tiles[i - 1].locked) || (i == 0 && p->nTiles > 1 && p->tiles[1].locked)) {
+		return false;   /* never absorb into or out of a lock */
 	}
 	const double U = fg_unit_count(p);
 	if (i > 0 && !p->tiles[i - 1].gap) {
@@ -551,6 +582,11 @@ void fg_edit_set_grid(fg_pattern* p, int beats, int denom, int* nextColor) {
 	p->denom = denom;
 	fg_pattern_validate(p);   /* clamps beats / denom; the row is rebuilt below anyway */
 	const int Unew = fg_unit_count(p);
+	if (Unew == Uold && old.nTiles > 0) {
+		/* the same step count (4 beats at 1/16 → 8 at 1/8): nothing to re-cut,
+		 * the arrangement and the modifiers stay */
+		return;
+	}
 	fg_pattern_default_tiles(p);
 	if (nextColor) {
 		*nextColor = Unew;

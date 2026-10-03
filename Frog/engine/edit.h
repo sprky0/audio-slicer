@@ -32,7 +32,7 @@ bool fg_edit_randomize(fg_pattern* p, double level, fg_rng* rng);
 void fg_edit_reset_all(fg_pattern* p);
 
 /* Packed reorder: move the tile at `from` so it sits at index `to`. */
-bool fg_edit_move(fg_pattern* p, int from, int to);
+bool fg_edit_move(fg_pattern* p, int from, int to);   /* false when a lock is dragged or crossed */
 
 /* --- width ------------------------------------------------------------------ */
 

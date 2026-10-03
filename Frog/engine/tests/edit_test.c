@@ -92,6 +92,37 @@ int main(void) {
 	CHECK(P.tiles[0].src == 0.0 && P.tiles[3].src == 3.0);
 	CHECK(!fg_edit_move(&P, 2, 2) && !fg_edit_move(&P, -1, 2));
 
+	/* locks are pinned in packed mode too (F20): not dragged, not crossed,
+	 * a wall for the resize cascade, never merged */
+	natural16();
+	P.tiles[5].locked = true;
+	CHECK(!fg_edit_move(&P, 5, 2));
+	CHECK(!fg_edit_move(&P, 2, 7));
+	CHECK(fg_edit_move(&P, 1, 3) && P.tiles[5].locked && P.tiles[5].src == 5.0);
+	natural16();
+	P.tiles[6].locked = true;
+	fg_edit_resize_end(&P, 4, 3.0, &O);   /* eats tile 5 only */
+	CHECK(O.tiles[4].w == 2.0 && O.tiles[5].locked && O.tiles[5].src == 6.0 && O.tiles[5].w == 1.0);
+	CHECK_NEAR(fg_pattern_sum_w(&O), 16.0, 1e-9);
+	fg_edit_resize_end(&P, 6, 1.0, &O);
+	CHECK(O.tiles[6].w == 1.0 && O.tiles[7].w == 1.0);
+	fg_edit_resize_start(&P, 7, -2.0, &O);
+	CHECK(O.tiles[7].w == 1.0 && O.tiles[6].w == 1.0);
+	CHECK(!fg_edit_merge(&P, 6) && !fg_edit_merge(&P, 7) && fg_edit_merge(&P, 3));
+	/* a grid change to the same unit count keeps the arrangement and the modifiers */
+	natural16();
+	fg_edit_move(&P, 0, 5);
+	P.nMods = 1;
+	memset(&P.mods[0], 0, sizeof(fg_mod));
+	P.mods[0].step = 3;
+	P.mods[0].action = FG_MOD_MUTE;
+	P.mods[0].fireValue = 100;
+	{
+		int nc = 16;
+		fg_edit_set_grid(&P, 8, 8, &nc);   /* 16 → 16 units */
+		CHECK(P.beats == 8 && P.denom == 8 && P.tiles[5].src == 0.0 && P.nMods == 1 && P.mods[0].step == 3);
+	}
+
 	/* resize end: growing eats the next tiles' heads, cascading; src pinned */
 	natural16();
 	fg_edit_resize_end(&P, 2, 1.5, &O);

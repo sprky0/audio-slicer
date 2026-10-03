@@ -53,6 +53,11 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F16 | Performance MIDI — note-triggered slices, CC map (learn), program change = session, `appliance.conf` keys | In progress 0.18.5 (notes, sessions-as-presets and the CC map done; conf keys and per-track overrides open) |
 | F17 | Bounce — offline render to `<data dir>/exports`: the mix, the focused track or stems, 1–8 loops of the bar (LCM of the tracks' beats), normalised (stems excepted) | Done 0.18.7 |
 | F18 | Record — two halves with one status: **host capture** (ALSA capture PCM + an input path on `Processor`), an L-item to open in ratfactory-linux-host and link here once numbered; **Frog side** (record into a track, re-slice live), developed on the Mac first. Both rows move together, same commit | In progress 0.18.0 (Frog side done; host half awaiting the L-item) |
+| F20 | Locks pinned in packed mode (browser parity by intent): a locked tile is not dragged or reordered across, the resize cascade treats it as a wall, merge never touches it; a grid change to the same unit count keeps the row and the modifiers | Done 0.20.0 |
+| F21 | Modifier actions II (the browser's planned list): Pitch action (auto transposition per pass), ratchet tail-through, pitch-preserving ratchet hits, modifier defaults seeded on action change | Planned |
+| F22 | Solo per track: a parameter block after the mix params, the engine silences non-soloed tracks while any solo is lit, header button, strip marker, CC hook | Planned |
+| F23 | Export II: 16 / 24-bit, a fixed seed for reproducible probability, stems skip muted tracks | Planned |
+| F24 | Feature table — every browser feature and every Frog feature side by side with status, as the input to the UI discussion (what we can do vs. what we should) | Planned |
 | F19 | Transient markers — detection + draggable non-uniform slice points (needs the model change noted in the JS NEXT.md) | Planned |
 
 ### F1 — Plan
@@ -289,6 +294,15 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F20 locks in packed mode (0.20.0).** The browser protected locks only
+  in Gaps mode though its notes said moves and resizes should respect them
+  everywhere; Frog now pins a lock in both: `fg_edit_move` refuses to drag
+  it or reorder across it, `resize_end / start` stop their cascade at it,
+  `merge` leaves it alone. `fg_edit_set_grid` to the same unit count (4 ×
+  1/16 → 8 × 1/8) keeps the arrangement and the modifiers as the browser
+  did. F20–F24 opened from the browser feature inventory (owner: build the
+  rest of the browser's feature set from the audio side, then a feature
+  table and the UI discussion).
 - **0.18.9 — `frog-render --factory DATADIR`.** The first-run install only
   fires on an empty `sessions/`; a rig that saved a session before 0.18.6
   never gets the material. The render tool now writes it on demand (used on
