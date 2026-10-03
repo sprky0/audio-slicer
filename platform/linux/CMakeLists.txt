@@ -52,3 +52,4 @@ option(FROG_APPLIANCE_EDITOR "frog-appliance with its editor on the panel (IGrap
 
 add_subdirectory(frog-plugin)
 add_subdirectory(frog-appliance)
+add_subdirectory(tests)

@@ -72,8 +72,14 @@ static double ncc(const fg_wsola* w, int64_t cs, int64_t ref, int len) {
  * the natural successor at refPos: coarse pass every 4, then ±3 around it. */
 static int64_t best_lag(const fg_wsola* w, int64_t idealStart, int64_t refPos) {
 	const int len = FG_WSOLA_HOP;
+	/* lag 0 is the baseline: a candidate has to beat it clearly, so silence
+	 * or a featureless reference (every score ~0) keeps the natural position
+	 * instead of dragging an earlier frame in and echoing it */
+	const double margin = 1e-4;
 	int64_t best = 0;
-	double bestScore = -INFINITY;
+	double bestScore = (idealStart >= 0 && idealStart + len < w->inputLen && refPos + len < w->inputLen)
+	                       ? ncc(w, idealStart, refPos, len) + margin
+	                       : -INFINITY;
 	for (int d = -FG_WSOLA_SEARCH; d <= FG_WSOLA_SEARCH; d += 4) {
 		const int64_t cs = idealStart + d;
 		if (cs < 0 || cs + len >= w->inputLen || refPos + len >= w->inputLen) {
@@ -84,6 +90,9 @@ static int64_t best_lag(const fg_wsola* w, int64_t idealStart, int64_t refPos) {
 			bestScore = s;
 			best = d;
 		}
+	}
+	if (best == 0) {
+		return 0;
 	}
 	const int64_t centre = best;
 	for (int d = -3; d <= 3; d++) {

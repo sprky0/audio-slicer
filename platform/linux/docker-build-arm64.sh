@@ -47,8 +47,12 @@ echo "==> configuring cmake"
 "${DOCKER_RUN[@]}" cmake -S /src/platform/linux -B /build -DCMAKE_BUILD_TYPE=Release \
 	-DIPLUG2_DIR=/src/iPlug2 -DRFLH_ROOT=/rflh -DFROG_APPLIANCE_EDITOR="${EDITOR_ON}"
 
-echo "==> building frog-appliance"
-"${DOCKER_RUN[@]}" cmake --build /build -j --target frog-appliance
+echo "==> building frog-appliance and the appliance tests"
+"${DOCKER_RUN[@]}" cmake --build /build -j --target frog-appliance shell_test
+
+# Frog as the appliance drives it (platform/linux/tests/): seconds, so it runs on every build
+echo "==> running shell_test"
+"${DOCKER_RUN[@]}" /build/bin/shell_test
 
 # Proof of build without a board: the appliance renders a few seconds offline.
 echo "==> render check"

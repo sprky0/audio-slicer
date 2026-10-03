@@ -1,16 +1,17 @@
-/* engine.h — the whole Frog engine behind one handle: tracks with their
- * sequencers and voice pools, the shared grid, the sample clock, and the
- * lock-free lanes between the UI thread and the audio thread (pattern
+/* engine.h — the whole Frog engine behind one opaque handle: tracks with
+ * their sequencers and voice pools, the shared grid, the sample clock, and
+ * the lock-free lanes between the UI thread and the audio thread (pattern
  * mailboxes, command queue, visual ring, sample swap). Allocates in
- * create / reset only. */
+ * create / reset only. C++ consumers see only this header; the struct
+ * bodies (C11 atomics) live in engine_internal.h for engine.c and tests. */
 #pragma once
 
 #include "frog_types.h"
 #include "grid.h"
+#include "midiclock.h"
 #include "sample.h"
 #include "sequencer.h"
 
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -32,8 +33,23 @@ typedef enum {
 	FG_CMD_GRID_SYNC,    /* a = beat, b = sample, c = bpm (MIDI Start / PLL snap) */
 	FG_CMD_GRID_NUDGE,   /* a = samples */
 	FG_CMD_SET_MIX,      /* track; a = volume, b = pan */
-	FG_CMD_SET_MUTE      /* track; a = 0/1 */
+	FG_CMD_SET_MUTE,     /* track; a = 0/1 */
+	FG_CMD_CLOCK_SOURCE  /* a = fg_clock_source */
 } fg_cmd_type;
+
+/* Who drives the grid. */
+typedef enum {
+	FG_CLOCK_INTERNAL = 0,  /* the BPM parameter */
+	FG_CLOCK_MIDI,          /* external MIDI clock: tempo from the pulses, phase from the PLL */
+	FG_CLOCK_HOST           /* the plugin host's transport (tempo + PPQ position) */
+} fg_clock_source;
+
+#define FG_MIDI_RING 64
+
+typedef struct {
+	uint8_t status;
+	int offset;   /* sample offset within the coming block */
+} fg_midi_event;
 
 typedef struct {
 	int type;
@@ -41,61 +57,13 @@ typedef struct {
 	double a, b, c;
 } fg_cmd;
 
-/* Lock-free triple buffer of patterns (one writer, one reader). */
-typedef struct {
-	fg_pattern slot[3];
-	atomic_int latest;   /* index | FG_TB_DIRTY */
-	int writeIdx;
-	int readIdx;
-} fg_pbuf;
-
 typedef struct {
 	int track;
 	int step;
 	int64_t at;
 } fg_flash;
 
-typedef struct {
-	/* UI thread side */
-	fg_pattern work;            /* the UI's working copy */
-	fg_pbuf inbox;              /* UI → audio */
-	fg_pbuf outbox;             /* audio → UI (pattern actions) */
-	_Atomic(fg_sample*) sample; /* published store */
-	_Atomic(uintptr_t) sampleSeen;
-	/* audio thread side */
-	fg_pattern active;
-	const fg_sample* smp;
-	fg_seq seq;
-	fg_voice voices[FG_MAX_VOICES];
-	double* busL;
-	double* busR;
-	double volume, pan;        /* targets */
-	bool muted;
-	double gainL, gainR;       /* smoothed applied gains (volume × mute × pan) */
-	double curL, curR;
-	bool hasPattern;
-} fg_track;
-
-typedef struct {
-	double sampleRate;
-	int maxBlock;
-	int nTracks;
-	fg_track tracks[FG_MAX_TRACKS];
-	fg_grid grid;
-	double masterGain;
-	_Atomic int64_t now;       /* samples processed since reset */
-	_Atomic int gridRunning;
-	_Atomic double gridBpm;
-	/* UI → audio commands */
-	fg_cmd cmds[FG_CMD_RING];
-	atomic_uint cmdHead, cmdTail;
-	/* audio → UI visuals */
-	fg_visual visuals[FG_VISUAL_RING];
-	atomic_uint visHead, visTail;
-	fg_flash flashes[FG_FLASH_RING];
-	atomic_uint flashHead, flashTail;
-	uint32_t seed;
-} fg_engine;
+typedef struct fg_engine fg_engine;
 
 fg_engine* fg_engine_create(int nTracks, uint32_t seed);
 void fg_engine_destroy(fg_engine* e);
@@ -106,7 +74,22 @@ void fg_engine_reset(fg_engine* e, double sampleRate, int maxBlock);
 /* Audio thread: render one block into nCh output channels (2 expected). */
 void fg_engine_process(fg_engine* e, double* const* out, int nCh, int nFrames);
 
+/* Audio thread, before fg_engine_process() for the same block: a realtime
+ * MIDI status byte (clock, start, continue, stop) at `sampleOffset` into
+ * the block. Other statuses are ignored here (notes arrive with F16). */
+void fg_engine_midi(fg_engine* e, uint8_t status, int sampleOffset);
+
+/* Audio thread, before fg_engine_process(): the host's transport for the
+ * coming block (plugin builds). Used only when the clock source is HOST. */
+void fg_engine_host_transport(fg_engine* e, double tempo, double ppqPos, bool running);
+
 /* --- UI thread ---------------------------------------------------------- */
+
+void fg_engine_set_clock_source(fg_engine* e, int source);
+int fg_engine_clock_source(const fg_engine* e);
+/* The external clock's tempo estimate (0 = none yet) and running flag. */
+double fg_engine_external_bpm(const fg_engine* e);
+bool fg_engine_external_running(const fg_engine* e);
 
 bool fg_engine_push(fg_engine* e, const fg_cmd* c);
 void fg_engine_play_all(fg_engine* e);
@@ -116,6 +99,8 @@ void fg_engine_track_stop(fg_engine* e, int track);
 void fg_engine_set_tempo(fg_engine* e, double bpm);
 void fg_engine_set_mix(fg_engine* e, int track, double volume, double pan);
 void fg_engine_set_mute(fg_engine* e, int track, bool muted);
+/* Linear master level applied to the mix (default 1). */
+void fg_engine_set_master_gain(fg_engine* e, double gain);
 
 /* Edit the working copy, then publish it; the audio thread picks it up at
  * its next block. */
@@ -129,6 +114,8 @@ bool fg_engine_take_pattern_change(fg_engine* e, int track);
  * frees once fg_engine_sample_retired() says the audio thread moved on. */
 fg_sample* fg_engine_set_sample(fg_engine* e, int track, fg_sample* s);
 bool fg_engine_sample_retired(const fg_engine* e, int track, const fg_sample* old);
+/* Whether a store is published for the track (UI-side read). */
+bool fg_engine_has_sample(const fg_engine* e, int track);
 
 int fg_engine_poll_visuals(fg_engine* e, fg_visual* out, int max);
 int fg_engine_poll_flashes(fg_engine* e, fg_flash* out, int max);

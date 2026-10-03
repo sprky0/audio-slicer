@@ -22,7 +22,10 @@ set(IPLUG2_SOURCES
 	${IPLUG2_DIR}/IPlug/Headless/IPlugHeadless.cpp
 )
 
-# The engine (C11) joins this list from F5 on: ${FROG_DIR}/engine/*.c.
+# The C11 engine, as the same static library the desktop formats link.
+include(${FROG_DIR}/engine/engine.cmake)
+frog_add_engine_library()
+
 set(FROG_SOURCES
 	${FROG_DIR}/Frog.cpp
 )
@@ -45,6 +48,9 @@ add_dependencies(frog_plugin frog_generated)
 target_include_directories(frog_plugin
 	PUBLIC
 		${FROG_INCLUDES}
+		${CMAKE_CURRENT_SOURCE_DIR}        # FrogProcessor.h
+		${RFLH_ROOT}/host
+		${RFLH_ROOT}/host/iplug2
 	PRIVATE
 		${IPLUG2_DIR}/IGraphics
 		${IPLUG2_DIR}/IGraphics/Controls
@@ -69,7 +75,7 @@ target_compile_options(frog_plugin PRIVATE -Wall -Wno-unused -Wno-sign-compare -
 set_source_files_properties(${IPLUG2_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 
 find_package(Threads REQUIRED)
-target_link_libraries(frog_plugin PUBLIC Threads::Threads)
+target_link_libraries(frog_plugin PUBLIC Threads::Threads frog_engine)
 
 # frog_plugin_ui: the same plugin class with its editor compiled in, for the
 # panel: IGraphics with NanoVG on GLES2, drawn on DRM/KMS through EGL + GBM by
@@ -130,6 +136,7 @@ if(FROG_APPLIANCE_EDITOR)
 	)
 	set(FROG_UI_INCLUDES
 		${FROG_INCLUDES}
+		${CMAKE_CURRENT_SOURCE_DIR}
 		${IPLUG2_DIR}/IGraphics
 		${IPLUG2_DIR}/IGraphics/Controls
 		${IPLUG2_DIR}/IGraphics/Drawing
@@ -167,7 +174,7 @@ if(FROG_APPLIANCE_EDITOR)
 		$<$<COMPILE_LANGUAGE:CXX>:-Wall -Wno-unused -Wno-sign-compare -Wno-reorder -Wno-unknown-pragmas -Wno-multichar -Wno-comment>)
 	set_source_files_properties(${IGRAPHICS_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 	# no GPU library: the module brings them
-	target_link_libraries(frog_plugin_ui PUBLIC Threads::Threads m)
+	target_link_libraries(frog_plugin_ui PUBLIC Threads::Threads m frog_engine)
 
 	# libfrog-editor.so: IGraphicsKMS, IGraphicsNanoVG, NanoVG and the module's
 	# entry point; the rest of IGraphics comes from the binary that loads it.

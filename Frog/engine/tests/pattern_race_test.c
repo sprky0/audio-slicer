@@ -3,7 +3,7 @@
  * rings while the audio thread processes blocks. Passes when TSan stays
  * quiet and every block the audio thread saw was a whole pattern. */
 #include "check.h"
-#include "engine.h"
+#include "engine_internal.h"
 #include "pattern.h"
 
 #include <pthread.h>

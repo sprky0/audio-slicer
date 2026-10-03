@@ -7,11 +7,11 @@
 // glue: construct the plugin, wrap it, run.
 
 #include "Frog.h"
+#include "FrogProcessor.h"
 
 #include "Appliance.h"
 #include "Log.h"
 #include "StoragePaths.h"
-#include "iplug2/IPlug2HeadlessProcessor.h"
 
 #include <string>
 
@@ -45,6 +45,6 @@ int main(int argc, char** argv) {
 	iplug::InstanceInfo info;
 	info.createIdleTimer = false;
 	Frog plug(info);
-	rflh::IPlug2HeadlessProcessor<Frog> processor(plug, APP_NUM_CHANNELS);
+	FrogProcessor processor(plug, APP_NUM_CHANNELS);
 	return rflh::runAppliance(processor, opts);
 }

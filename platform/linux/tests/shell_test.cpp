@@ -1,0 +1,203 @@
+// The plugin shell as the appliance drives it (F9): headless Frog behind
+// rflh::IPlug2HeadlessProcessor, no idle Timer. A sample requested for a
+// track loads on the idle tick, Play All sounds it on the grid, a MIDI
+// clock takes over the tempo and transport when the clock source says so,
+// and the state chunk carries the pattern, mix and sample path into a
+// fresh instance. Built by platform/linux/CMakeLists.txt (target
+// shell_test) and run by docker-build-arm64.sh.
+
+#include "Frog.h"
+#include "FrogProcessor.h"
+#include "engine/sample.h"
+
+#include <cmath>
+#include <cstdio>
+#include <string>
+#include <vector>
+
+namespace {
+
+int gFail = 0;
+
+void check(bool ok, const char* what) {
+	std::printf("  %-4s %s\n", ok ? "PASS" : "FAIL", what);
+	if (!ok) {
+		++gFail;
+	}
+}
+
+// 16 units of 0.125 s at 48 k: an 8-sample burst of (i+1)/16 at each unit
+// start. Eight samples, not one: the stretch stage's window zeroes exactly
+// the first sample of a slice, so a one-sample impulse would vanish on the
+// stretched paths (120 bpm plays raw; 100 and 133 bpm stretch).
+const char* writeFixture() {
+	static const char* path = "/tmp/frog-shell-test.wav";
+	fg_sample* s = fg_sample_create(1, 96000, 48000.0);
+	for (int i = 0; i < 16; i++) {
+		for (int k = 0; k < 8; k++) {
+			s->ch[0][i * 6000 + k] = (float)(i + 1) / 16.f;
+		}
+	}
+	std::vector<double> d(96000);
+	for (int i = 0; i < 96000; i++) {
+		d[i] = s->ch[0][i];
+	}
+	const double* ch[1] = {d.data()};
+	fg_sample_write_wav16(path, ch, 1, 96000, 48000.0);
+	fg_sample_free(s);
+	return path;
+}
+
+struct Rig {
+	iplug::InstanceInfo info;
+	Frog plug;
+	FrogProcessor proc;
+	std::vector<double> l, r;
+	double* outs[2];
+	std::vector<double> capture;   // left channel of every block processed
+
+	Rig()
+	    : info([] { iplug::InstanceInfo i; i.createIdleTimer = false; return i; }()),
+	      plug(info), proc(plug, 2), l(128), r(128) {
+		outs[0] = l.data();
+		outs[1] = r.data();
+		proc.reset(48000, 128);
+	}
+	void blocks(int n) {
+		for (int b = 0; b < n; b++) {
+			proc.process(outs, 2, 128);
+			capture.insert(capture.end(), l.begin(), l.end());
+		}
+	}
+	void midi(unsigned char status, int offset = 0) {
+		proc.midi(&status, 1, offset);
+	}
+	double peakIn(size_t from, size_t to) {
+		double p = 0.0;
+		for (size_t i = from; i < to && i < capture.size(); i++) {
+			p = std::fabs(capture[i]) > p ? std::fabs(capture[i]) : p;
+		}
+		return p;
+	}
+};
+
+}  // namespace
+
+int main() {
+	const char* wav = writeFixture();
+
+	std::printf("=== load on idle, play on the grid ===\n");
+	Rig a;
+	a.blocks(4);
+	check(a.peakIn(0, a.capture.size()) == 0.0, "silent before anything is loaded");
+	a.plug.RequestLoadSample(0, wav);
+	a.blocks(2);
+	a.plug.PlayAll();
+	a.blocks(2);
+	check(a.peakIn(0, a.capture.size()) == 0.0, "still silent: the load waits for the idle tick, never the audio thread");
+	a.plug.StopAll();
+	a.proc.idle();
+	a.blocks(1);
+	a.capture.clear();
+	a.plug.PlayAll();
+	a.blocks(750);   // 96000 samples = one bar of 16 × 0.125 s at 120 bpm
+	// mono source: the mono pan law puts −3 dB on each side
+	const double m = std::sqrt(0.5);
+	check(std::fabs(a.capture[0] - m * 1.0 / 16.0) < 1e-6, "unit 0's burst at the first sample, at the mono pan level");
+	check(std::fabs(a.capture[6000 * 5] - m * 6.0 / 16.0) < 1e-6, "unit 5 at its grid slot");
+	check(std::fabs(a.capture[6000 * 15] - m * 16.0 / 16.0) < 1e-4, "unit 15 at its grid slot (16-bit fixture: 1.0 is 32767/32768)");
+	check(a.peakIn(8, 6000) == 0.0, "nothing between the bursts");
+
+	std::printf("=== mix parameters reach the engine ===\n");
+	a.plug.GetParam(TrackParam(0, kTrackVolume))->Set(50.);
+	a.plug.OnParamChange(TrackParam(0, kTrackVolume));
+	a.plug.StopAll();
+	a.blocks(1);
+	a.capture.clear();
+	a.plug.PlayAll();
+	a.blocks(2);
+	check(std::fabs(a.capture[0] - 0.5 * m * 1.0 / 16.0) < 1e-6, "T1 Vol 50 % halves the level");
+	a.plug.GetParam(TrackParam(0, kTrackMute))->Set(1.);
+	a.plug.OnParamChange(TrackParam(0, kTrackMute));
+	a.plug.StopAll();
+	a.blocks(1);
+	a.capture.clear();
+	a.plug.PlayAll();
+	a.blocks(2);
+	check(a.peakIn(0, a.capture.size()) == 0.0, "T1 Mute silences the track");
+	a.plug.GetParam(TrackParam(0, kTrackMute))->Set(0.);
+	a.plug.OnParamChange(TrackParam(0, kTrackMute));
+	a.plug.GetParam(TrackParam(0, kTrackVolume))->Set(100.);
+	a.plug.OnParamChange(TrackParam(0, kTrackVolume));
+
+	std::printf("=== MIDI clock drives tempo and transport ===\n");
+	a.plug.StopAll();
+	a.plug.GetParam(kParamClockSource)->Set(FG_CLOCK_MIDI);
+	a.plug.OnParamChange(kParamClockSource);
+	a.blocks(3);   // the unmute's 5 ms mix ramp settles while stopped
+	a.capture.clear();
+	a.midi(0xFA);   // Start: beat 0 now, tracks start
+	// 100 bpm: 24 pulses per 0.6 s = one pulse every 1200 samples; one per block is 128, so pulses every ~9.4 blocks
+	double nextPulse = 0.0;
+	for (int b = 0; b < 400; b++) {
+		const double blockStart = b * 128.0;
+		while (nextPulse < blockStart + 128.0) {
+			a.midi(0xF8, (int)(nextPulse - blockStart));   /* sample-accurate, as a plugin host delivers them */
+			nextPulse += 1200.0;
+		}
+		a.blocks(1);
+	}
+	check(std::fabs(fg_engine_bpm(a.plug.Engine()) - 100.0) < 0.5, "tempo follows the pulses (100 bpm)");
+	check(fg_engine_external_running(a.plug.Engine()), "external clock reports running");
+	check(a.peakIn(0, 16) > 0.5 * m / 16.0, "Start played unit 0 at once");
+	check(a.peakIn(16, 6900) == 0.0, "silence until the next slot");
+	// The first slots fall early while the tempo is still being acquired
+	// (the grid runs at the previous tempo until two pulses are in); by unit
+	// 4 the grid sits on the 100 bpm spacing of 7200 samples, within the
+	// PLL's 2 ms dead band.
+	check(a.peakIn(4 * 7200 - 100, 4 * 7200 + 20) > 0.5 * m * 5.0 / 16.0, "unit 4 lands on the 100 bpm grid (within the PLL dead band)");
+	check(a.peakIn(6 * 7200 - 100, 6 * 7200 + 20) > 0.5 * m * 7.0 / 16.0, "unit 6 too");
+	check(a.peakIn(5 * 7200 + 20, 6 * 7200 - 100) == 0.0, "and silence between them");
+	a.midi(0xFC);
+	a.blocks(2);
+	check(!fg_engine_external_running(a.plug.Engine()), "Stop halts the external clock");
+	a.plug.GetParam(kParamClockSource)->Set(FG_CLOCK_INTERNAL);
+	a.plug.OnParamChange(kParamClockSource);
+	a.blocks(1);
+	check(std::fabs(fg_engine_bpm(a.plug.Engine()) - 120.0) < 1e-9, "back to the internal clock: the BPM parameter rules again");
+
+	std::printf("=== state chunk round trip ===\n");
+	fg_pattern* p = fg_engine_pattern(a.plug.Engine(), 0);
+	p->tiles[1].muted = true;
+	p->tiles[2].reversed = true;
+	p->nMods = 1;
+	p->mods[0] = fg_mod{3, FG_MOD_RATCHET, FG_FIRE_PROB, FG_RATCHET_EVEN, 100, 0, 2, 2, 0, 1};
+	fg_engine_publish(a.plug.Engine(), 0);
+	a.plug.GetParam(kParamBpm)->Set(133.);
+	a.plug.GetParam(TrackParam(0, kTrackPan))->Set(-25.);
+	iplug::IByteChunk chunk;
+	check(a.plug.SerializeState(chunk), "SerializeState succeeds");
+	check(chunk.Size() > 1000, "the chunk carries the session JSON");
+
+	Rig b;
+	const int pos = b.plug.UnserializeState(chunk, 0);
+	check(pos == chunk.Size(), "UnserializeState consumes the whole chunk");
+	check(b.plug.PendingLoadCount() == 1 && b.plug.TrackPath(0) == wav, "the sample path is restored and queued for the idle tick");
+	const fg_pattern* q = fg_engine_pattern(b.plug.Engine(), 0);
+	check(q->tiles[1].muted && q->tiles[2].reversed && q->nMods == 1 && q->mods[0].action == FG_MOD_RATCHET, "pattern restored (mute, reverse, ratchet modifier)");
+	check(std::fabs(b.plug.GetParam(kParamBpm)->Value() - 133.) < 1e-9, "BPM parameter restored");
+	check(std::fabs(b.plug.GetParam(TrackParam(0, kTrackPan))->Value() + 25.) < 1e-9, "pan parameter restored");
+	b.proc.idle();   // the restored sample path loads here
+	check(b.plug.PendingLoadCount() == 0 && fg_engine_has_sample(b.plug.Engine(), 0), "loaded on the idle tick");
+	b.blocks(1);
+	b.capture.clear();
+	b.plug.PlayAll();
+	b.blocks(140);   // 17920 samples: through unit 3 at 133 bpm
+	// 133 bpm: a step is 5413.5 samples, stretched 0.9x
+	check(b.peakIn(0, 16) > 0.5 * m / 16.0, "the restored instance plays the sample again (at 133 bpm)");
+	check(b.peakIn(5300, 10800) == 0.0, "the restored mute on unit 1 holds");
+	check(b.peakIn(16241, 16260) > 0.5 * m * 4.0 / 16.0, "unit 3 follows at the restored tempo (unit 2 is the reversed one)");
+
+	std::printf("%s\n", gFail == 0 ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED");
+	return gFail == 0 ? 0 : 1;
+}

@@ -41,7 +41,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F6 | Engine: sequencer + voices — per-block absolute scheduling (skip-past, late-join offset), voice pool, raw / reversed region reader, envelopes (lin / exp / log / s, gain ceiling), declick, track vol / pan / mute, stereo mix | Done 0.6.0 |
 | F7 | Engine: time-stretch + pitch — streaming WSOLA per voice (coarse-to-fine lag search), 4-point interpolating pitch / varispeed reader, bypass at factor 1, Pi 3 cost measured | Done 0.7.0 (F7.4 board measurement open) |
 | F8 | Engine: parity — bounce JS fixtures natively, unstretched paths within −80 dBFS, stretched paths by per-step RMS + onset | Done 0.8.0 (`public/` kept, see above) |
-| F9 | Plugin shell — iPlug2 params (BPM, per-track vol / pan / pitch / mute, edit mode), state chunks with version, `OnIdle` loading + decode + resample, MIDI clock PLL (appliance stamps + plugin offsets), Start / Continue / Stop, host transport sync in DAWs | Planned |
+| F9 | Plugin shell — iPlug2 params (BPM, clock source, per-track vol / pan / mute), state chunk with the session JSON, `OnIdle` loading + decode + resample, MIDI clock PLL, Start / Continue / Stop, host transport sync in DAWs | Done 0.9.0 |
 | F10 | MVP UI — owned controls: DragControl, TransportBar, WaveformControl (region handles, zoom / trim, playhead), TileRowControl (select, drag, edge-resize, mini waveforms), slice toolbar, FileList; band layout engine with stable IDs; edit / perform layouts; Pi 3 render budget | Planned |
 | F11 | MVP release — one track end-to-end on the appliance and the Mac, factory session, docs/ARCHITECTURE.md, tag `v0.11-mvp` | Planned |
 | F12 | Live-performance pass — critique the UI with the device in hand: permanent big actions, pad / trigger mode, what moves to MIDI | Planned |
@@ -169,6 +169,19 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
 | F8.3 | `parity_test.c`: **natural** and **mods** (mute / gain / rev / even ratchets / every-N / reset) match at −87 dBFS peak, −99 to −101 dBFS RMS; **edits** (reorder, mute, gap, reverse, gain, four fade curves, w = 2 and ½-unit tiles, vol 0.8, pan −0.3) at −41 dBFS peak / −81 dBFS RMS (the peak is the browser's 65-point fade curve); **stretch** (125 bpm) and **pitch** (±12 / +7 st, ramp and pitch-mode ratchets, ×4 hits) within 0.4 dB per unit with identical measured pitch | Done |
 | F8.4 | Engine fixes found by parity: mono sources take the Web Audio mono pan law (−3 dB at centre); a mix change while a track is silent snaps instead of smoothing, so a loaded level is exact from the first sample | Done |
 
+### F9 — Plugin shell
+
+| ID | Subtask | Status |
+|----|---------|--------|
+| F9.1 | `Frog.h/.cpp` owns an `fg_engine`: `ProcessBlock` → `fg_engine_process` (double, D15), `OnReset` → `fg_engine_reset` at the host rate with a 4096-frame floor, parameters BPM / Master / Clock source / per-track Vol, Pan, Mute for all `FG_MAX_TRACKS` (stable list; appliance caps come from `appliance.conf`) | Done |
+| F9.2 | State chunk `FROGS001`: iPlug2 parameter block + the session JSON (patterns, mix, `samplePath` per track); `UnserializeState` restores patterns, seeds the mix parameters from the browser-format values and queues the sample loads | Done |
+| F9.3 | Sample loading on the idle tick only (one file per tick: decode, down-mix, resample to the engine rate), atomic swap into the engine, retired stores freed once the audio thread has moved on; paths resolve against `FROG_SAMPLES_DIR`, `RF_DATA_DIR/samples` or the app-support folder | Done |
+| F9.4 | Clock sources in the engine: **internal** (BPM parameter), **MIDI** (`midiclock.c`: 24 PPQN window average, Start / Continue / Stop, per-pulse PLL with 2 ms dead band, 10 % slew, 80 ms snap; `midiclock_test` locks a ±2 ms-jittered 116 bpm clock to 0.76 ms mean phase error), **host** (tempo + PPQ as one observation per block, running edges start the tracks in phase). The first pulse after Start is the downbeat per the MIDI spec (the browser code counted it as 1/24) | Done |
+| F9.5 | `engine.h` is opaque for C++ (struct bodies with C11 atomics moved to `engine_internal.h`); GCC in C++ mode rejected `_Atomic`, clang had let it through | Done |
+| F9.6 | Appliance: the shared `IPlug2HeadlessProcessor` drops MIDI realtime bytes, so `platform/linux/frog-plugin/FrogProcessor.h` wraps it and forwards 0xF8–0xFC itself (shrinks to a using-declaration if the host adapter learns to pass them: candidate host change, not blocking) | Done |
+| F9.7 | `platform/linux/tests/shell_test.cpp` (built + run by `docker-build-arm64.sh`): load on idle never on the audio thread, Play All on the grid, Vol / Mute parameters reach the engine, a MIDI clock at 100 bpm takes tempo and transport (tempo acquisition over the first slots, then on the grid within the dead band), the state chunk round-trips pattern + parameters + sample path into a fresh instance that plays again | Done |
+| F9.8 | WSOLA lag search: lag 0 is the baseline and a candidate must beat it by a margin, so silence or a featureless reference no longer drags an earlier frame in (an echo the browser algorithm also has) | Done |
+
 ### F10 — MVP UI
 
 | ID | Subtask | Status |
@@ -203,6 +216,13 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F9 complete (0.9.0).** The engine lives inside the iPlug2 plugin:
+  parameters, state chunk with the session, idle-thread sample loading, and
+  three clock sources (internal, MIDI with the PLL, host transport). APP /
+  VST3 / AU build and auval passes; the arm64 appliance builds and its new
+  headless shell test passes in the container. Two findings: GCC needs the
+  engine header free of C11 atomics (now opaque), and the host's iPlug2
+  adapter drops MIDI realtime bytes (wrapped locally in `FrogProcessor.h`).
 - **F8 complete (0.8.0) — milestone M1, tag `v0.8-engine`.** The engine
   matches the browser version's own bounces: sample-exact on the unstretched
   paths, within 0.4 dB and identical pitch on the stretched and pitched

@@ -1,4 +1,4 @@
-#include "engine.h"
+#include "engine_internal.h"
 #include "frog_types.h"
 
 #include <math.h>
@@ -122,6 +122,7 @@ fg_engine* fg_engine_create(int nTracks, uint32_t seed) {
 	e->masterGain = 1.0;
 	fg_grid_init(&e->grid, 120.0, 48000.0);
 	atomic_store(&e->gridBpm, 120.0);
+	fg_midiclock_init(&e->midiClock, 48000.0);
 	for (int i = 0; i < FG_MAX_TRACKS; i++) {
 		fg_track* t = &e->tracks[i];
 		pbuf_init(&t->inbox);
@@ -166,6 +167,9 @@ void fg_engine_reset(fg_engine* e, double sampleRate, int maxBlock) {
 	e->maxBlock = maxBlock > 0 ? maxBlock : 512;
 	const double bpm = e->grid.bpm;
 	fg_grid_init(&e->grid, bpm, e->sampleRate);
+	fg_midiclock_init(&e->midiClock, e->sampleRate);
+	e->nMidiEvents = 0;
+	e->hostSmoothedErr = 0.0;
 	atomic_store(&e->now, 0);
 	atomic_store(&e->gridRunning, 0);
 	for (int i = 0; i < FG_MAX_TRACKS; i++) {
@@ -276,9 +280,127 @@ static void apply_cmd(fg_engine* e, const fg_cmd* c, int64_t blockStart) {
 				snap_gain_if_silent(t);
 			}
 			break;
+		case FG_CMD_CLOCK_SOURCE: {
+			const int src = (int)c->a;
+			e->clockSource = (src >= FG_CLOCK_INTERNAL && src <= FG_CLOCK_HOST) ? src : FG_CLOCK_INTERNAL;
+			fg_midiclock_reset_timing(&e->midiClock);
+			e->hostSmoothedErr = 0.0;
+			break;
+		}
 		default:
 			break;
 	}
+}
+
+/* Start every track with tiles at `anchorBeat` on the grid (already anchored). */
+static void start_all_at(fg_engine* e, double anchorBeat) {
+	for (int i = 0; i < e->nTracks; i++) {
+		fg_track* t = &e->tracks[i];
+		for (int v = 0; v < FG_MAX_VOICES; v++) {
+			fg_voice_stop(&t->voices[v]);
+		}
+		if (t->active.nTiles > 0) {
+			fg_seq_start(&t->seq, anchorBeat);
+		}
+	}
+}
+
+static void stop_all(fg_engine* e) {
+	for (int i = 0; i < e->nTracks; i++) {
+		fg_track* t = &e->tracks[i];
+		fg_seq_stop(&t->seq);
+		for (int v = 0; v < FG_MAX_VOICES; v++) {
+			fg_voice_stop(&t->voices[v]);
+		}
+	}
+}
+
+/* Join in phase: anchor every track to its own loop boundary at or before `beat`. */
+static void start_all_aligned(fg_engine* e, double beat) {
+	for (int i = 0; i < e->nTracks; i++) {
+		fg_track* t = &e->tracks[i];
+		for (int v = 0; v < FG_MAX_VOICES; v++) {
+			fg_voice_stop(&t->voices[v]);
+		}
+		if (t->active.nTiles > 0) {
+			const double bar = (double)t->active.beats;
+			fg_seq_start(&t->seq, floor(beat / bar) * bar);
+		}
+	}
+}
+
+/* The MIDI clock events queued for this block, in offset order. */
+static void apply_midi_clock(fg_engine* e, int64_t blockStart) {
+	if (e->clockSource != FG_CLOCK_MIDI) {
+		e->nMidiEvents = 0;
+		return;
+	}
+	for (int i = 0; i < e->nMidiEvents; i++) {
+		const fg_midi_event* ev = &e->midiEvents[i];
+		const double t = (double)(blockStart + ev->offset);
+		const fg_midiclock_event what = fg_midiclock_status(&e->midiClock, ev->status, t);
+		switch (what) {
+			case FG_MC_TEMPO:
+				fg_grid_set_tempo(&e->grid, e->midiClock.bpm, t);
+				break;
+			case FG_MC_START:
+				/* the device's beat 0 is now; the PLL trims the residual */
+				fg_grid_sync_phase(&e->grid, 0.0, t, e->midiClock.bpm > 0.0 ? e->midiClock.bpm : e->grid.bpm);
+				start_all_at(e, 0.0);
+				break;
+			case FG_MC_CONTINUE:
+				if (!e->grid.running) {
+					fg_grid_sync_phase(&e->grid, fg_midiclock_beat(&e->midiClock), t, e->midiClock.bpm > 0.0 ? e->midiClock.bpm : e->grid.bpm);
+				}
+				start_all_aligned(e, fg_grid_beat_at_sample(&e->grid, t));
+				break;
+			case FG_MC_STOP:
+				stop_all(e);
+				break;
+			default:
+				break;
+		}
+		if (ev->status == 0xF8) {
+			fg_midiclock_pll(&e->midiClock, &e->grid, t);
+		}
+	}
+	e->nMidiEvents = 0;
+	atomic_store_explicit(&e->extBpm, e->midiClock.bpm, memory_order_release);
+	atomic_store_explicit(&e->extRunning, e->midiClock.running ? 1 : 0, memory_order_release);
+}
+
+/* The host's transport, one observation per block: its tempo is the grid's
+ * tempo, its PPQ position at the block start is a phase observation handled
+ * like a MIDI pulse (slew, snap on a gross error), and its running edges
+ * start the tracks in phase and stop them. */
+static void apply_host_clock(fg_engine* e, int64_t blockStart) {
+	if (e->clockSource != FG_CLOCK_HOST) {
+		return;
+	}
+	const double t = (double)blockStart;
+	if (e->hostTempo > 0.0 && fabs(e->hostTempo - e->grid.bpm) > 0.001) {
+		fg_grid_set_tempo(&e->grid, e->hostTempo, t);
+	}
+	if (e->hostRunning && !e->hostWasRunning) {
+		fg_grid_sync_phase(&e->grid, e->hostPpq, t, e->hostTempo > 0.0 ? e->hostTempo : e->grid.bpm);
+		start_all_aligned(e, e->hostPpq);
+		e->hostSmoothedErr = 0.0;
+	} else if (!e->hostRunning && e->hostWasRunning) {
+		stop_all(e);
+	} else if (e->hostRunning && e->grid.running) {
+		const double err = fg_grid_sample_at_beat(&e->grid, e->hostPpq) - t;
+		e->hostSmoothedErr = e->hostSmoothedErr * 0.8 + err * 0.2;
+		const double snap = 0.08 * e->sampleRate, dead = 0.002 * e->sampleRate;
+		if (fabs(err) > snap) {
+			fg_grid_nudge(&e->grid, -err);
+			e->hostSmoothedErr = 0.0;
+		} else if (fabs(e->hostSmoothedErr) > dead) {
+			fg_grid_nudge(&e->grid, -e->hostSmoothedErr * 0.1);
+		}
+	}
+	e->hostWasRunning = e->hostRunning;
+	atomic_store_explicit(&e->extBpm, e->hostTempo, memory_order_release);
+	atomic_store_explicit(&e->extRunning, e->hostRunning ? 1 : 0, memory_order_release);
 }
 
 void fg_engine_process(fg_engine* e, double* const* out, int nCh, int nFrames) {
@@ -294,6 +416,8 @@ void fg_engine_process(fg_engine* e, double* const* out, int nCh, int nFrames) {
 	while (cmd_pop(e, &c)) {
 		apply_cmd(e, &c, blockStart);
 	}
+	apply_midi_clock(e, blockStart);
+	apply_host_clock(e, blockStart);
 
 	for (int ch = 0; ch < nCh; ch++) {
 		memset(out[ch], 0, sizeof(double) * (size_t)nFrames);
@@ -407,9 +531,45 @@ void fg_engine_set_mix(fg_engine* e, int track, double volume, double pan) {
 	cmd_push(e, &c);
 }
 
+void fg_engine_set_master_gain(fg_engine* e, double gain) {
+	e->masterGain = (gain >= 0.0 && gain < 1e6) ? gain : 1.0;   /* read on the audio thread; a plain double store is atomic on our targets */
+}
+
 void fg_engine_set_mute(fg_engine* e, int track, bool muted) {
 	fg_cmd c = {FG_CMD_SET_MUTE, track, muted ? 1.0 : 0.0, 0.0, 0.0};
 	cmd_push(e, &c);
+}
+
+void fg_engine_midi(fg_engine* e, uint8_t status, int sampleOffset) {
+	if (status < 0xF8 || e->nMidiEvents >= FG_MIDI_RING) {
+		return;
+	}
+	fg_midi_event* ev = &e->midiEvents[e->nMidiEvents++];
+	ev->status = status;
+	ev->offset = sampleOffset < 0 ? 0 : sampleOffset;
+}
+
+void fg_engine_host_transport(fg_engine* e, double tempo, double ppqPos, bool running) {
+	e->hostTempo = tempo;
+	e->hostPpq = ppqPos;
+	e->hostRunning = running;
+}
+
+void fg_engine_set_clock_source(fg_engine* e, int source) {
+	fg_cmd c = {FG_CMD_CLOCK_SOURCE, -1, (double)source, 0.0, 0.0};
+	cmd_push(e, &c);
+}
+
+int fg_engine_clock_source(const fg_engine* e) {
+	return e->clockSource;
+}
+
+double fg_engine_external_bpm(const fg_engine* e) {
+	return atomic_load_explicit(&e->extBpm, memory_order_acquire);
+}
+
+bool fg_engine_external_running(const fg_engine* e) {
+	return atomic_load_explicit(&e->extRunning, memory_order_acquire) != 0;
 }
 
 fg_pattern* fg_engine_pattern(fg_engine* e, int track) {
@@ -447,6 +607,13 @@ bool fg_engine_sample_retired(const fg_engine* e, int track, const fg_sample* ol
 		return true;
 	}
 	return atomic_load_explicit(&e->tracks[track].sampleSeen, memory_order_acquire) != (uintptr_t)old;
+}
+
+bool fg_engine_has_sample(const fg_engine* e, int track) {
+	if (track < 0 || track >= e->nTracks) {
+		return false;
+	}
+	return atomic_load_explicit(&e->tracks[track].sample, memory_order_acquire) != NULL;
 }
 
 int64_t fg_engine_now(const fg_engine* e) {

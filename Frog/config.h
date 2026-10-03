@@ -1,7 +1,7 @@
 #define PLUG_NAME "Frog"
 #define PLUG_MFR "Rat Factory"
-#define PLUG_VERSION_HEX 0x00000800
-#define PLUG_VERSION_STR "0.8.0"
+#define PLUG_VERSION_HEX 0x00000900
+#define PLUG_VERSION_STR "0.9.0"
 // AU subtype is the product, manufacturer is the org: auval -v aumu Frog RatF.
 // Keep these lines free of trailing comments — prepare_resources-mac.py parses
 // config.h by hand and folds anything after the value into the plist string.
@@ -52,6 +52,9 @@
 #define CLAP_SUPPORT_URL "https://github.com/Rat-Factory"
 #define CLAP_DESCRIPTION "Sample slicer and loop performer"
 #define CLAP_FEATURES "instrument", "sampler"
+
+// Samples are double end to end (the family decision D15).
+#define SAMPLE_TYPE_DOUBLE
 
 #define APP_NUM_CHANNELS 2
 #define APP_N_VECTOR_WAIT 0
