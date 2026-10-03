@@ -80,6 +80,7 @@ void tap(IGraphics& g, float x, float y) {
 }  // namespace
 
 int main(int argc, char** argv) {
+	setenv("FROG_NO_FACTORY", "1", 1);   // renders start from a blank track
 	const std::string shots = argc > 1 ? argv[1] : "";
 	const char* wav = writeFixture();
 

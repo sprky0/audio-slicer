@@ -130,7 +130,8 @@ actions, flash events) landed with F6; this is the UI and the plumbing.
 | F11.2 | Mac: APP / VST3 / AU build Release, auval passes, the app runs with the UI and a sample via the developer hooks | Done |
 | F11.3 | Appliance: `docker-build-arm64.sh` green — `frog-appliance` + `libfrog-editor.so`, `shell_test` (29 checks), `editor_shot_test` (17 checks, five renders) | Done |
 | F11.4 | On the board: deploy, boot to sound, touch the panel through one edit session, 0 xruns; recorded with F3.6 and F10.6 when the Pi is at hand | Planned — needs the board |
-| F11.5 | Factory session: none shipped yet — no licensed demo sample. A short generated loop (the parity fixture's bursts) can be embedded if a first-boot sound is wanted | Planned |
+| F11.5 | Factory session (**0.18.6**): generated, not shipped — `engine/factory.c` synthesises a four-bar drum break (kick / snare / hat / crash from sines and noise, a variation on the classic breakbeat's pattern, 136 bpm, deterministic, −1 dBFS) and the one-track session that slices it (16 beats at eighths = 32 touchable slices, straight row, loop on). On the first idle ≥ 300 ms after construction with no state restored and no sessions on disk, the plugin writes `samples/amen-variation.wav` and `sessions/factory.json` and loads it; later runs without state boot into `factory.json` while it exists. `FROG_NO_FACTORY=1` and `FROG_AUTOLOAD` skip it (the tests do). `factory_test` + the appliance `shell_test` (first run, second run, restored state suppresses it). Owner chose four bars / breakbeat variation / untouched row | Done |
+| F11.6 | Appliance boot into the last used session rather than `factory.json` (the host keeps no plugin state across boots). Needs a "last session" marker in the data dir; decide together with F16.4 | Planned — breadcrumb |
 | F11.6 | Tag `v0.11-mvp` | Done |
 
 ### F18 — Record
@@ -288,6 +289,12 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F11.5 factory session (0.18.6).** Four bars of synthesised drums in
+  the spirit of the classic break, generated on the rig at first run (no
+  binary asset, no licence), sliced at eighths so the 32 tiles stay
+  touchable at 1024 px (sixteenths are one tap away on Step). Loads 300 ms
+  after construction unless a host restored state. F11.6 breadcrumb: boot
+  into the last session on the appliance.
 - **F16.2 CC map (0.18.5).** Decided with the owner: learn on the panel
   plus a hand-editable `midimap.json`, global to the rig; omni by default;
   the focused track takes every track-level CC (a DAW routes one channel

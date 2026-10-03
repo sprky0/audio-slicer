@@ -62,11 +62,16 @@ headless shell test and renders the editor offscreen as a check. See
 
 ## Running
 
-- **Samples**: `FROG_SAMPLES_DIR`, else `$RF_DATA_DIR/samples` on the
-  appliance, else `~/Library/Application Support/Frog/samples`. The Load
-  button lists that folder; on the Mac a file can also be dropped on the
-  waveform. Recordings land there as `rec-<stamp>.wav`; bounces go to
-  `exports/`, sessions to `sessions/` beside it.
+- **Data dir**: `FROG_DATA_DIR`, else `$RF_DATA_DIR` on the appliance,
+  else `~/Library/Application Support/Frog`. Under it: `samples/` (or
+  `FROG_SAMPLES_DIR`), `exports/`, `sessions/`, `midimap.json`. The Load
+  button lists the samples folder; on the Mac a file can also be dropped
+  on the waveform. Recordings land there as `rec-<stamp>.wav`.
+- **First run**: with no sessions on disk and no state from a host, Frog
+  generates a four-bar drum break (`samples/amen-variation.wav`, synthesised,
+  licence-free) and `sessions/factory.json`, and loads it; later runs
+  without host state boot into `factory.json` while it exists. Delete or
+  rename it to boot blank. `FROG_NO_FACTORY=1` skips all of this.
 - **MIDI**: clock (0xF8 / Start / Continue / Stop) when Clock is set to
   MIDI; Note On on channel n plays a slice of track n (note 36 = slice 1);
   Program Change loads a session by index; CCs drive the panel through the
@@ -107,7 +112,8 @@ headless shell test and renders the editor offscreen as a check. See
   with its window shut) the mix, transport, pattern and session hooks still
   respond; slice and modifier hooks need the panel.
 - **Developer hooks**: `FROG_AUTOLOAD=<wav>` loads a file into track 1 at
-  start, `FROG_AUTOPLAY=1` presses Play once it has loaded.
+  start (and skips the factory session), `FROG_AUTOPLAY=1` presses Play
+  once it has loaded, `FROG_NO_FACTORY=1` boots blank.
 - **Offline**: `frog-render session.json out.wav [--beats N] [--rate HZ]`
   bounces a session through the same engine.
 

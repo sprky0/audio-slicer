@@ -3,6 +3,7 @@
 #include "IPlugPaths.h"
 
 #include "engine/edit.h"
+#include "engine/factory.h"
 #include "engine/render.h"
 #include "engine/sample.h"
 #include "engine/session.h"
@@ -209,6 +210,44 @@ bool Frog::DuplicateTrack(int from) {
 
 std::string Frog::SessionsDir() const {
 	return DataDir() + "/sessions";
+}
+
+// --- first run -----------------------------------------------------------------
+
+void Frog::CheckFactory() {
+	using namespace std::chrono;
+	if (mFactoryChecked || steady_clock::now() - mBorn < milliseconds(300)) {
+		return;
+	}
+	mFactoryChecked = true;
+	if (mStateRestored || getenv("FROG_NO_FACTORY") || getenv("FROG_AUTOLOAD")) {
+		return;
+	}
+	if (mSessions.empty()) {
+		ScanSessions();
+	}
+	const std::string factory = SessionsDir() + "/factory.json";
+	if (mSessions.empty()) {
+		// a fresh rig: make the material
+		EnsureDir(SamplesDir());
+		EnsureDir(SessionsDir());
+		const char* clip = "amen-variation.wav";
+		if (!fg_factory_write_clip((SamplesDir() + "/" + clip).c_str())) {
+			return;
+		}
+		fg_session* s = (fg_session*)calloc(1, sizeof(fg_session));
+		fg_factory_session(s, clip, clip);
+		const bool ok = fg_session_save_file(factory.c_str(), s);
+		free(s);
+		if (!ok) {
+			return;
+		}
+		ScanSessions();
+	}
+	struct stat st;
+	if (stat(factory.c_str(), &st) == 0) {
+		mPendingSession = factory;   /* lands in ServiceSession this tick */
+	}
 }
 
 // --- MIDI CC map -------------------------------------------------------------
@@ -673,6 +712,7 @@ bool Frog::SerializeState(IByteChunk& chunk) const {
 }
 
 int Frog::UnserializeState(const IByteChunk& chunk, int startPos) {
+	mStateRestored = true;
 	char magic[8];
 	int pos = chunk.GetBytes(magic, 8, startPos);
 	const bool v1 = pos >= 0 && memcmp(magic, kStateMagicV1, 8) == 0;
@@ -901,6 +941,7 @@ void Frog::OnParamChange(int paramIdx) {
 }
 
 void Frog::OnIdle() {
+	CheckFactory();
 	ServiceMidiMap();
 	ServiceLoads();
 	ServiceRetired();

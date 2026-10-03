@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 
@@ -87,6 +88,7 @@ struct Rig {
 }  // namespace
 
 int main() {
+	setenv("FROG_NO_FACTORY", "1", 1);   // the first-run install is tested on its own below
 	const char* wav = writeFixture();
 
 	std::printf("=== load on idle, play on the grid ===\n");
@@ -329,6 +331,46 @@ int main() {
 	cc(c, 1, 70, 127);
 	c.proc.idle();
 	check(true, "unbound and editor-only hooks are ignored without the editor");
+
+	std::printf("=== first run: the factory session ===\n");
+	unsetenv("FROG_NO_FACTORY");
+	system("rm -rf /tmp/frog-shell-fresh");
+	setenv("FROG_DATA_DIR", "/tmp/frog-shell-fresh", 1);
+	{
+		Rig f;
+		f.proc.idle();
+		check(f.plug.TrackName(0)[0] == 0, "nothing happens in the first 300 ms (a host may still restore state)");
+		usleep(350000);
+		f.proc.idle();
+		check(std::string(f.plug.TrackName(0)) == "amen-variation.wav", "then the factory session is installed and loaded", f.plug.TrackName(0));
+		check(std::string(f.plug.GetCurrentPresetName()) == "factory", "as the current preset", f.plug.GetCurrentPresetName());
+		check(fg_engine_pattern(f.plug.Engine(), 0)->nTiles == 32 && fg_engine_pattern(f.plug.Engine(), 0)->beats == 16, "four bars of eighths");
+		check(std::fabs(f.plug.GetParam(kParamBpm)->Value() - 136.) < 1e-9, "at 136 bpm");
+		f.proc.idle();
+		check(fg_engine_has_sample(f.plug.Engine(), 0), "the clip loads on the next tick");
+		f.plug.PlayAll();
+		f.blocks(4);
+		check(f.peakIn(0, f.capture.size()) > 0.1, "and sounds");
+		struct stat st;
+		check(stat("/tmp/frog-shell-fresh/samples/amen-variation.wav", &st) == 0 && stat("/tmp/frog-shell-fresh/sessions/factory.json", &st) == 0, "clip and session written under the data dir");
+	}
+	{
+		Rig g;   // second run: the files exist, the factory session loads again, nothing is rewritten
+		usleep(350000);
+		g.proc.idle();
+		check(std::string(g.plug.TrackName(0)) == "amen-variation.wav", "a second run boots into the factory session");
+	}
+	{
+		iplug::IByteChunk ch;
+		Rig h;
+		Rig src;
+		src.plug.SerializeState(ch);
+		h.plug.UnserializeState(ch, 0);
+		usleep(350000);
+		h.proc.idle();
+		check(h.plug.TrackName(0)[0] == 0, "restored state (even an empty one) suppresses the factory load");
+	}
+	setenv("FROG_NO_FACTORY", "1", 1);
 
 	std::printf("%s\n", gFail == 0 ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED");
 	return gFail == 0 ? 0 : 1;

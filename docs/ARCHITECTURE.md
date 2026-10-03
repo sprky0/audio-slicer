@@ -1,4 +1,4 @@
-# Frog — architecture (as built, 0.18.5)
+# Frog — architecture (as built, 0.18.6)
 
 Frog is a sample slicer and loop performer: load a clip, declare how many
 beats it spans, and it is cut into a grid of slices you rearrange, resize,
@@ -129,6 +129,10 @@ every lane under ThreadSanitizer.
 - Sessions as presets: `sessions/*.json`; Save, a list to load, `StepPreset`
   and MIDI Program Change pick one and the load lands on the idle tick;
   `GetCurrentPresetName / Program` feed the appliance panel.
+- First run (`engine/factory.c`): a deterministic synthesised four-bar
+  break and its session are written under the data dir and loaded 300 ms
+  after construction when no host state arrived and no sessions exist;
+  later runs without state boot into `sessions/factory.json`.
 - CC map (`engine/midimap.c` holds the table and its JSON; the shell
   resolves hook names): CCs queue from `ProcessMidiMsg` (SPSC) and are
   applied on the idle tick. A hook is a named `DragControl`; with the

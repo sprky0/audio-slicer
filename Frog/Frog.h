@@ -204,6 +204,11 @@ private:
 	void SetParamFromMidi(int idx, double norm);
 	void LoadMidiMap();
 	void SaveMidiMap();
+	// First run (F11.5): with no state restored and no sessions on disk,
+	// generate the factory clip into samples/, save sessions/factory.json and
+	// load it. Decided 300 ms after construction so a host's state restore
+	// gets there first. FROG_NO_FACTORY=1 (tests) and FROG_AUTOLOAD skip it.
+	void CheckFactory();
 
 	fg_engine* mEngine = nullptr;
 	std::vector<PendingLoad> mPendingLoads;   // main thread only
@@ -226,6 +231,9 @@ private:
 	std::chrono::steady_clock::time_point mLearnSince;
 	int mFocusTrack = 0;
 	fg_rng mRng;
+	std::chrono::steady_clock::time_point mBorn = std::chrono::steady_clock::now();
+	bool mStateRestored = false;
+	bool mFactoryChecked = false;
 	std::thread mBounceThread;
 	std::atomic<bool> mBounceRunning{false};
 	std::atomic<int> mBounceDone{0};   // 1 ok, -1 failed, 0 none
