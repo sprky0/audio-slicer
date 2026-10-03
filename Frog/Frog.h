@@ -84,6 +84,10 @@ public:
 	int& NextColor(int track) override { return mNextColor[track]; }
 	fg_edit_mode& EditMode() override { return mEditMode; }
 	const fg_visual* CurrentNote(int track) const override;
+	int RecentFlashes(int track, const fg_flash** out) const override {
+		*out = mFlashRing[track];
+		return mFlashCount[track];
+	}
 	int ParamBpm() const override { return kParamBpm; }
 	int ParamClock() const override { return kParamClockSource; }
 	int ParamTrackVolume(int track) const override { return TrackParam(track, kTrackVolume); }
@@ -129,6 +133,10 @@ private:
 	fg_visual mNotes[FG_MAX_TRACKS][kNoteRing];
 	int mNoteHead[FG_MAX_TRACKS] = {0};
 	int mNoteCount[FG_MAX_TRACKS] = {0};
+	static constexpr int kFlashRing = 16;
+	fg_flash mFlashRing[FG_MAX_TRACKS][kFlashRing];
+	int mFlashHead[FG_MAX_TRACKS] = {0};
+	int mFlashCount[FG_MAX_TRACKS] = {0};
 #if IPLUG_EDITOR
 	frogui::Peaks mPeaks[FG_MAX_TRACKS];
 	std::unique_ptr<frogui::FrogView> mView;

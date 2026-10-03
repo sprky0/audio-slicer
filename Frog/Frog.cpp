@@ -293,8 +293,19 @@ void Frog::PollVisuals() {
 		}
 	}
 	fg_flash flashes[32];
-	while (fg_engine_poll_flashes(mEngine, flashes, 32) > 0) {
-		// F13: the modifier lane lights these
+	int nf;
+	while ((nf = fg_engine_poll_flashes(mEngine, flashes, 32)) > 0) {
+		for (int i = 0; i < nf; i++) {
+			const int t = flashes[i].track;
+			if (t < 0 || t >= FG_MAX_TRACKS) {
+				continue;
+			}
+			mFlashRing[t][mFlashHead[t]] = flashes[i];
+			mFlashHead[t] = (mFlashHead[t] + 1) % kFlashRing;
+			if (mFlashCount[t] < kFlashRing) {
+				mFlashCount[t]++;
+			}
+		}
 	}
 }
 

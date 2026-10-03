@@ -45,7 +45,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F10 | MVP UI — owned controls: DragControl, transport bar, WaveformControl (region handles, playhead), TileRowControl (select, drag, edge-resize, mini waveforms), slice toolbar, FileList; band layout; edit / perform layouts; Pi 3 render budget | Done 0.10.0 (F10.6 budget and F10.7 IDs open) |
 | F11 | MVP release — one track end-to-end on the Mac (appliance: in the container; on the board pending), docs/ARCHITECTURE.md, README, tag `v0.11-mvp` | Done 0.11.0 (on-device gate open, with F3.6) |
 | F12 | Live-performance pass — critique the UI with the device in hand: permanent big actions, pad / trigger mode, what moves to MIDI | Planned |
-| F13 | Modifier lane — one modifier per step, prob / every-N, mute / rev / gain actions, rand / reset pattern actions via `beforeTile`, pinned settings panel, chip flash / firing / superseded visuals | Planned |
+| F13 | Modifier lane — one modifier per step, prob / every-N, mute / rev / gain actions, rand / reset pattern actions via `beforeTile`, pinned settings panel, chip flash / firing / superseded visuals | Done 0.13.0 |
 | F14 | Ratchet + pattern tools — even / ramp / pitch hit layouts, span absorption, randomize with lock buckets, Reset Order / Reset All, lock, dup, refill, split / merge, Packed vs Gaps (rasterize → rebuild), grid-change inheritance | Planned |
 | F15 | Multi-track — up to `max_tracks` (4 on Pi 3), focus track + summary rows, add / duplicate / remove, in-phase join, master mix | Planned |
 | F16 | Performance MIDI — note-triggered slices, CC map (learn), program change = session, `appliance.conf` keys | Planned |
@@ -62,6 +62,18 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F1.3 | Write docs/PORT_PLAN.md: architecture, stretch strategy, clock sources, caps, UI adaptation, milestones, tests, risks | Done |
 | F1.4 | Branches: `js` preserves the browser app at its last commit; `native` carries the port | Done |
 | F1.5 | Decisions (2026-10-03, **0.1.1**): name **Frog**; record (F18) runs in parallel with the MVP with both halves tracked in sync; float32 sample storage accepted, all shared math stays `double` | Done |
+
+### F13 — Modifier lane
+
+The engine side (resolution at schedule time, ratchet spans, pattern
+actions, flash events) landed with F6; this is the UI and the plumbing.
+
+| ID | Subtask | Status |
+|----|---------|--------|
+| F13.1 | `ui/ModLaneControl.h`: one cell per step pinned to the grid; tap an empty cell places a Mute modifier, tap a chip selects it, drag moves it (occupied steps skipped); glyph + intent colour per action; a brace from a ratchet's chip to the end of its span | Done |
+| F13.2 | Settings panel in place of the two toolbar rows while a chip is selected: Action, Fire (Prob / Every) with Chance or "1 in N", Level (gain), ratchet Mode / Hits / To / Pitch / Len enabled per action and mode, Remove, Done; edits validate and publish | Done |
+| F13.3 | Live feedback from the engine's rings: chips flash for 180 ms at their audible moment; a ratchet's chip and brace stay lit for the span; chips inside the span past the covered tile grey out; the waveform playhead restarts per hit (ramp hits located by their boundaries, sweeping only the material a hit consumes). `fg_visual` carries the slot's grid step for this | Done |
+| F13.4 | `editor_shot_test` places a 2-step ramp ratchet and a mute, taps the chip; `docs/F13_evidence/` has the panel and the ratchet firing | Done |
 
 ### F11 — MVP release
 
@@ -229,6 +241,13 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F13 complete (0.13.0).** The modifier lane is in the panel with its
+  settings replacing the toolbars while a chip is selected, and the live
+  flash / firing / superseded states driven from the engine's rings.
+  Verified offscreen in the container (docs/F13_evidence); Mac APP / AU /
+  VST3 build, auval passes. F12 (the live-performance pass) stays queued
+  for when the device is in hand; F14 (remaining pattern tools: the virtual
+  zoom / trim window, the All broadcast) is next.
 - **F11: MVP (0.11.0), tag `v0.11-mvp`.** Milestone M3 on the Mac and in
   the appliance's cross-build; the board gates (F3.6, F10.6, F11.4) wait for
   hardware. docs/ARCHITECTURE.md describes what was built; the README is

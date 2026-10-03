@@ -12,6 +12,8 @@
 #include "IGraphicsKMS.h"
 #include "engine/sample.h"
 #include "ui/DragControl.h"
+#include "ui/ModLaneControl.h"
+#include "ui/TileRowControl.h"
 
 #include "EditorModule.h"
 #include "iplug2/IGraphicsKMSEditorModule.h"
@@ -88,6 +90,14 @@ int main(int argc, char** argv) {
 	plug.RequestLoadSample(0, wav);
 	proc.idle();
 	check(fg_engine_has_sample(plug.Engine(), 0), "the sample loaded on the idle tick");
+	// two modifiers for the lane: a 2-step ratchet on step 4, a mute on step 9
+	{
+		fg_pattern* p = fg_engine_pattern(plug.Engine(), 0);
+		p->nMods = 2;
+		p->mods[0] = fg_mod{4, FG_MOD_RATCHET, FG_FIRE_PROB, FG_RATCHET_RAMP, 100, 0, 1, 4, 0, 2};
+		p->mods[1] = fg_mod{9, FG_MOD_MUTE, FG_FIRE_PROB, 0, 100, 0, 1, 1, 0, 1};
+		fg_engine_publish(plug.Engine(), 0);
+	}
 
 	std::printf("=== the editor module ===\n");
 	check(!proc.editorModuleBuildId().empty(), "the build's editor is in a module", proc.editorModuleBuildId());
@@ -167,6 +177,19 @@ int main(int argc, char** argv) {
 		proc.editorTurn();
 		if (!shots.empty()) {
 			check(proc.editorScreenshot(shots + "/selected.png"), "selected.png written");
+		}
+		// the modifier lane: tap the ratchet chip, its settings replace the toolbars
+		for (int i = 0; i < ui->NControls(); ++i) {
+			if (auto* lane = dynamic_cast<frogui::ModLaneControl*>(ui->GetControl(i))) {
+				const IRECT lr = lane->GetRECT();
+				tap(*ui, lr.L + lr.W() * 4.5f / 16.f, lr.MH());
+				check(lane->Selected() == 0, "a tap on the chip selects the ratchet modifier");
+				break;
+			}
+		}
+		proc.editorTurn();
+		if (!shots.empty()) {
+			check(proc.editorScreenshot(shots + "/mods.png"), "mods.png written");
 		}
 	}
 	plug.StopAll();

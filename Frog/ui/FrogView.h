@@ -6,6 +6,7 @@
 #include "DragControl.h"
 #include "FileListControl.h"
 #include "FrogVersion.h"
+#include "ModLaneControl.h"
 #include "Peaks.h"
 #include "Style.h"
 #include "TileRowControl.h"
@@ -16,6 +17,7 @@
 #include "engine/pattern.h"
 
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <string>
 
@@ -44,6 +46,8 @@ public:
 	virtual fg_edit_mode& EditMode() = 0;
 	// the latest sounding slot for the track, or nullptr
 	virtual const fg_visual* CurrentNote(int track) const = 0;
+	// recent modifier flashes (ring, oldest first is not guaranteed); count returned
+	virtual int RecentFlashes(int track, const fg_flash** out) const = 0;
 	// parameter indices the view binds to
 	virtual int ParamBpm() const = 0;
 	virtual int ParamClock() const = 0;
@@ -92,6 +96,8 @@ public:
 		mModLane->SetTargetAndDrawRECTs(modLane);
 		Row(toolbar1, gap, mToolbar1);
 		Row(toolbar2, gap, mToolbar2);
+		Row(toolbar1, gap, mModRow1);
+		Row(toolbar2, gap, mModRow2);
 		if (mFileList) {
 			mFileList->SetTargetAndDrawRECTs(b);
 		}
@@ -102,20 +108,54 @@ public:
 	void Idle() {
 		const fg_visual* v = mHost.CurrentNote(mTrack);
 		const int64_t now = fg_engine_now(mHost.Engine());
+		const double sr = 48000.0;   // flash timing only; a 180 ms window
+		// modifier flashes: the newest within 180 ms of now
+		const fg_flash* fl = nullptr;
+		const int nf = mHost.RecentFlashes(mTrack, &fl);
+		int flashStep = -1;
+		int64_t best = -1;
+		for (int k = 0; k < nf; k++) {
+			if (fl[k].at <= now && now - fl[k].at < (int64_t)(0.18 * sr) && fl[k].at > best) {
+				best = fl[k].at;
+				flashStep = fl[k].step;
+			}
+		}
 		if (!v || v->silent || now >= v->stop) {
 			mTiles->SetPlaying(v && now < v->stop ? v->tileIndex : -1);
 			mWaveform->SetPlayhead(-1.0);
+			mModLane->SetLive(flashStep, -1, -1, -1);
 			return;
 		}
 		mTiles->SetPlaying(v->tileIndex);
 		const fg_pattern* p = Pat();
-		const double frac = (double)(now - v->start) / (double)std::max<int64_t>(1, v->stop - v->start);
 		const int U = fg_unit_count(p);
+		double frac = (double)(now - v->start) / (double)std::max<int64_t>(1, v->stop - v->start);
+		double regionFrac = 1.0;   // how much of the tile's region the current hit sweeps
+		double wTile = v->w;
+		if (v->ratchet && v->hits > 0) {
+			// per-hit restart: locate the hit by its boundaries (ramp hits are not uniform)
+			double steps[FG_MAX_HITS];
+			const int hits = fg_ratchet_hit_steps(&v->rt, v->spanSteps, steps, FG_MAX_HITS);
+			int h = 0;
+			while (h + 1 < hits && frac >= steps[h + 1] / v->w) {
+				h++;
+			}
+			const double b0 = steps[h] / v->w;
+			const double b1 = h + 1 < hits ? steps[h + 1] / v->w : std::min(1.0, v->spanSteps / v->w);
+			frac = b1 > b0 ? std::min(1.0, (frac - b0) / (b1 - b0)) : 0.0;
+			wTile = v->wTile;
+			regionFrac = std::min(1.0, (v->spanSteps / hits) / v->wTile);
+			const int supFrom = (int)std::ceil(v->stepInBar + v->wTile - FG_EPS);
+			const int supTo = (int)std::floor(v->stepInBar + v->spanSteps + FG_EPS);
+			mModLane->SetLive(flashStep, v->rt.step, supFrom, supTo);
+		} else {
+			mModLane->SetLive(flashStep, -1, -1, -1);
+		}
 		double unitPos;
 		if (v->tileIndex >= 0 && v->tileIndex < p->nTiles && p->tiles[v->tileIndex].reversed) {
-			unitPos = v->src + (1.0 - frac) * v->w;
+			unitPos = v->src + (1.0 - frac * regionFrac) * wTile;
 		} else {
-			unitPos = v->src + frac * v->w;
+			unitPos = v->src + frac * regionFrac * wTile;
 		}
 		const double vspan = p->virtualEnd - p->virtualStart;
 		const double f = p->virtualStart + (p->start + (p->end - p->start) * (unitPos / U)) * vspan;
@@ -139,6 +179,7 @@ public:
 	void PatternChanged(int track) {
 		if (track == mTrack) {
 			mTiles->Refresh();
+			mModLane->Refresh();
 			RefreshToolbar();
 		}
 	}
@@ -230,7 +271,8 @@ private:
 		mTiles = new TileRowControl(z);
 		mTiles->Bind(Pat(), &mHost.EditMode(), &mHost.NextColor(mTrack), [this] { Publish(); }, [this](int) { RefreshToolbar(); });
 		g->AttachControl(mTiles);
-		mModLane = new IPanelControl(z, kWell);   // F13: the modifier lane
+		mModLane = new ModLaneControl(z);
+		mModLane->Bind(Pat(), [this] { Publish(); }, [this](int i) { ShowModPanel(i >= 0); });
 		g->AttachControl(mModLane);
 
 		// --- slice toolbar (row 1: the selected slice) ---------------------
@@ -302,6 +344,54 @@ private:
 			mTiles->Refresh();
 		}), mToolbar2, 1.f));
 
+		// --- modifier settings (shown in place of the toolbars while a chip is selected) ---
+		mModAction = drag(add(DragControl::Enum(z, "", {"Mute", "Rev", "Gain", "Rand", "Reset", "Ratchet"}, 0, [this](double v) { SetMod([&](fg_mod& m) { m.action = (uint8_t)v; }); }), mModRow1, 1.5f));
+		mModFire = drag(add(DragControl::Enum(z, "Fire", {"Prob", "Every"}, 0, [this](double v) {
+			SetMod([&](fg_mod& m) {
+				m.fireMode = (uint8_t)v;
+				m.fireValue = (int16_t)(m.fireMode == FG_FIRE_EVERY ? 2 : 100);
+			});
+		}), mModRow1, 1.5f));
+		mModValue = drag(add(new DragControl(z, "Chance", DragControl::Mode::Value, 0, 100, 1, 100), mModRow1, 1.5f));
+		mModValue->WithFormat([this](double v) {
+			char b[16];
+			const fg_mod* m = SelMod();
+			if (m && m->fireMode == FG_FIRE_EVERY) {
+				snprintf(b, sizeof b, "1 in %d", (int)std::lround(v));
+			} else {
+				snprintf(b, sizeof b, "%d%%", (int)std::lround(v));
+			}
+			return std::string(b);
+		})->WithOnChange([this](double v) { SetMod([&](fg_mod& m) { m.fireValue = (int16_t)std::lround(v); }); });
+		mModLevel = drag(add(new DragControl(z, "Level", DragControl::Mode::Value, 0, 200, 1, 100), mModRow1, 1.5f));
+		mModLevel->WithFormat(Pct)->WithOnChange([this](double v) { SetMod([&](fg_mod& m) { m.gainAmt = (int16_t)std::lround(v); }); });
+		mModMode = drag(add(DragControl::Enum(z, "", {"Even", "Ramp", "Pitch"}, 0, [this](double v) { SetMod([&](fg_mod& m) { m.mode = (uint8_t)v; }); }), mModRow1, 1.5f));
+		mModHits = drag(add(new DragControl(z, "Hits", DragControl::Mode::Value, 1, 8, 1, 2), mModRow2, 1.f));
+		mModHits->WithOnChange([this](double v) { SetMod([&](fg_mod& m) { m.subdiv = (int8_t)std::lround(v); }); });
+		mModTo = drag(add(new DragControl(z, "To", DragControl::Mode::Value, 1, 8, 1, 4), mModRow2, 1.f));
+		mModTo->WithOnChange([this](double v) { SetMod([&](fg_mod& m) { m.subdivTo = (int8_t)std::lround(v); }); });
+		mModPitch = drag(add(new DragControl(z, "Pitch", DragControl::Mode::Value, -12, 12, 1, 0), mModRow2, 1.f));
+		mModPitch->WithFormat([](double v) { char b[8]; snprintf(b, sizeof b, "%+d", (int)std::lround(v)); return std::string(b); })
+		    ->WithOnChange([this](double v) { SetMod([&](fg_mod& m) { m.pitchStep = (int8_t)std::lround(v); }); });
+		mModLen = drag(add(new DragControl(z, "Len", DragControl::Mode::Value, 1, 16, 1, 1), mModRow2, 1.f));
+		mModLen->WithOnChange([this](double v) { SetMod([&](fg_mod& m) { m.lenSteps = (int8_t)std::lround(v); }); });
+		add(DragControl::Button(z, "Remove", Intent::Stop, [this](double) {
+			const int i = mModLane->Selected();
+			fg_pattern* p = Pat();
+			if (i >= 0 && i < p->nMods) {
+				memmove(&p->mods[i], &p->mods[i + 1], sizeof(fg_mod) * (size_t)(p->nMods - i - 1));
+				p->nMods--;
+				Publish();
+			}
+			mModLane->Select(-1);
+			ShowModPanel(false);
+		}), mModRow2, 1.f);
+		add(DragControl::Button(z, "Done", Intent::Go, [this](double) {
+			mModLane->Select(-1);
+			ShowModPanel(false);
+		}), mModRow2, 1.f);
+		ShowModPanel(false);
+
 		fg_rng_seed(&mRng, 0xC0FFEE);
 		SyncFromPattern();
 		SampleChanged(mTrack);
@@ -312,6 +402,70 @@ private:
 		char b[16];
 		snprintf(b, sizeof b, "%d%%", (int)std::lround(v));
 		return b;
+	}
+
+	fg_mod* SelMod() {
+		const int i = mModLane ? mModLane->Selected() : -1;
+		fg_pattern* p = Pat();
+		return (i >= 0 && i < p->nMods) ? &p->mods[i] : nullptr;
+	}
+
+	void SetMod(const std::function<void(fg_mod&)>& fn) {
+		fg_mod* m = SelMod();
+		if (!m) {
+			return;
+		}
+		fn(*m);
+		fg_pattern_validate(Pat());
+		Publish();
+		mModLane->Refresh();
+		RefreshModPanel();
+	}
+
+	// the toolbars and the modifier panel share the two bottom rows
+	void ShowModPanel(bool on) {
+		for (auto& it : mToolbar1) {
+			it.first->Hide(on);
+		}
+		for (auto& it : mToolbar2) {
+			it.first->Hide(on);
+		}
+		for (auto& it : mModRow1) {
+			it.first->Hide(!on);
+		}
+		for (auto& it : mModRow2) {
+			it.first->Hide(!on);
+		}
+		if (on) {
+			RefreshModPanel();
+		}
+	}
+
+	void RefreshModPanel() {
+		const fg_mod* m = SelMod();
+		if (!m) {
+			return;
+		}
+		mModAction->SetLocalValue(m->action);
+		mModFire->SetLocalValue(m->fireMode);
+		mModValue->SetLocalValue(m->fireValue);
+		mModLevel->SetLocalValue(m->gainAmt);
+		mModMode->SetLocalValue(m->mode);
+		mModHits->SetLocalValue(m->subdiv);
+		mModTo->SetLocalValue(m->subdivTo);
+		mModPitch->SetLocalValue(m->pitchStep);
+		mModLen->SetLocalValue(m->lenSteps);
+		const bool ratchet = m->action == FG_MOD_RATCHET;
+		mModLevel->WithEnabled(m->action == FG_MOD_GAIN);
+		mModMode->WithEnabled(ratchet);
+		mModHits->WithEnabled(ratchet);
+		mModTo->WithEnabled(ratchet && m->mode == FG_RATCHET_RAMP);
+		mModPitch->WithEnabled(ratchet && m->mode == FG_RATCHET_PITCH);
+		mModLen->WithEnabled(ratchet);
+		DragControl* all[] = {mModAction, mModFire, mModValue, mModLevel, mModMode, mModHits, mModTo, mModPitch, mModLen};
+		for (auto* c : all) {
+			c->SetDirty(false);
+		}
 	}
 
 	// apply a setter to the selected clip, publish, redraw
@@ -412,10 +566,12 @@ private:
 	bool mPerform = false;
 	fg_rng mRng;
 
-	std::vector<std::pair<IControl*, float>> mTransport, mHeader, mToolbar1, mToolbar2;
+	std::vector<std::pair<IControl*, float>> mTransport, mHeader, mToolbar1, mToolbar2, mModRow1, mModRow2;
 	WaveformControl* mWaveform = nullptr;
 	TileRowControl* mTiles = nullptr;
-	IControl* mModLane = nullptr;
+	ModLaneControl* mModLane = nullptr;
+	DragControl *mModAction = nullptr, *mModFire = nullptr, *mModValue = nullptr, *mModLevel = nullptr, *mModMode = nullptr;
+	DragControl *mModHits = nullptr, *mModTo = nullptr, *mModPitch = nullptr, *mModLen = nullptr;
 	FrogVersionReadout* mVersion = nullptr;
 	FileListControl* mFileList = nullptr;
 	DragControl *mPerformBtn = nullptr, *mFileChip = nullptr, *mBeats = nullptr, *mStep = nullptr, *mPitch = nullptr, *mLoop = nullptr;

@@ -296,11 +296,15 @@ static void schedule_ratchet(fg_seq* s, fg_pattern* p, const fg_sample* smp, con
 		consumed += p->tiles[j].w > 0.0 ? p->tiles[j].w : 1.0;
 		j++;
 	}
+	int loopIdx;
+	double stepInBar;
+	fg_bar_pos(posSteps, fg_unit_count(p), &loopIdx, &stepInBar);
 	fg_visual v = {0};
 	v.track = s->track;
 	v.tileIndex = tileIdx;
 	v.src = tile->src;
 	v.w = consumed;
+	v.stepInBar = stepInBar;
 	v.start = (int64_t)llround(startT);
 	v.stop = (int64_t)llround(fg_grid_sample_at_beat(grid, base + consumed * stepBeats));
 	v.silent = !r->active;
@@ -388,11 +392,15 @@ void fg_seq_process(fg_seq* s, fg_pattern* p, const fg_sample* smp, const fg_gri
 			spec.tileIndex = s->tileIndex;
 			fg_voice_start(free_voice(voices, nVoices), &spec, sampleRate);
 		}
+		int loopIdx;
+		double stepInBar;
+		fg_bar_pos(posSteps, fg_unit_count(p), &loopIdx, &stepInBar);
 		fg_visual v = {0};
 		v.track = s->track;
 		v.tileIndex = s->tileIndex;
 		v.src = tile->src;
 		v.w = w;
+		v.stepInBar = stepInBar;
 		v.start = startS;
 		v.stop = stopS;
 		v.silent = !sounds;

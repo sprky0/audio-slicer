@@ -24,6 +24,7 @@ typedef struct {
 	double w;          /* steps the slot occupies (a ratchet: the whole consumed span) */
 	int64_t start;     /* absolute samples */
 	int64_t stop;
+	double stepInBar;  /* grid step the slot starts on (0..U) */
 	bool silent;
 	bool ratchet;
 	fg_mod rt;         /* the ratchet modifier, for hit boundaries */
