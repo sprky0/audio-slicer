@@ -320,6 +320,40 @@ static void schedule_ratchet(fg_seq* s, fg_pattern* p, const fg_sample* smp, con
 	drain_ratchet(s, grid, voices, nVoices, blockStart, n, sampleRate);
 }
 
+void fg_seq_trigger_unit(fg_seq* s, const fg_pattern* p, const fg_sample* smp, int unit, double velocity,
+                         int64_t at, fg_voice* voices, int nVoices, double sampleRate) {
+	const int U = fg_unit_count(p);
+	if (!smp || unit < 0 || unit >= U) {
+		return;
+	}
+	fg_tile t;
+	fg_tile_init(&t, (double)unit, 1.0, unit);
+	/* natural rate: the slot is exactly one unit of source */
+	const double vspan = p->virtualEnd - p->virtualStart;
+	const double unitSec = ((p->end - p->start) * vspan * (double)smp->frames / sampleRate) / U;
+	fg_override ov = {false, false, velocity < 0.0 ? 0.0 : (velocity > 1.0 ? 1.0 : velocity), 0.0};
+	fg_voice_spec spec;
+	fg_env env;
+	if (!fg_resolve_slot(p, smp, &t, unitSec, &ov, sampleRate, &spec, &env)) {
+		return;
+	}
+	spec.start = at;
+	spec.stop = at + (int64_t)llround(unitSec * sampleRate);
+	spec.skipOut = 0;
+	spec.tileIndex = -1;
+	spec.declick = false;
+	fg_voice_start(free_voice(voices, nVoices), &spec, sampleRate);
+	fg_visual v = {0};
+	v.track = s->track;
+	v.tileIndex = -1;
+	v.src = (double)unit;
+	v.w = 1.0;
+	v.stepInBar = -1.0;
+	v.start = spec.start;
+	v.stop = spec.stop;
+	emit_visual(s, &v);
+}
+
 void fg_seq_process(fg_seq* s, fg_pattern* p, const fg_sample* smp, const fg_grid* grid,
                     fg_voice* voices, int nVoices, int64_t blockStart, int n, double sampleRate) {
 	if (!s->playing) {

@@ -78,6 +78,12 @@ void fg_seq_stop(fg_seq* s);
 void fg_seq_process(fg_seq* s, fg_pattern* pattern, const fg_sample* smp, const fg_grid* grid,
                     fg_voice* voices, int nVoices, int64_t blockStart, int n, double sampleRate);
 
+/* A one-shot trigger outside the sequencer (a MIDI note): play one unit of
+ * source at its natural rate, scaled by `velocity` (0..1), from absolute
+ * sample `at`, ringing out (no cut). Emits a visual with tileIndex −1. */
+void fg_seq_trigger_unit(fg_seq* s, const fg_pattern* p, const fg_sample* smp, int unit, double velocity,
+                         int64_t at, fg_voice* voices, int nVoices, double sampleRate);
+
 /* The slot → playback policy, exposed for tests and the render tool. `ov`
  * flags come from mute / rev / gain modifiers for this pass; `envDurSec` > 0
  * sizes fades to one ratchet hit instead of the slot. Returns false for a

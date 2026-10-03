@@ -200,6 +200,19 @@ int main() {
 	check(b.peakIn(5300, 10800) == 0.0, "the restored mute on unit 1 holds");
 	check(b.peakIn(16241, 16260) > 0.5 * m * 4.0 / 16.0, "unit 3 follows at the restored tempo (unit 2 is the reversed one)");
 
+	std::printf("=== a MIDI note plays a slice ===\n");
+	b.plug.StopAll();
+	b.blocks(2);
+	b.capture.clear();
+	{
+		const unsigned char note[3] = {0x90, 36 + 3, 127};
+		b.proc.midi(note, 3, 0);
+	}
+	b.blocks(2);
+	// the restored pan is −25 %: the mono law's left gain is cos(0.375 · π / 2)
+	const double gl = std::cos(0.375 * 3.14159265358979 / 2.0);
+	check(std::fabs(b.capture[0] - gl * 4.0 / 16.0) < 1e-4, "note 39 on channel 1 plays unit 4 (index 3) of track 1 at once");
+
 	std::printf("=== bounce from the plugin ===\n");
 	setenv("RF_DATA_DIR", "/tmp/frog-shell-data", 1);
 	check(b.plug.Bounce(), "Bounce() starts a worker");

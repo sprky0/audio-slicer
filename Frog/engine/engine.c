@@ -329,15 +329,29 @@ static void start_all_aligned(fg_engine* e, double beat) {
 	}
 }
 
-/* The MIDI clock events queued for this block, in offset order. */
+/* The MIDI events queued for this block, in offset order: notes trigger
+ * units; clock bytes steer the grid when the clock source is MIDI. */
 static void apply_midi_clock(fg_engine* e, int64_t blockStart) {
-	if (e->clockSource != FG_CLOCK_MIDI) {
-		e->nMidiEvents = 0;
-		return;
-	}
 	for (int i = 0; i < e->nMidiEvents; i++) {
 		const fg_midi_event* ev = &e->midiEvents[i];
 		const double t = (double)(blockStart + ev->offset);
+		if (ev->status < 0xF0) {
+			if ((ev->status & 0xF0) == 0x90 && ev->data2 > 0) {
+				const int track = ev->status & 0x0F;
+				if (track < e->nTracks) {
+					fg_track* tr = &e->tracks[track];
+					fg_sample* smp = atomic_load_explicit(&tr->sample, memory_order_acquire);
+					if (smp && smp == tr->smp) {   /* a store the swap below would retire is never read */
+						fg_seq_trigger_unit(&tr->seq, &tr->active, smp, (int)ev->data1 - FG_TRIGGER_BASE_NOTE, ev->data2 / 127.0,
+						                    (int64_t)t, tr->voices, FG_MAX_VOICES, e->sampleRate);
+					}
+				}
+			}
+			continue;
+		}
+		if (e->clockSource != FG_CLOCK_MIDI) {
+			continue;
+		}
 		const fg_midiclock_event what = fg_midiclock_status(&e->midiClock, ev->status, t);
 		switch (what) {
 			case FG_MC_TEMPO:
@@ -546,6 +560,19 @@ void fg_engine_midi(fg_engine* e, uint8_t status, int sampleOffset) {
 	}
 	fg_midi_event* ev = &e->midiEvents[e->nMidiEvents++];
 	ev->status = status;
+	ev->data1 = 0;
+	ev->data2 = 0;
+	ev->offset = sampleOffset < 0 ? 0 : sampleOffset;
+}
+
+void fg_engine_midi_msg(fg_engine* e, uint8_t status, uint8_t data1, uint8_t data2, int sampleOffset) {
+	if (status < 0x80 || status >= 0xF0 || e->nMidiEvents >= FG_MIDI_RING) {
+		return;
+	}
+	fg_midi_event* ev = &e->midiEvents[e->nMidiEvents++];
+	ev->status = status;
+	ev->data1 = data1;
+	ev->data2 = data2;
 	ev->offset = sampleOffset < 0 ? 0 : sampleOffset;
 }
 

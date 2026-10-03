@@ -48,6 +48,7 @@ typedef enum {
 
 typedef struct {
 	uint8_t status;
+	uint8_t data1, data2;
 	int offset;   /* sample offset within the coming block */
 } fg_midi_event;
 
@@ -78,6 +79,14 @@ void fg_engine_process(fg_engine* e, double* const* out, int nCh, int nFrames);
  * MIDI status byte (clock, start, continue, stop) at `sampleOffset` into
  * the block. Other statuses are ignored here (notes arrive with F16). */
 void fg_engine_midi(fg_engine* e, uint8_t status, int sampleOffset);
+
+/* Audio thread, before fg_engine_process(): a channel message. Note On plays
+ * one unit of the track on its channel (channel n → track n − 1; note 36 =
+ * unit 0, chromatic) at the velocity, one-shot. Other messages are ignored
+ * for now (CC map: F16.2). */
+void fg_engine_midi_msg(fg_engine* e, uint8_t status, uint8_t data1, uint8_t data2, int sampleOffset);
+
+#define FG_TRIGGER_BASE_NOTE 36
 
 /* Audio thread, before fg_engine_process(): the host's transport for the
  * coming block (plugin builds). Used only when the clock source is HOST. */

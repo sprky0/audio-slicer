@@ -485,8 +485,9 @@ void Frog::ProcessMidiMsg(const IMidiMsg& msg) {
 	const int status = msg.mStatus;
 	if (status >= 0xF8) {
 		fg_engine_midi(mEngine, (uint8_t)status, msg.mOffset);
+	} else if (status >= 0x80 && status < 0xF0) {
+		fg_engine_midi_msg(mEngine, (uint8_t)status, (uint8_t)msg.mData1, (uint8_t)msg.mData2, msg.mOffset);
 	}
-	// notes and CCs: F16
 }
 
 void Frog::OnReset() {
