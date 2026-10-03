@@ -48,11 +48,19 @@ echo "==> configuring cmake"
 	-DIPLUG2_DIR=/src/iPlug2 -DRFLH_ROOT=/rflh -DFROG_APPLIANCE_EDITOR="${EDITOR_ON}"
 
 echo "==> building frog-appliance and the appliance tests"
-"${DOCKER_RUN[@]}" cmake --build /build -j --target frog-appliance shell_test
+TARGETS="frog-appliance shell_test"
+[ "${EDITOR_ON}" = "ON" ] && TARGETS="${TARGETS} editor_shot_test"
+"${DOCKER_RUN[@]}" cmake --build /build -j --target ${TARGETS}
 
 # Frog as the appliance drives it (platform/linux/tests/): seconds, so it runs on every build
 echo "==> running shell_test"
 "${DOCKER_RUN[@]}" /build/bin/shell_test
+
+# the editor, surfaceless on the container's Mesa (llvmpipe); its images land in the build dir
+if [ "${EDITOR_ON}" = "ON" ]; then
+	echo "==> running editor_shot_test"
+	"${DOCKER_RUN[@]}" bash -c 'mkdir -p /build/shots && cd /build/bin && ./editor_shot_test /build/shots'
+fi
 
 # Proof of build without a board: the appliance renders a few seconds offline.
 echo "==> render check"

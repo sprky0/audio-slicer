@@ -5,12 +5,18 @@
 #include "engine/engine.h"
 #include "engine/frog_types.h"
 
+#if IPLUG_EDITOR
+#include "ui/FrogView.h"
+#include "ui/Peaks.h"
+#endif
+
+#include <memory>
 #include <string>
 #include <vector>
 
 // Frog — sample slicer and loop performer. The plugin class is the shell
 // around the C engine (engine/): parameters, state, MIDI, the host clock,
-// sample loading on the idle thread, and (F10) the UI.
+// sample loading on the idle thread, and the UI (ui/).
 
 const int kNumPresets = 1;
 
@@ -44,7 +50,11 @@ enum ECtrlTags {
 using namespace iplug;
 using namespace igraphics;
 
-class Frog final : public Plugin {
+class Frog final : public Plugin
+#if IPLUG_EDITOR
+    , public frogui::Host
+#endif
+{
 public:
 	Frog(const InstanceInfo& info);
 	~Frog();
@@ -53,7 +63,7 @@ public:
 	bool SerializeState(IByteChunk& chunk) const override;
 	int UnserializeState(const IByteChunk& chunk, int startPos) override;
 
-	// --- the engine, for the UI (main thread) ---------------------------
+	// --- the engine, for the UI and tests (main thread) ------------------
 	fg_engine* Engine() { return mEngine; }
 	// Queue a sample file for a track; loaded on the idle thread.
 	void RequestLoadSample(int track, const std::string& path);
@@ -64,7 +74,23 @@ public:
 	void StopAll();
 	int PendingLoadCount() const { return (int)mPendingLoads.size(); }
 	const std::string& TrackPath(int track) const { return mTrackPaths[track]; }
-	const std::string& TrackName(int track) const { return mTrackNames[track]; }
+	const char* TrackName(int track) const { return mTrackNames[track].c_str(); }
+
+#if IPLUG_EDITOR
+	// frogui::Host
+	void Publish(int track) override { fg_engine_publish(mEngine, track); }
+	const frogui::Peaks& TrackPeaks(int track) const override { return mPeaks[track]; }
+	void LoadSample(int track, const std::string& path) override { RequestLoadSample(track, path); }
+	int& NextColor(int track) override { return mNextColor[track]; }
+	fg_edit_mode& EditMode() override { return mEditMode; }
+	const fg_visual* CurrentNote(int track) const override;
+	int ParamBpm() const override { return kParamBpm; }
+	int ParamClock() const override { return kParamClockSource; }
+	int ParamTrackVolume(int track) const override { return TrackParam(track, kTrackVolume); }
+	int ParamTrackPan(int track) const override { return TrackParam(track, kTrackPan); }
+	int ParamTrackMute(int track) const override { return TrackParam(track, kTrackMute); }
+	void OnUIClose() override;
+#endif
 
 #if IPLUG_DSP
 	void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
@@ -88,12 +114,23 @@ private:
 	void ApplySession(const fg_session& s);
 	void ServiceLoads();
 	void ServiceRetired();
+	void PollVisuals();
 
 	fg_engine* mEngine = nullptr;
 	std::vector<PendingLoad> mPendingLoads;   // main thread only
 	std::vector<Retired> mRetired;            // main thread only
 	std::string mTrackNames[FG_MAX_TRACKS];   // display names of loaded samples
 	std::string mTrackPaths[FG_MAX_TRACKS];   // as stored in the session
+	int mNextColor[FG_MAX_TRACKS] = {0};
 	fg_edit_mode mEditMode = FG_EDIT_PACK;
 	double mSampleRate = 48000.;
+	// the recent slots per track, from the engine's visual ring (main thread)
+	static constexpr int kNoteRing = 32;
+	fg_visual mNotes[FG_MAX_TRACKS][kNoteRing];
+	int mNoteHead[FG_MAX_TRACKS] = {0};
+	int mNoteCount[FG_MAX_TRACKS] = {0};
+#if IPLUG_EDITOR
+	frogui::Peaks mPeaks[FG_MAX_TRACKS];
+	std::unique_ptr<frogui::FrogView> mView;
+#endif
 };

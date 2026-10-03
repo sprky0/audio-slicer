@@ -42,7 +42,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F7 | Engine: time-stretch + pitch — streaming WSOLA per voice (coarse-to-fine lag search), 4-point interpolating pitch / varispeed reader, bypass at factor 1, Pi 3 cost measured | Done 0.7.0 (F7.4 board measurement open) |
 | F8 | Engine: parity — bounce JS fixtures natively, unstretched paths within −80 dBFS, stretched paths by per-step RMS + onset | Done 0.8.0 (`public/` kept, see above) |
 | F9 | Plugin shell — iPlug2 params (BPM, clock source, per-track vol / pan / mute), state chunk with the session JSON, `OnIdle` loading + decode + resample, MIDI clock PLL, Start / Continue / Stop, host transport sync in DAWs | Done 0.9.0 |
-| F10 | MVP UI — owned controls: DragControl, TransportBar, WaveformControl (region handles, zoom / trim, playhead), TileRowControl (select, drag, edge-resize, mini waveforms), slice toolbar, FileList; band layout engine with stable IDs; edit / perform layouts; Pi 3 render budget | Planned |
+| F10 | MVP UI — owned controls: DragControl, transport bar, WaveformControl (region handles, playhead), TileRowControl (select, drag, edge-resize, mini waveforms), slice toolbar, FileList; band layout; edit / perform layouts; Pi 3 render budget | Done 0.10.0 (F10.6 budget and F10.7 IDs open) |
 | F11 | MVP release — one track end-to-end on the appliance and the Mac, factory session, docs/ARCHITECTURE.md, tag `v0.11-mvp` | Planned |
 | F12 | Live-performance pass — critique the UI with the device in hand: permanent big actions, pad / trigger mode, what moves to MIDI | Planned |
 | F13 | Modifier lane — one modifier per step, prob / every-N, mute / rev / gain actions, rand / reset pattern actions via `beforeTile`, pinned settings panel, chip flash / firing / superseded visuals | Planned |
@@ -186,13 +186,15 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
 
 | ID | Subtask | Status |
 |----|---------|--------|
-| F10.1 | `ui/Style.h` tokens (unit, control height 6 u, intent colours) and `ui/Layout.h` band layout (fixed / flex rows and columns, min sizes), resolved on resize and mode change | Planned |
-| F10.2 | DragControl: drag any direction, tap-to-value, double-tap detent, enum and value modes | Planned |
-| F10.3 | WaveformControl: cached min / max peaks, region handles, zoom / trim, dirty-rect playhead | Planned |
-| F10.4 | TileRowControl: variable-width tiles with mini waveforms and badges, select → drag / edge-resize, double-tap split | Planned |
-| F10.5 | TransportBar + slice toolbar + FileList over `RF_DATA_DIR/samples` | Planned |
-| F10.6 | Pi 3 budget: at rest ≤ 3 % of a core, drag ≤ 20 %, frame cap 30 fps, 0 xruns over 10 min with the UI driven | Planned |
+| F10.1 | `ui/Style.h` tokens (unit = shorter side / 75 clamped 6–12 px, controls 6 u, intent colours, the 16 slice hues) and the band layout in `FrogView::Layout`: pinned transport / header / two toolbar rows / modifier lane, waveform and tiles share the rest (edit 3:2, perform 1:4), re-laid on resize and the Perform toggle. Rendered at 1024 × 600 and 1280 × 720 (`docs/F10_evidence/`) | Done |
+| F10.2 | `ui/DragControl.h`: value / enum / toggle / button modes, drag any direction (right or up increases, 150 px = full range, 20 px per step), tap to value or step, double-tap to the detent, wheel; param-linked or local; a formatter turns a button into a live chip | Done |
+| F10.3 | `ui/WaveformControl.h` over `ui/Peaks.h` (4096 min / max columns built at load): selection shade, green / red handles with finger-sized hit zones, unit grid, 2 px dirty-rect playhead; drop a file to load. Zoom / trim deferred to F14 with the virtual window | Done |
+| F10.4 | `ui/TileRowControl.h`: tiles proportional to `w` with the slice's own waveform (mirrored when reversed, muted dimmed, locked ringed), badges (unit, reverse, pitch, gain); tap selects, drag reorders (packed live reflow / gaps ghost + drop), edge drag on the selected tile resizes from a snapshot through `edit.h`, double-tap splits | Done |
+| F10.5 | Transport (Play / Stop / BPM / Clock / Perform / build stamp), header (Load / file chip / Beats / Step / Pitch / Vol / Pan / Mute / Loop), slice toolbar (Mute / Lock / Rev / Gain / fades + curves / Pitch / Split / Merge), pattern toolbar (Dup / Refill / Randomize / Amt / Reset Order / Reset All / Packed-Gaps); `ui/FileListControl.h` over the samples dir (POSIX dirent: the Mac target is 10.13) | Done |
+| F10.6 | Pi 3 budget: at rest ≤ 3 % of a core, drag ≤ 20 %, frame cap 30 fps, 0 xruns over 10 min with the UI driven | Planned — needs the board |
 | F10.7 | Stable dotted control IDs + Debug `--dump-layout`; `layout.json` hot reload if steering by numbers is slow | Planned |
+| F10.8 | `platform/linux/tests/editor_shot_test.cpp`: the editor through the module, surfaceless on the container's Mesa: loads a sample, renders edit / playing (playhead + lit tile) / perform / selected at 1024 × 600 and the panel at 1280 × 720, taps Perform and a tile through IGraphics; images in `build-arm64/shots/`, kept under `docs/F10_evidence/` | Done |
+| F10.9 | `edit.c` grew the interactive set the UI needs: packed move and boundary-eating resize from a snapshot, split, merge, refill, dup, gaps-mode move and resize over a raster, grid change with positional inheritance of per-step settings, locked tiles kept, mods rescaled (`edit_test`) | Done |
 
 ## Log
 
@@ -216,6 +218,15 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F10 complete bar the board items (0.10.0).** The MVP panel renders and
+  works on both targets: one focus track with transport, header, waveform,
+  tile row, modifier-lane placeholder and two toolbar rows, all from the
+  unified drag control. Verified offscreen through the appliance's editor
+  module (Mesa in the container, PNGs under docs/F10_evidence) because this
+  Mac session cannot capture screens; the Mac app, VST3 and AU build and
+  auval passes. Developer hooks `FROG_AUTOLOAD` / `FROG_AUTOPLAY` load and
+  play a file at start. F10.6 (Pi render budget) waits for the board; F10.7
+  (control IDs / layout dump) stays open.
 - **F9 complete (0.9.0).** The engine lives inside the iPlug2 plugin:
   parameters, state chunk with the session, idle-thread sample loading, and
   three clock sources (internal, MIDI with the PLL, host transport). APP /

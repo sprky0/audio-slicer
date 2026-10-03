@@ -132,9 +132,8 @@ int main(void) {
 	fg_midiclock mc;
 	fg_midiclock_init(&mc, SR);
 	CHECK(fg_midiclock_status(&mc, 0xFA, 0.0) == FG_MC_START && mc.running);
-	fg_midiclock_event ev = FG_MC_NONE;
 	for (int k = 0; k < 30; k++) {
-		ev = fg_midiclock_status(&mc, 0xF8, k * 1000.0);
+		fg_midiclock_status(&mc, 0xF8, k * 1000.0);
 	}
 	CHECK_NEAR(mc.bpm, 60.0 * SR / (1000.0 * 24.0), 1e-9);
 	CHECK_NEAR(fg_midiclock_beat(&mc), 29.0 / 24.0, 1e-12);

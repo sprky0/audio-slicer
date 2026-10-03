@@ -2,11 +2,6 @@
 #include "IPlug_include_in_plug_src.h"
 #include "IPlugPaths.h"
 
-#if IPLUG_EDITOR
-#include "IControls.h"
-#include "ui/FrogVersion.h"
-#endif
-
 #include "engine/sample.h"
 #include "engine/session.h"
 
@@ -34,6 +29,14 @@ Frog::Frog(const InstanceInfo& info)
 	}
 
 	mEngine = fg_engine_create(FG_MAX_TRACKS, 1);
+	for (int t = 0; t < FG_MAX_TRACKS; t++) {
+		mNextColor[t] = fg_unit_count(fg_engine_pattern(mEngine, t));
+	}
+	// Developer hooks: FROG_AUTOLOAD=<wav> loads into track 1 at start and
+	// FROG_AUTOPLAY=1 presses Play once it has loaded (screenshots, benches).
+	if (const char* auto1 = getenv("FROG_AUTOLOAD")) {
+		RequestLoadSample(0, auto1);
+	}
 
 #if IPLUG_EDITOR
 	mMakeGraphicsFunc = [&]() {
@@ -41,14 +44,14 @@ Frog::Frog(const InstanceInfo& info)
 	};
 
 	mLayoutFunc = [&](IGraphics* pGraphics) {
-		// Placeholder panel until F10: wordmark + build stamp, nothing else.
-		pGraphics->AttachCornerResizer(EUIResizerMode::Scale, false);
-		pGraphics->AttachPanelBackground(IColor(255, 24, 26, 30));
-		pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
-		const IRECT b = pGraphics->GetBounds();
-		const IText title(48.f, IColor(255, 230, 232, 236), "Roboto-Regular", EAlign::Center, EVAlign::Middle);
-		pGraphics->AttachControl(new ITextControl(b.GetCentredInside(400.f, 80.f).GetTranslated(0.f, -20.f), "Frog", title));
-		pGraphics->AttachControl(new FrogVersionReadout(b.GetCentredInside(400.f, 24.f).GetTranslated(0.f, 30.f)), kCtrlTagVersion);
+		if (pGraphics->NControls() && mView) {
+			mView->Layout(pGraphics);   // a resize: same controls, new rects
+			return;
+		}
+		pGraphics->AttachCornerResizer(EUIResizerMode::Size, false);
+		pGraphics->AttachPanelBackground(frogui::kBg);
+		pGraphics->LoadFont(frogui::kFont, ROBOTO_FN);
+		mView = std::make_unique<frogui::FrogView>(*this, pGraphics);
 	};
 #endif
 }
@@ -64,6 +67,27 @@ Frog::~Frog() {
 	}
 	fg_engine_destroy(mEngine);
 }
+
+#if IPLUG_EDITOR
+void Frog::OnUIClose() {
+	mView.reset();   // the controls go with the graphics context
+}
+
+const fg_visual* Frog::CurrentNote(int track) const {
+	if (track < 0 || track >= FG_MAX_TRACKS || mNoteCount[track] == 0) {
+		return nullptr;
+	}
+	const int64_t now = fg_engine_now(mEngine);
+	const fg_visual* best = nullptr;
+	for (int k = 0; k < mNoteCount[track]; k++) {
+		const fg_visual& v = mNotes[track][(mNoteHead[track] - 1 - k + kNoteRing * 2) % kNoteRing];
+		if (v.start <= now && (!best || v.start > best->start)) {
+			best = &v;
+		}
+	}
+	return best;
+}
+#endif
 
 // --- paths --------------------------------------------------------------
 
@@ -106,8 +130,7 @@ void Frog::SnapshotSession(fg_session& out) const {
 		ts.mix.volume = GetParam(TrackParam(t, kTrackVolume))->Value() / 100.;
 		ts.mix.pan = GetParam(TrackParam(t, kTrackPan))->Value() / 100.;
 		ts.mix.muted = GetParam(TrackParam(t, kTrackMute))->Bool();
-		const fg_pattern* p = fg_engine_pattern(const_cast<fg_engine*>(mEngine), t);
-		ts.pattern = *p;
+		ts.pattern = *fg_engine_pattern(const_cast<fg_engine*>(mEngine), t);
 	}
 }
 
@@ -118,6 +141,7 @@ void Frog::ApplySession(const fg_session& s) {
 		const fg_track_state& ts = s.tracks[t];
 		*fg_engine_pattern(mEngine, t) = ts.pattern;
 		fg_engine_publish(mEngine, t);
+		mNextColor[t] = fg_unit_count(&ts.pattern);
 		mTrackNames[t] = ts.fileName;
 		mTrackPaths[t] = ts.samplePath[0] ? ts.samplePath : ts.fileName;
 		if (!mTrackPaths[t].empty()) {
@@ -134,6 +158,13 @@ void Frog::ApplySession(const fg_session& s) {
 	if (s.masterBpm > 0.) {
 		GetParam(kParamBpm)->Set(s.masterBpm);
 	}
+#if IPLUG_EDITOR
+	if (mView) {
+		for (int t = 0; t < n; t++) {
+			mView->PatternChanged(t);
+		}
+	}
+#endif
 }
 
 bool Frog::SerializeState(IByteChunk& chunk) const {
@@ -217,6 +248,21 @@ void Frog::ServiceLoads() {
 	}
 	mTrackPaths[job.track] = job.path;
 	mTrackNames[job.track] = s->name;
+	if (getenv("FROG_AUTOPLAY") && job.track == 0) {
+		fg_engine_play_all(mEngine);
+	}
+	// a new source means a fresh default row when the track had none
+	fg_pattern* p = fg_engine_pattern(mEngine, job.track);
+	if (p->nTiles == 0) {
+		fg_pattern_default_tiles(p);
+		fg_engine_publish(mEngine, job.track);
+	}
+#if IPLUG_EDITOR
+	mPeaks[job.track].Build(s);
+	if (mView) {
+		mView->SampleChanged(job.track);
+	}
+#endif
 }
 
 void Frog::ServiceRetired() {
@@ -227,6 +273,28 @@ void Frog::ServiceRetired() {
 		} else {
 			i++;
 		}
+	}
+}
+
+void Frog::PollVisuals() {
+	fg_visual buf[64];
+	int n;
+	while ((n = fg_engine_poll_visuals(mEngine, buf, 64)) > 0) {
+		for (int i = 0; i < n; i++) {
+			const int t = buf[i].track;
+			if (t < 0 || t >= FG_MAX_TRACKS) {
+				continue;
+			}
+			mNotes[t][mNoteHead[t]] = buf[i];
+			mNoteHead[t] = (mNoteHead[t] + 1) % kNoteRing;
+			if (mNoteCount[t] < kNoteRing) {
+				mNoteCount[t]++;
+			}
+		}
+	}
+	fg_flash flashes[32];
+	while (fg_engine_poll_flashes(mEngine, flashes, 32) > 0) {
+		// F13: the modifier lane lights these
 	}
 }
 
@@ -309,8 +377,20 @@ void Frog::OnParamChange(int paramIdx) {
 void Frog::OnIdle() {
 	ServiceLoads();
 	ServiceRetired();
+	PollVisuals();
 	for (int t = 0; t < FG_MAX_TRACKS; t++) {
-		fg_engine_take_pattern_change(mEngine, t);   // keeps the working copy current (UI reads it, F10)
+		if (fg_engine_take_pattern_change(mEngine, t)) {
+#if IPLUG_EDITOR
+			if (mView) {
+				mView->PatternChanged(t);
+			}
+#endif
+		}
 	}
+#if IPLUG_EDITOR
+	if (mView) {
+		mView->Idle();
+	}
+#endif
 }
 #endif

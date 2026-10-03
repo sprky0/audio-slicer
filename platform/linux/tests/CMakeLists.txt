@@ -9,3 +9,16 @@ target_compile_options(shell_test PRIVATE -Wall -Wno-unknown-pragmas -Wno-multic
 set_target_properties(shell_test PROPERTIES
 	RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+# F10: the editor offscreen through the module; writes the panel at
+# 1024 x 600 (edit, playing, perform, selected) and 1280 x 720 to DIR
+if(FROG_APPLIANCE_EDITOR)
+	add_executable(editor_shot_test editor_shot_test.cpp)
+	target_link_libraries(editor_shot_test PRIVATE rflh_host frog_plugin_ui)
+	add_dependencies(editor_shot_test frog_ui_resources frog_editor)
+	set_target_properties(editor_shot_test PROPERTIES ENABLE_EXPORTS ON)
+	target_compile_options(editor_shot_test PRIVATE -Wall -Wno-unknown-pragmas -Wno-multichar -Wno-comment)
+	set_target_properties(editor_shot_test PROPERTIES
+		RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+	)
+endif()
