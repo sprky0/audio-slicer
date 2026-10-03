@@ -150,6 +150,7 @@ void fg_engine_destroy(fg_engine* e) {
 		free(e->tracks[i].busL);
 		free(e->tracks[i].busR);
 	}
+	fg_sample_free(e->recBuf);
 	free(e);
 }
 
@@ -653,6 +654,89 @@ double fg_engine_bpm(const fg_engine* e) {
 
 bool fg_engine_grid_running(const fg_engine* e) {
 	return atomic_load_explicit(&e->gridRunning, memory_order_acquire) != 0;
+}
+
+/* --- recording ------------------------------------------------------------ */
+
+bool fg_engine_record_arm(fg_engine* e, int track, double maxSeconds) {
+	if (atomic_load(&e->recState) != 0 || track < 0 || track >= e->nTracks) {
+		return false;
+	}
+	const int64_t cap = (int64_t)((maxSeconds > 0.0 ? maxSeconds : 60.0) * e->sampleRate);
+	fg_sample* buf = fg_sample_create(2, cap, e->sampleRate);
+	if (!buf) {
+		return false;
+	}
+	fg_sample_free(e->recBuf);
+	e->recBuf = buf;
+	e->recTrack = track;
+	atomic_store(&e->recFrames, 0);
+	atomic_store_explicit(&e->recState, 1, memory_order_release);
+	return true;
+}
+
+void fg_engine_record_stop(fg_engine* e) {
+	int expected = 1;
+	atomic_compare_exchange_strong(&e->recState, &expected, 2);
+}
+
+bool fg_engine_record_done(const fg_engine* e) {
+	return atomic_load_explicit(&e->recState, memory_order_acquire) == 3;
+}
+
+bool fg_engine_recording(const fg_engine* e) {
+	const int st = atomic_load_explicit(&e->recState, memory_order_acquire);
+	return st == 1 || st == 2;
+}
+
+int64_t fg_engine_record_frames(const fg_engine* e) {
+	return atomic_load_explicit(&e->recFrames, memory_order_acquire);
+}
+
+fg_sample* fg_engine_record_take(fg_engine* e, int* track) {
+	if (atomic_load_explicit(&e->recState, memory_order_acquire) != 3 || !e->recBuf) {
+		return NULL;
+	}
+	const int64_t n = atomic_load(&e->recFrames);
+	fg_sample* out = NULL;
+	if (n > 0) {
+		out = fg_sample_create(2, n, e->sampleRate);
+		if (out) {
+			memcpy(out->ch[0], e->recBuf->ch[0], sizeof(float) * (size_t)n);
+			memcpy(out->ch[1], e->recBuf->ch[1], sizeof(float) * (size_t)n);
+		}
+	}
+	fg_sample_free(e->recBuf);
+	e->recBuf = NULL;
+	if (track) {
+		*track = e->recTrack;
+	}
+	atomic_store_explicit(&e->recState, 0, memory_order_release);
+	return out;
+}
+
+void fg_engine_capture(fg_engine* e, const double* const* in, int nCh, int nFrames) {
+	const int st = atomic_load_explicit(&e->recState, memory_order_acquire);
+	if (st == 2) {
+		atomic_store_explicit(&e->recState, 3, memory_order_release);   /* no more writes after this */
+		return;
+	}
+	if (st != 1 || !in || nCh <= 0 || !e->recBuf) {
+		return;
+	}
+	const int64_t have = atomic_load_explicit(&e->recFrames, memory_order_relaxed);
+	int64_t room = e->recBuf->frames - have;
+	if (room <= 0) {
+		return;
+	}
+	const int n = (int)(nFrames < room ? nFrames : room);
+	const double* l = in[0];
+	const double* r = nCh > 1 ? in[1] : in[0];
+	for (int i = 0; i < n; i++) {
+		e->recBuf->ch[0][have + i] = (float)l[i];
+		e->recBuf->ch[1][have + i] = (float)r[i];
+	}
+	atomic_store_explicit(&e->recFrames, have + n, memory_order_release);
 }
 
 void fg_engine_load_session(fg_engine* e, const fg_session* s) {

@@ -52,7 +52,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F15 | Multi-track — up to `FG_MAX_TRACKS`, a track tab strip with the focused track in the editor, add / duplicate / remove, in-phase join, master mix | Done 0.17.1 (`max_tracks` conf key open) |
 | F16 | Performance MIDI — note-triggered slices, CC map (learn), program change = session, `appliance.conf` keys | In progress 0.17.2 (notes done; CC map, program change open) |
 | F17 | Bounce — offline render of the master mix to `RF_DATA_DIR/exports`, one bar (LCM of the tracks' beats), normalised | Done 0.17.0 |
-| F18 | Record — runs in parallel with the MVP (decided 2026-10-03). Two halves with one status: **host capture** (ALSA capture PCM + an input path on `Processor`), an L-item to open in ratfactory-linux-host and link here once numbered; **Frog side** (record into a track, re-slice live), developed on the Mac first. Both rows move together, same commit | Planned |
+| F18 | Record — two halves with one status: **host capture** (ALSA capture PCM + an input path on `Processor`), an L-item to open in ratfactory-linux-host and link here once numbered; **Frog side** (record into a track, re-slice live), developed on the Mac first. Both rows move together, same commit | In progress 0.18.0 (Frog side done; host half awaiting the L-item) |
 | F19 | Transient markers — detection + draggable non-uniform slice points (needs the model change noted in the JS NEXT.md) | Planned |
 
 ### F1 — Plan
@@ -140,7 +140,7 @@ in the same commit, and every status change gets a line in the Log.
 | ID | Subtask | Status |
 |----|---------|--------|
 | F18.1 | **Host capture — cross-repo action, pending.** Open an L-item in `ratfactory-linux-host/LINUX_ROADMAP.md` (mirrored into `tink-vst`): ALSA capture PCM on the same device as playback (full duplex, same period / rate), an input path on `rflh::Processor` (an `inputs` pointer on `process()` or a `processIO()` overload), `IPlug2HeadlessProcessor` forwarding, `--render-wav --input FILE` for offline checks. Once numbered, write its L-id into this row and F18's master row, and the F18 ids into that L-row. This repo is read-only on the host repo; the owner opens it | Planned — awaiting the L-item |
-| F18.2 | Frog side on the Mac first (RtAudio inputs): arm / record into a track's sample store, auto-region on stop, re-slice live; publish the new store by the F6 pointer swap so playback is never interrupted | Planned |
+| F18.2 | Frog side (0.18.0): `fg_engine_record_arm / capture / stop / take` — the UI arms a capture buffer (allocated off the audio thread), the audio thread appends the block's inputs while armed, a stop handshake ends writes before the UI takes the trimmed capture (`record_test`). `Frog::StartRecord / StopRecord`: the take is written to the samples dir as `rec-<stamp>.wav`, swapped into the track by the F6 pointer swap, region reset, row kept; a **Rec** toggle in the header shows the seconds. Works wherever the format has inputs (Mac APP, VST3 / AU with `2-2`); on the appliance the lane idles until F18.1 | Done |
 | F18.3 | Join the halves on the appliance: record through the host capture path; 0 xruns over 10 min while recording and playing on the Pi 3B | Planned — after F18.1 |
 
 ### F2 — Scaffold
@@ -287,6 +287,11 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F18.2 record, Frog side (0.18.0).** Arm, capture, stop and take through
+  a lock-free lane; takes land in the samples dir and replace the track's
+  store without a dropout. The host capture half (F18.1) is still the
+  owner's cross-repo item; on the appliance the Rec button does nothing
+  until it exists.
 - **F16.1 note triggers (0.17.2).** A MIDI note plays a slice one-shot on
   the channel's track, through the adapter on the appliance too. CC map and
   program-change sessions stay open.

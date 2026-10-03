@@ -43,6 +43,9 @@ public:
 	virtual std::string SamplesDir() const = 0;
 	virtual void PlayAll() = 0;
 	virtual void StopAll() = 0;
+	virtual void ToggleRecord(int track) = 0;
+	virtual bool IsRecording() const = 0;
+	virtual double RecordedSeconds() const = 0;
 	virtual void StartBounce() = 0;
 	virtual const char* BounceStatus() const = 0;   // "Export", "Exporting", "Exported", ...
 	virtual int TrackCount() const = 0;
@@ -122,6 +125,13 @@ public:
 		if (mExportStatus != mHost.BounceStatus()) {
 			mExportStatus = mHost.BounceStatus();
 			mExportBtn->SetDirty(false);
+		}
+		const bool rec = mHost.IsRecording();
+		if (rec || mRec->On()) {
+			mRec->SetLocalValue(rec ? 1. : 0.);
+			if (rec) {
+				mRec->SetDirty(false);   /* the seconds tick */
+			}
 		}
 		mStrip->Refresh();
 		const fg_visual* v = mHost.CurrentNote(mTrack);
@@ -277,6 +287,15 @@ private:
 			Pat()->loop = v >= 0.5;
 			Publish();
 		}), mHeader, 1.f));
+		mRec = drag(add(DragControl::Toggle(z, "Rec", false, Intent::Stop, [this](double) { mHost.ToggleRecord(mTrack); }), mHeader, 1.f));
+		mRec->WithFormat([this](double) {
+			if (!mHost.IsRecording()) {
+				return std::string("Rec");
+			}
+			char b[24];
+			snprintf(b, sizeof b, "Rec %.1fs", mHost.RecordedSeconds());
+			return std::string(b);
+		});
 
 		// --- track strip -----------------------------------------------------
 		mStrip = new TrackStripControl(z);
@@ -722,6 +741,7 @@ private:
 	FrogVersionReadout* mVersion = nullptr;
 	FileListControl* mFileList = nullptr;
 	DragControl* mExportBtn = nullptr;
+	DragControl* mRec = nullptr;
 	std::string mExportStatus;
 	DragControl *mPerformBtn = nullptr, *mFileChip = nullptr, *mBeats = nullptr, *mStep = nullptr, *mPitch = nullptr, *mLoop = nullptr;
 	DragControl* mAll = nullptr;

@@ -189,7 +189,7 @@ public:
 			case Mode::Toggle: {
 				const bool on = mValue >= 0.5;
 				g.FillRoundRect(on ? fill : dim, r, radius, &BLEND_75);
-				text = mLabel;
+				text = mFormat ? mFormat(mValue) : mLabel;
 				break;
 			}
 			case Mode::Button: {

@@ -82,6 +82,13 @@ public:
 	bool AddTrack();
 	bool RemoveTrack();              // the last one: pattern reset, sample unloaded
 	bool DuplicateTrack(int from);   // appended; pattern copied, sample reloaded by path
+	// Record the live inputs into a track (desktop formats with inputs; the
+	// appliance has none until its host grows capture). Stop writes the take
+	// to the samples dir as rec-<stamp>.wav and loads it into the track.
+	bool StartRecord(int track);
+	void StopRecord();
+	bool Recording() const;
+	double RecordSeconds() const;
 	bool Bounce();
 	bool Bouncing() const { return mBounceRunning.load(); }
 	const std::string& LastBounce() const { return mBounceResult; }   // path, or an error after "!"
@@ -93,6 +100,9 @@ public:
 	// frogui::Host
 	void Publish(int track) override { fg_engine_publish(mEngine, track); }
 	void StartBounce() override { Bounce(); }
+	void ToggleRecord(int track) override;
+	bool IsRecording() const override { return Recording(); }
+	double RecordedSeconds() const override { return RecordSeconds(); }
 	int TrackCount() const override { return mNumTracks; }
 	int& TrackCountRef() override { return mNumTracks; }
 	bool AddTrackUI() override { return AddTrack(); }
@@ -142,6 +152,7 @@ private:
 	void ServiceRetired();
 	void PollVisuals();
 	void ServiceBounce();
+	void ServiceRecord();
 
 	fg_engine* mEngine = nullptr;
 	std::vector<PendingLoad> mPendingLoads;   // main thread only

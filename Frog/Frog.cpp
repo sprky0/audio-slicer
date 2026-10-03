@@ -193,6 +193,81 @@ bool Frog::DuplicateTrack(int from) {
 	return true;
 }
 
+// --- record --------------------------------------------------------------
+
+bool Frog::StartRecord(int track) {
+	return fg_engine_record_arm(mEngine, track, 120.0);
+}
+
+void Frog::StopRecord() {
+	fg_engine_record_stop(mEngine);
+}
+
+bool Frog::Recording() const {
+	return fg_engine_recording(mEngine);
+}
+
+double Frog::RecordSeconds() const {
+	return (double)fg_engine_record_frames(mEngine) / mSampleRate;
+}
+
+#if IPLUG_EDITOR
+void Frog::ToggleRecord(int track) {
+	if (Recording()) {
+		StopRecord();
+	} else {
+		StartRecord(track);
+	}
+}
+#endif
+
+void Frog::ServiceRecord() {
+	if (!fg_engine_record_done(mEngine)) {
+		return;
+	}
+	int track = -1;
+	fg_sample* take = fg_engine_record_take(mEngine, &track);
+	if (!take) {
+		return;
+	}
+	// the take goes to disk so the session can find it again
+	const std::string dir = SamplesDir();
+	EnsureDir(dir);
+	char stamp[32];
+	const time_t now = time(nullptr);
+	strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", localtime(&now));
+	const std::string name = std::string("rec-") + stamp + ".wav";
+	std::vector<double> l((size_t)take->frames), r((size_t)take->frames);
+	for (int64_t i = 0; i < take->frames; i++) {
+		l[(size_t)i] = take->ch[0][i];
+		r[(size_t)i] = take->ch[1][i];
+	}
+	const double* ch[2] = {l.data(), r.data()};
+	fg_sample_write_wav16((dir + "/" + name).c_str(), ch, 2, take->frames, take->sampleRate);
+	snprintf(take->name, sizeof take->name, "%s", name.c_str());
+	fg_sample* old = fg_engine_set_sample(mEngine, track, take);
+	if (old) {
+		mRetired.push_back({track, old});
+	}
+	mTrackPaths[track] = name;   // relative to the samples dir
+	mTrackNames[track] = name;
+	fg_pattern* p = fg_engine_pattern(mEngine, track);
+	p->start = 0.0;
+	p->end = 1.0;
+	p->virtualStart = 0.0;
+	p->virtualEnd = 1.0;
+	if (p->nTiles == 0) {
+		fg_pattern_default_tiles(p);
+	}
+	fg_engine_publish(mEngine, track);
+#if IPLUG_EDITOR
+	mPeaks[track].Build(take);
+	if (mView) {
+		mView->SampleChanged(track);
+	}
+#endif
+}
+
 // --- bounce --------------------------------------------------------------
 
 bool Frog::Bounce() {
@@ -474,6 +549,10 @@ void Frog::ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
 	if (GetParam(kParamClockSource)->Int() == FG_CLOCK_HOST) {
 		fg_engine_host_transport(mEngine, mTimeInfo.mTempo, mTimeInfo.mPPQPos, mTimeInfo.mTransportIsRunning);
 	}
+	if (fg_engine_recording(mEngine)) {
+		const int nIn = NInChansConnected();
+		fg_engine_capture(mEngine, nIn > 0 ? const_cast<const double* const*>(inputs) : nullptr, nIn, nFrames);
+	}
 	const int nCh = NOutChansConnected();
 	fg_engine_process(mEngine, outputs, nCh > 2 ? 2 : nCh, nFrames);
 	for (int c = 2; c < nCh; c++) {
@@ -542,6 +621,7 @@ void Frog::OnIdle() {
 	ServiceLoads();
 	ServiceRetired();
 	ServiceBounce();
+	ServiceRecord();
 	PollVisuals();
 	for (int t = 0; t < FG_MAX_TRACKS; t++) {
 		if (fg_engine_take_pattern_change(mEngine, t)) {

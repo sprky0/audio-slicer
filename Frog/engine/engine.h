@@ -132,6 +132,22 @@ int64_t fg_engine_now(const fg_engine* e);
 double fg_engine_bpm(const fg_engine* e);
 bool fg_engine_grid_running(const fg_engine* e);
 
+/* --- recording (F18) ----------------------------------------------------- */
+
+/* UI thread: arm a capture of up to `maxSeconds` of the live inputs for
+ * `track` (allocates the buffer here, never on the audio thread). */
+bool fg_engine_record_arm(fg_engine* e, int track, double maxSeconds);
+/* UI thread: ask the audio thread to stop; poll fg_engine_record_done(). */
+void fg_engine_record_stop(fg_engine* e);
+bool fg_engine_record_done(const fg_engine* e);
+/* UI thread, once done: the capture trimmed to what was recorded (caller
+ * owns it; NULL when nothing was captured). Resets the lane. */
+fg_sample* fg_engine_record_take(fg_engine* e, int* track);
+bool fg_engine_recording(const fg_engine* e);
+int64_t fg_engine_record_frames(const fg_engine* e);
+/* Audio thread, before fg_engine_process(): the block's inputs. */
+void fg_engine_capture(fg_engine* e, const double* const* in, int nCh, int nFrames);
+
 /* Load a session's patterns and mixes (samples are the caller's job). */
 void fg_engine_load_session(fg_engine* e, const fg_session* s);
 

@@ -67,4 +67,10 @@ struct fg_engine {
 	double hostSmoothedErr;
 	_Atomic double extBpm;       /* the external clock's estimate, for display */
 	_Atomic int extRunning;
+	/* recording (F18): the UI arms a capture buffer, the audio thread appends
+	 * the block's inputs while armed; see fg_engine_record_* */
+	_Atomic int recState;        /* 0 idle, 1 armed, 2 stopping (UI asked), 3 stopped (audio acked) */
+	fg_sample* recBuf;           /* capacity = recBuf->frames; UI owns outside state 1/2 */
+	_Atomic int64_t recFrames;   /* frames captured so far */
+	int recTrack;
 };
