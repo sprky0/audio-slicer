@@ -1,14 +1,37 @@
-# Frog — native port (branch `native`)
+# Frog
 
-This branch carries the native rewrite of the browser slicer / loop performer
-for the Rat Factory plugin family: a C11 engine wrapped in an iPlug2 (C++17)
-plugin, targeting the Mac (APP / VST3 / AU) and the Raspberry Pi appliance.
-**Frog** (knitting: to rip back and rework) is the product name.
+A sample slicer and loop performer for the Rat Factory plugin family: load a
+clip, say how many beats it is, and it becomes a grid of slices you
+rearrange, resize, reverse, fade and modulate into a loop that stays locked
+to one clock — internal, MIDI, or the host's transport. Edits land live,
+without interrupting playback.
 
-- Plan and architecture: [docs/PORT_PLAN.md](docs/PORT_PLAN.md)
-- Feature tracking and version: [ROADMAP.md](ROADMAP.md)
-- The browser version is preserved intact on the `js` branch. `public/`
-  stays on this branch as the parity reference until the engine matches it.
+> **Frog** (v.): to rip knitting back and rework it.
+
+Frog is the native successor to a browser prototype (preserved on the `js`
+branch and kept in `public/` here as the parity oracle and UI reference). It
+targets the Mac (standalone, VST3, AU) and the Raspberry Pi appliance of the
+family, where it runs on a 7" 1024 × 600 touch panel.
+
+## What it is
+
+- **A C11 engine** (`Frog/engine/`): the data model, a drift-free beat grid,
+  a per-block sequencer with step modifiers and ratchets, voices with
+  streaming WSOLA time-stretch and pitch shift, envelopes, and the mix. No
+  allocation on the audio thread; lock-free lanes to the UI.
+- **An iPlug2 shell** (`Frog/`): parameters, a state chunk carrying the
+  session, sample loading on the idle thread, MIDI clock with a PLL, host
+  transport sync.
+- **A touch-first UI** (`Frog/ui/`): one control shape (drag any direction,
+  tap, double-tap), waveform with region handles, a tile row you reorder
+  and resize with a finger, edit and perform layouts from one relative unit.
+- **The appliance target** (`platform/linux/`): a static binary on
+  `libratfactory-linux-host` with the editor as a runtime-loaded module.
+
+Status: MVP (F11) on the Mac; the appliance build passes its headless and
+offscreen-editor tests in the cross-build container, with the on-device
+gates waiting for the board. See [ROADMAP.md](ROADMAP.md) for per-feature
+status and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
 
 ## Building (Mac)
 
@@ -21,77 +44,52 @@ xcodebuild -project projects/Frog-macOS.xcodeproj -target APP -configuration Rel
 
 Targets: `APP` `VST3` `AU` (also `AUv3` `CLAP` `AAX`). Products install to
 `~/Applications/Frog.app` and the user plug-in folders. `cmake -S Frog -B
-build` configures the same plugin for CMake-driven builds. The Linux
-appliance target arrives with F3 under `platform/linux/`.
+build` configures the same plugin for CMake-driven builds and also builds
+`frog-render`.
 
-The original README follows.
+Tests: `cd Frog && ./engine/tests/run-tests.sh [all]` (plain `cc`, no
+framework; `all` adds the ThreadSanitizer race test).
 
----
+## Building (appliance)
 
-# jsloop
-
-A browser-based audio slicer and step sequencer, built with vanilla JavaScript and the Web Audio API. No build step, no dependencies — just static files.
-
-Load an audio file, chop it into slices on a waveform, and sequence those slices into loops. Each slicer is independent, so you can run several at once, all locked to one master clock.
-
-## Features
-
-- **Waveform slicing** — load a file, set the start/end region (drag the green/red handles or the sliders), and let the app cut it into an evenly spaced grid.
-- **Beats + Step** — declare how many quarter-note **beats** the loop is (this sets the tempo: `BPM = 60 × beats / selectionDuration`) and the **Step** subdivision (1/2…1/32). The slice grid is `beats × step` — e.g. 4 beats · 1/16 = 16 cells.
-- **Zoom & trim** — zoom into a selection and "Trim" to make it the new working view.
-- **Tile sequencer** — arrange slices into a per-slicer loop of variable-width tiles: drag to reorder, drag the edges to resize (sub-step precision), double-click to split, shift-click to merge — all live while the loop plays.
-  - **Packed vs Gaps** — a global mode toggle: *Packed* keeps tiles contiguous (resize borrows from the neighbour); *Gaps* is free placement — moving/shrinking a clip leaves silence, dropping/growing overwrites.
-  - **Reset Order / Reset All** — put the slices back in native play order (each keeps its fades/reverse/pitch; locks and gaps stay anchored), or rebuild the pristine default pattern.
-- **Slice settings** — per-slice mute, lock, reverse, gain (0–200% level, fades scale with it), fade in/out envelope with per-fade curve shapes (Lin / Exp / Log / S), duplicate, and refill, with an **All** broadcast toggle; per-slice pitch offset via mouse-wheel.
-- **Modifier lane** — one optional step modifier per grid cell, firing by probability or every-N-loops: **Mute**, **Reverse**, **Gain** (duck or accent the step's level for the pass), **Randomize** (virtual shuffle press), **Reset** (restore native order, settings kept), and **Ratchet** (retrigger the step across a 1–16-step length; the span absorbs the tiles it covers). Ratchet has three hit-layout modes: **Even** (1–8 uniform hits per step), **Ramp** (spacing morphs From→To subdivisions across the span — the rhythm speeds up or slows down), and **Pitch** (even hits, each successive one shifted ±semitones as varispeed). Live feedback: the chip and its span brace light while a ratchet sounds, the waveform playhead restarts on every hit, and modifiers swallowed by the span grey out.
-- **WAV export** — offline render of the master mix (any subset of slicers, any length in beats) to a normalized 16-bit stereo WAV, bit-faithful to live playback — time-stretch, fades, and step modifiers included.
-- **Edit / perform layout** — Show/Hide details trades vertical space between a big waveform (edit) and a big tile row (perform).
-- **Channel mixer** — each slicer's header has Vol / Pan / Pitch plus a **Mute** that silences the channel while its sequencer keeps running (Vol is remembered; a muted channel starts unchecked in the Export panel). New lanes loop by default.
-- **Master transport** — one Master tempo + Play All / Stop All drive every slicer. All slicers share a single AudioContext and start on one clock instant, so multi-track loops are sample-locked.
-- **MIDI clock sync** — sync to an external MIDI clock (Web MIDI): the incoming clock sets the master tempo, and MIDI Start/Continue/Stop drive the sequencers. A clock indicator shows the active source, tempo, and a 4-beat pulse.
-- **Time-stretch & pitch-shift** — WSOLA time-stretching keeps pitch constant across tempos; slices can also be pitch-shifted (master + per-step offsets).
-- **Randomize**, **color-coded slices**, **multiple slicers**, and **persistence** (settings in `localStorage`, audio in IndexedDB) so your session survives a reload.
-
-The whole UI is built from one unified drag-control (button-shaped, drag any direction; replaces knobs/sliders/dropdowns) on a fluid relative-unit grid — see [public/CSS.md](public/CSS.md).
+Three checkouts side by side: this repo, `ratfactory-linux-host`, and the
+`iPlug2` submodule. Then `platform/linux/docker-build-arm64.sh` cross-builds
+`frog-appliance` for linux/arm64 in the host repo's container, runs the
+headless shell test and renders the editor offscreen as a check. See
+[platform/linux/README.md](platform/linux/README.md).
 
 ## Running
 
-Everything lives under `public/` and runs as static files — no build or install. Serve that directory with any static web server, for example:
+- **Samples**: `FROG_SAMPLES_DIR`, else `$RF_DATA_DIR/samples` on the
+  appliance, else `~/Library/Application Support/Frog/samples`. The Load
+  button lists that folder; on the Mac a file can also be dropped on the
+  waveform.
+- **Developer hooks**: `FROG_AUTOLOAD=<wav>` loads a file into track 1 at
+  start, `FROG_AUTOPLAY=1` presses Play once it has loaded.
+- **Offline**: `frog-render session.json out.wav [--beats N] [--rate HZ]`
+  bounces a session through the same engine.
 
-```sh
-cd public
-python3 -m http.server 8000
+## Repository layout
+
+```
+Frog/               the plugin (config.h is the version's source of truth)
+  engine/           C11 engine + tests
+  ui/               IGraphics controls and the view
+  tools/            frog-render, parity tooling
+platform/linux/     appliance build, systemd unit, tests
+docs/               PORT_PLAN.md, ARCHITECTURE.md, evidence images
+public/             the browser version (reference and parity oracle)
+ROADMAP.md          features, status, log
 ```
 
-Then open <http://localhost:8000> in a browser. (A server is needed rather than opening the file directly because the app loads ES modules.)
+## Conventions
 
-## Project layout
+Version `MAJOR.MINOR.PATCH` with MINOR = the F-number of the current effort
+(`Frog/config.h`); tags at milestones (`v0.8-engine`, `v0.11-mvp`). Tabs
+for indentation, spaces for alignment, braces always (`.clang-format`).
+Short comments. The repository is neutral: no personal attribution in code,
+commits or docs.
 
-```
-public/
-  index.html
-  css/styles.css              design system (tokens + components) — see CSS.md
-  js/
-    main.js                     entry point — slicers, tile sequencer, transport, persistence
-    audio-slicer-controller.js  connects the engine and the waveform view
-    audio-engine.js             audio loading, slicing, playback (no DOM)
-    audio-context.js            the shared AudioContext singleton (Tier 1c)
-    beat-grid.js                shared beat↔time mapping (drift-free master clock)
-    waveform-view.js            canvas drawing and interaction
-    transport.js                lookahead sequencer scheduler
-    drag-control.js             the unified button-shaped control
-    midi-clock.js               Web MIDI clock receiver → master tempo + transport
-    timestretch.js              WSOLA time-stretch DSP
-    envelope.js                 per-voice fade envelope (shared by live + export)
-    export-wav.js               offline mix render → 16-bit RIFF/WAV download
-    palette.js                  shared slice colors
-    storage.js                  localStorage + IndexedDB persistence
-```
-
-## Usage
+## License
 
 TBD.
-
-## Code style
-
-See [CLINE_STYLE.md](CLINE_STYLE.md) — tabs for indentation, OTBS braces, spaces for alignment.

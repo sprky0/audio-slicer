@@ -43,7 +43,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F8 | Engine: parity — bounce JS fixtures natively, unstretched paths within −80 dBFS, stretched paths by per-step RMS + onset | Done 0.8.0 (`public/` kept, see above) |
 | F9 | Plugin shell — iPlug2 params (BPM, clock source, per-track vol / pan / mute), state chunk with the session JSON, `OnIdle` loading + decode + resample, MIDI clock PLL, Start / Continue / Stop, host transport sync in DAWs | Done 0.9.0 |
 | F10 | MVP UI — owned controls: DragControl, transport bar, WaveformControl (region handles, playhead), TileRowControl (select, drag, edge-resize, mini waveforms), slice toolbar, FileList; band layout; edit / perform layouts; Pi 3 render budget | Done 0.10.0 (F10.6 budget and F10.7 IDs open) |
-| F11 | MVP release — one track end-to-end on the appliance and the Mac, factory session, docs/ARCHITECTURE.md, tag `v0.11-mvp` | Planned |
+| F11 | MVP release — one track end-to-end on the Mac (appliance: in the container; on the board pending), docs/ARCHITECTURE.md, README, tag `v0.11-mvp` | Done 0.11.0 (on-device gate open, with F3.6) |
 | F12 | Live-performance pass — critique the UI with the device in hand: permanent big actions, pad / trigger mode, what moves to MIDI | Planned |
 | F13 | Modifier lane — one modifier per step, prob / every-N, mute / rev / gain actions, rand / reset pattern actions via `beforeTile`, pinned settings panel, chip flash / firing / superseded visuals | Planned |
 | F14 | Ratchet + pattern tools — even / ramp / pitch hit layouts, span absorption, randomize with lock buckets, Reset Order / Reset All, lock, dup, refill, split / merge, Packed vs Gaps (rasterize → rebuild), grid-change inheritance | Planned |
@@ -62,6 +62,17 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F1.3 | Write docs/PORT_PLAN.md: architecture, stretch strategy, clock sources, caps, UI adaptation, milestones, tests, risks | Done |
 | F1.4 | Branches: `js` preserves the browser app at its last commit; `native` carries the port | Done |
 | F1.5 | Decisions (2026-10-03, **0.1.1**): name **Frog**; record (F18) runs in parallel with the MVP with both halves tracked in sync; float32 sample storage accepted, all shared math stays `double` | Done |
+
+### F11 — MVP release
+
+| ID | Subtask | Status |
+|----|---------|--------|
+| F11.1 | `docs/ARCHITECTURE.md` (as built) and the README rewritten for Frog (what it is, building both targets, running, layout, conventions) | Done |
+| F11.2 | Mac: APP / VST3 / AU build Release, auval passes, the app runs with the UI and a sample via the developer hooks | Done |
+| F11.3 | Appliance: `docker-build-arm64.sh` green — `frog-appliance` + `libfrog-editor.so`, `shell_test` (29 checks), `editor_shot_test` (17 checks, five renders) | Done |
+| F11.4 | On the board: deploy, boot to sound, touch the panel through one edit session, 0 xruns; recorded with F3.6 and F10.6 when the Pi is at hand | Planned — needs the board |
+| F11.5 | Factory session: none shipped yet — no licensed demo sample. A short generated loop (the parity fixture's bursts) can be embedded if a first-boot sound is wanted | Planned |
+| F11.6 | Tag `v0.11-mvp` | Done |
 
 ### F18 — Record
 
@@ -218,6 +229,11 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F11: MVP (0.11.0), tag `v0.11-mvp`.** Milestone M3 on the Mac and in
+  the appliance's cross-build; the board gates (F3.6, F10.6, F11.4) wait for
+  hardware. docs/ARCHITECTURE.md describes what was built; the README is
+  Frog's. Next: F13 (modifier lane) and F14 (the remaining pattern tools),
+  then F12's live-performance pass once the device is in hand.
 - **F10 complete bar the board items (0.10.0).** The MVP panel renders and
   works on both targets: one focus track with transport, header, waveform,
   tile row, modifier-lane placeholder and two toolbar rows, all from the
