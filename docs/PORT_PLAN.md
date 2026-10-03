@@ -301,9 +301,11 @@ Keep what the JS UI got right and change what a finger and a Pi 3 cannot do.
   flashes dirty one chip. Frame cap 30 fps; at rest no redraw. Verified on
   the board with the host's load meter (F10.6).
 - **Multi-track on 600 px.** One **focus track** gets the full editor
-  (header, waveform, tiles, mod lane, slice toolbar); other tracks collapse
-  to 6 u summary rows (name, play, mute, mini tile strip) that tap to focus.
-  Two tracks fit uncollapsed in perform mode; more scroll the summary stack.
+  (header, waveform, tiles, mod lane, slice toolbar); the others sit in a
+  one-row **tab strip** (number, name, lit while sounding, dimmed when
+  muted) that taps to focus. *(Built in F15; the stacked summary rows first
+  proposed here would have cost 5 u per extra track, the strip costs 5 u
+  for any count.)*
 - **Files.** No OS dialog on the appliance: a `FileList` control over
   `RF_DATA_DIR/samples/` (and USB when L25 lands); on the desktop also the
   native dialog and drag-drop.

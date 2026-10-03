@@ -1,4 +1,4 @@
-# Frog — architecture (as built, 0.11)
+# Frog — architecture (as built, 0.18)
 
 Frog is a sample slicer and loop performer: load a clip, declare how many
 beats it spans, and it is cut into a grid of slices you rearrange, resize,
@@ -64,6 +64,9 @@ row that breaks it.
   Start / Continue / Stop drive the tracks; the first pulse after Start is
   the downbeat), host transport (tempo + PPQ per block as one observation,
   running edges start the tracks in phase).
+- **Note triggers** — a Note On on channel n plays one unit of track n − 1
+  (note 36 = unit 0) one-shot at its natural rate, velocity as level, on
+  top of whatever the sequencer plays; its visual record has tileIndex −1.
 
 ## 4. Sound
 
@@ -93,7 +96,8 @@ edit the working pattern ──publish──►  triple buffer ──► active 
 load / decode / resample ──swap──────►  atomic sample pointer; old store freed once seen
 commands (play, stop, tempo, mix) ───►  SPSC ring, applied at block start
                           ◄──rings───  visual records (slot, times) and modifier flashes
-MIDI (clock bytes, offsets)  ────────►  per-block event list, applied in offset order
+MIDI (clock bytes, notes, offsets) ──►  per-block event list, applied in offset order
+arm / stop recording ────────────────►  capture lane: inputs appended while armed, stop handshake, take
 ```
 
 Rules (as `host/Processor.h` and Tink's ARCHITECTURE.md): nothing on the
@@ -112,20 +116,36 @@ every lane under ThreadSanitizer.
   tick, retirement of replaced stores, draining the visual rings, taking
   pattern changes posted by the audio thread, refreshing the view.
 - Paths: `FROG_SAMPLES_DIR`, else `RF_DATA_DIR/samples` (appliance), else
-  the app-support folder. Developer hooks `FROG_AUTOLOAD=<wav>` and
-  `FROG_AUTOPLAY=1`.
+  the app-support folder; `exports/` and `sessions/` beside it. Developer
+  hooks `FROG_AUTOLOAD=<wav>` and `FROG_AUTOPLAY=1`.
+- Tracks in use (1..8) with add / duplicate / remove; the engine always runs
+  all eight sequencers.
+- Bounce: a worker thread renders a snapshot of the session through its own
+  engine into `exports/`; one at a time, status collected on the idle tick.
+- Record: arm a capture buffer for a track; the audio thread appends the
+  block's inputs; on stop the take is written to `samples/rec-<stamp>.wav`
+  and swapped into the track (desktop formats with inputs; the appliance
+  waits for host capture).
+- Sessions as presets: `sessions/*.json`; Save, a list to load, `StepPreset`
+  and MIDI Program Change pick one and the load lands on the idle tick;
+  `GetCurrentPresetName / Program` feed the appliance panel.
 
 ## 7. The UI (`ui/`)
 
-One focus track for the MVP. Bands from one unit (8 px at 1024 × 600,
-scaling with the shorter side): transport, track header, waveform, tile row,
-modifier lane (F13), two toolbar rows. Edit mode favours the waveform,
+Bands from one unit (8 px at 1024 × 600, scaling with the shorter side):
+transport (Play / Stop / BPM / Clock / Perform / Export / Save / Sessions /
+build stamp), the track strip (one tab per track, the focused one owns the
+bands below; + Track / Dup / − Track), track header (Load / name / Beats /
+Step / Pitch / Vol / Pan / Mute / Loop / Rec), waveform, tile row, modifier
+lane, and two rows that are either the slice + pattern toolbars or, while
+a modifier chip is selected, its settings. Edit mode favours the waveform,
 Perform the tiles. Controls are owned `IControl`s: the unified
 `DragControl` (value / enum / toggle / button; drag any direction, tap,
-double-tap, wheel), `WaveformControl` over pre-reduced peaks,
-`TileRowControl` (select, reorder, edge resize, split), `FileListControl`.
-Playback feedback is a dirty-rect playhead and a lit tile, from the visual
-records; nothing animates at rest.
+double-tap, wheel; a formatter makes a live chip), `WaveformControl` over
+pre-reduced peaks, `TileRowControl` (select, reorder, edge resize, split),
+`ModLaneControl`, `TrackStripControl`, `FileListControl`. Playback feedback
+is a dirty-rect playhead (per hit inside a ratchet), a lit tile, flashing
+and firing chips, all from the visual rings; nothing animates at rest.
 
 ## 8. The appliance (`platform/linux/`)
 

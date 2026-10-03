@@ -28,9 +28,11 @@ family, where it runs on a 7" 1024 × 600 touch panel.
 - **The appliance target** (`platform/linux/`): a static binary on
   `libratfactory-linux-host` with the editor as a runtime-loaded module.
 
-Status: MVP (F11) on the Mac; the appliance build passes its headless and
-offscreen-editor tests in the cross-build container, with the on-device
-gates waiting for the board. See [ROADMAP.md](ROADMAP.md) for per-feature
+Status: past the MVP (0.18): multi-track, the modifier lane, bounce, note
+triggers, recording (where the format has inputs) and sessions as presets
+are in. The appliance build passes its headless and offscreen-editor tests
+in the cross-build container; the on-device gates and the host's capture
+path wait for the board and the host repo. See [ROADMAP.md](ROADMAP.md) for per-feature
 status and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
 
 ## Building (Mac)
@@ -63,7 +65,11 @@ headless shell test and renders the editor offscreen as a check. See
 - **Samples**: `FROG_SAMPLES_DIR`, else `$RF_DATA_DIR/samples` on the
   appliance, else `~/Library/Application Support/Frog/samples`. The Load
   button lists that folder; on the Mac a file can also be dropped on the
-  waveform.
+  waveform. Recordings land there as `rec-<stamp>.wav`; bounces go to
+  `exports/`, sessions to `sessions/` beside it.
+- **MIDI**: clock (0xF8 / Start / Continue / Stop) when Clock is set to
+  MIDI; Note On on channel n plays a slice of track n (note 36 = slice 1);
+  Program Change loads a session by index.
 - **Developer hooks**: `FROG_AUTOLOAD=<wav>` loads a file into track 1 at
   start, `FROG_AUTOPLAY=1` presses Play once it has loaded.
 - **Offline**: `frog-render session.json out.wav [--beats N] [--rate HZ]`
