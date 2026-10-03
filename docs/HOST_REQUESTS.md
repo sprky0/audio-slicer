@@ -93,7 +93,7 @@ into `tink-vst/LINUX_ROADMAP.md` as the other L-rows are:
 
 **Notes for whoever builds it**
 
-- Frog already calls `fg_engine_capture_block(inputs, nIn, nFrames)` inside
+- Frog already calls `fg_engine_capture(engine, inputs, nIn, nFrames)` inside
   `ProcessBlock` when `inputs` is non-null and a track is armed; nothing on
   the audio thread allocates. So the only Frog change once the host has it
   is in `platform/linux/frog-plugin/FrogProcessor.h` (forward the new
