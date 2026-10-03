@@ -109,6 +109,7 @@ public:
 				m.subdivTo = 4;
 				m.pitchStep = 0;
 				m.lenSteps = 1;
+				m.pitchAmt = 12;
 				mPattern->mods[mPattern->nMods++] = m;
 				mPublish();
 				Select(mPattern->nMods - 1);
@@ -181,6 +182,8 @@ public:
 				return "Reset";
 			case FG_MOD_RATCHET:
 				return "Ratchet";
+			case FG_MOD_PITCH:
+				return "Pitch";
 			default:
 				return "?";
 		}
@@ -214,6 +217,8 @@ private:
 				return "R";
 			case FG_MOD_RATCHET:
 				return "=";
+			case FG_MOD_PITCH:
+				return "P";
 			default:
 				return "";
 		}

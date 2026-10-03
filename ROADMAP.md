@@ -54,7 +54,7 @@ Design and reasoning: [docs/PORT_PLAN.md](docs/PORT_PLAN.md).
 | F17 | Bounce — offline render to `<data dir>/exports`: the mix, the focused track or stems, 1–8 loops of the bar (LCM of the tracks' beats), normalised (stems excepted) | Done 0.18.7 |
 | F18 | Record — two halves with one status: **host capture** (ALSA capture PCM + an input path on `Processor`), an L-item to open in ratfactory-linux-host and link here once numbered; **Frog side** (record into a track, re-slice live), developed on the Mac first. Both rows move together, same commit | In progress 0.18.0 (Frog side done; host half awaiting the L-item) |
 | F20 | Locks pinned in packed mode (browser parity by intent): a locked tile is not dragged or reordered across, the resize cascade treats it as a wall, merge never touches it; a grid change to the same unit count keeps the row and the modifiers | Done 0.20.0 |
-| F21 | Modifier actions II (the browser's planned list): Pitch action (auto transposition per pass), ratchet tail-through, pitch-preserving ratchet hits, modifier defaults seeded on action change | Planned |
+| F21 | Modifier actions II (**0.21.0**, the browser's planned list): **Pitch** action — a one-shot transposition of the covered tile's pass (Shift ±12, mods under one tile add, the total over master + slice clamped ±24, through the stretch stage so timing holds); ratchet **Tail** — with Len shorter than the tile the remainder plays through from its own position after the hits (a late join, voice mods kept); ratchet **Keep** (pitch mode) — hits shift through the stretch stage at the same speed instead of varispeed; mute / rev / gain / pitch modifiers under a tile now reach its ratchet hits too (they did not); action and mode changes seed the browser's defaults (Gain 50 %, ratchet 2 hits / Len 1, pitch mode a whole tone per hit, Pitch +12). Session keys `pitchAmt`, `tail`, `keepPitch`; `sequencer_test` 4b | Done |
 | F22 | Solo per track: a parameter block after the mix params, the engine silences non-soloed tracks while any solo is lit, header button, strip marker, CC hook | Planned |
 | F23 | Export II: 16 / 24-bit, a fixed seed for reproducible probability, stems skip muted tracks | Planned |
 | F24 | Feature table — every browser feature and every Frog feature side by side with status, as the input to the UI discussion (what we can do vs. what we should) | Planned |
@@ -294,6 +294,15 @@ on the way. Bounces are committed, so `run-tests.sh` needs no browser.
   both build systems, root gitignore. APP / VST3 / AU build Release with
   Xcode 26.6; auval passes; CMake configures. The VST3 SDK must be fetched
   once with the fork's `download-vst3-sdk.sh`.
+- **F21 modifier actions II (0.21.0).** The browser's "planned" modifier
+  work, built on Frog's streaming stretch: a Pitch action (the auto
+  transposition the owner asked for — a step that transposes whatever tile
+  covers it, by chance or every N loops), ratchet tail-through and
+  pitch-preserving ratchet hits (varispeed stays the default: the
+  sampler-style sound is the one the browser had). Voice modifiers under a
+  ratcheted tile now apply to its hits, as the browser did. Pending the UI
+  discussion: whether Pitch wants a scale / interval vocabulary rather than
+  semitones.
 - **F20 locks in packed mode (0.20.0).** The browser protected locks only
   in Gaps mode though its notes said moves and resizes should respect them
   everywhere; Frog now pins a lock in both: `fg_edit_move` refuses to drag

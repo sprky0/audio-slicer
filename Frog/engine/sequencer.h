@@ -48,6 +48,11 @@ typedef struct {
 	fg_voice_spec spec;   /* template: region, factor, env; rate × hit rate per hit */
 	fg_env env;
 	fg_mod mod;
+	/* FG_MODF_TAIL: the rest of the tile after the span, started as a late join */
+	bool tailPending;
+	int64_t slotStart;
+	fg_voice_spec tailSpec;
+	fg_env tailEnv;
 } fg_ratchet_run;
 
 typedef struct {
@@ -85,7 +90,7 @@ void fg_seq_trigger_unit(fg_seq* s, const fg_pattern* p, const fg_sample* smp, i
                          int64_t at, fg_voice* voices, int nVoices, double sampleRate);
 
 /* The slot → playback policy, exposed for tests and the render tool. `ov`
- * flags come from mute / rev / gain modifiers for this pass; `envDurSec` > 0
+ * flags come from mute / rev / gain / pitch modifiers for this pass; `envDurSec` > 0
  * sizes fades to one ratchet hit instead of the slot. Returns false for a
  * silent slot. */
 typedef struct {
@@ -93,6 +98,7 @@ typedef struct {
 	bool rev;
 	double gain;
 	double envDurSec;
+	int pitch;        /* semitones from pitch modifiers, on top of master + tile (total clamped ±24) */
 } fg_override;
 
 bool fg_resolve_slot(const fg_pattern* p, const fg_sample* smp, const fg_tile* tile, double stepSec,

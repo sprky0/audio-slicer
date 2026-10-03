@@ -1,4 +1,4 @@
-# Frog — architecture (as built, 0.18.7)
+# Frog — architecture (as built, 0.21.0)
 
 Frog is a sample slicer and loop performer: load a clip, declare how many
 beats it spans, and it is cut into a grid of slices you rearrange, resize,
@@ -33,8 +33,9 @@ tests.
   steps; positions on a ¼-unit lattice; mute, lock, reverse, pitch offset,
   fades with curve shapes, gain, colour. Gap tiles are silent slots.
 - **Modifier** — at most one per step: action (mute, rev, gain, rand, reset,
-  ratchet), fire mode (probability or every N loops), ratchet layout (even,
-  ramp, pitch), span.
+  ratchet, pitch), fire mode (probability or every N loops), ratchet layout
+  (even, ramp, pitch) and span, ratchet options (tail-through, keep-pitch),
+  the pitch action's shift in semitones.
 - **Session** — tracks (pattern + mix + sample path) and master settings, as
   JSON. Format v1 *is* the browser version's `version: 3` save object plus
   `format` / `formatVersion` / `samplePath`, so old sessions import.

@@ -4,8 +4,10 @@
  * and the visual records. The source is an impulse code: unit i carries
  * (i+1)/16 at its first frame and −0.5 at its midpoint. */
 #include "check.h"
+#include "edit.h"
 #include "engine.h"
 #include "pattern.h"
+#include "sequencer.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -173,6 +175,74 @@ int main(void) {
 	fg_flash fl[16];
 	const int nf = fg_engine_poll_flashes(e, fl, 16);
 	CHECK(nf == 3 && fl[0].step == 10 && fl[1].step == 12 && fl[2].step == 13);
+
+	/* 4b. F21: a pitch modifier transposes the pass it covers (the stretched
+	 *     path), voice modifiers reach a ratchet's hits, tail-through plays the
+	 *     rest of a long tile after a short span, keep-pitch shifts hits with
+	 *     the stretch stage */
+	{
+		fg_voice_spec sp;
+		fg_env ev;
+		fg_tile tt;
+		fg_tile_init(&tt, 0.0, 1.0, 0);
+		p = fg_engine_pattern(e, 0);
+		fg_override po = {false, false, 1.0, 0.0, 12};
+		CHECK(fg_resolve_slot(p, src, &tt, UNIT / SR, &po, SR, &sp, &ev));
+		CHECK_NEAR(sp.rate, 2.0, 1e-12);     /* an octave up */
+		CHECK_NEAR(sp.factor, 2.0, 1e-12);   /* and stretched back to the slot */
+		CHECK(sp.declick);
+		po.pitch = 30;
+		CHECK(fg_resolve_slot(p, src, &tt, UNIT / SR, &po, SR, &sp, &ev));
+		CHECK_NEAR(sp.rate, 4.0, 1e-12);     /* the total is clamped to ±24 */
+	}
+	fg_engine_stop_all(e);
+	p = fg_engine_pattern(e, 0);
+	fg_pattern_default_tiles(p);
+	CHECK(fg_edit_merge(p, 11));   /* tile 10 is now two units wide (steps 10 and 11) */
+	p->nMods = 4;
+	memset(p->mods, 0, sizeof p->mods);
+	p->mods[0] = (fg_mod){10, FG_MOD_RATCHET, FG_FIRE_PROB, FG_RATCHET_EVEN, 100, 0, 2, 2, 0, 1, 0, 0};
+	p->mods[1] = (fg_mod){11, FG_MOD_GAIN, FG_FIRE_PROB, 0, 100, 50, 1, 1, 0, 1, 0, 0};
+	p->mods[2] = (fg_mod){12, FG_MOD_PITCH, FG_FIRE_PROB, 0, 100, 0, 1, 1, 0, 1, 12, 0};
+	p->mods[3] = (fg_mod){13, FG_MOD_RATCHET, FG_FIRE_PROB, FG_RATCHET_PITCH, 100, 0, 2, 2, 12, 1, 0, FG_MODF_KEEP_PITCH};
+	fg_engine_publish(e, 0);
+	poll_track0(e, vis, 64);
+	fg_engine_play_all(e);
+	render(e, BAR);
+	CHECK_NEAR(L[10 * UNIT], 11 / 16.0 * 0.5, 1e-9);              /* the gain mod under the tile ducks the hits */
+	CHECK_NEAR(L[10 * UNIT + UNIT / 2], 11 / 16.0 * 0.5, 1e-9);
+	CHECK_NEAR(L[11 * UNIT], 0.0, 0.0);                            /* Len 1 on a 2-unit tile: the rest is silent */
+	CHECK_NEAR(L[11 * UNIT + UNIT / 2], 0.0, 0.0);
+	{
+		double energy = 0.0;
+		for (int64_t i = 12 * UNIT; i < 13 * UNIT; i++) {
+			energy += fabs(L[i]);
+		}
+		CHECK(energy > 0.01);                                      /* the pitched pass sounds (stretched: no exact impulse) */
+		CHECK(fabs(L[12 * UNIT] - 13 / 16.0) > 1e-3);              /* and is not the raw path */
+	}
+	CHECK_NEAR(L[13 * UNIT], 14 / 16.0, 1e-9);                    /* keep-pitch hit 0 is unshifted: raw */
+	{
+		double energy = 0.0;
+		for (int64_t i = 13 * UNIT + UNIT / 2; i < 14 * UNIT; i++) {
+			energy += fabs(L[i]);
+		}
+		CHECK(energy > 0.01);                                      /* hit 1 an octave up through the stretch stage */
+	}
+	nv = poll_track0(e, vis, 64);
+	CHECK(nv == 15);
+	CHECK(vis[10].ratchet && vis[10].w == 2.0 && vis[10].spanSteps == 1.0 && vis[10].wTile == 2.0);
+	/* tail-through: the second unit of the tile plays after the span, in place */
+	fg_engine_stop_all(e);
+	p = fg_engine_pattern(e, 0);
+	p->mods[0].flags = FG_MODF_TAIL;
+	fg_engine_publish(e, 0);
+	fg_engine_play_all(e);
+	render(e, BAR);
+	CHECK_NEAR(L[10 * UNIT], 11 / 16.0 * 0.5, 1e-9);
+	CHECK_NEAR(L[11 * UNIT], 12 / 16.0 * 0.5, 1e-9);              /* unit 11's impulse where it belongs, still ducked */
+	CHECK_NEAR(L[11 * UNIT + UNIT / 2], -0.5 * 0.5, 1e-9);
+	poll_track0(e, vis, 64);
 
 	/* 5. a reset action on step 0 restores a swapped row before it sounds and
 	 *    posts the change back to the UI */

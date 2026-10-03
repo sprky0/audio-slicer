@@ -39,6 +39,7 @@ typedef enum {
 	FG_MOD_RAND,
 	FG_MOD_RESET,
 	FG_MOD_RATCHET,
+	FG_MOD_PITCH,      /* one-shot transposition of the covered tile's pass */
 	FG_MOD_ACTION_COUNT
 } fg_mod_action;
 
@@ -88,7 +89,13 @@ typedef struct {
 	int8_t subdivTo;    /* ramp target, 1..8 */
 	int8_t pitchStep;   /* −12..12 semitones per hit */
 	int8_t lenSteps;    /* 1..16 */
+	int8_t pitchAmt;    /* pitch action: semitones, −12..12 (mods under one tile add) */
+	uint8_t flags;      /* ratchet options, FG_MODF_* */
 } fg_mod;
+
+/* ratchet options */
+#define FG_MODF_TAIL 1        /* Len shorter than the tile: the rest of the tile plays through after the hits */
+#define FG_MODF_KEEP_PITCH 2  /* pitch mode shifts hits with the stretch stage (same speed) instead of varispeed */
 
 /* Everything the sequencer reads at schedule time. Edited on the UI thread
  * and published whole to the audio thread. */

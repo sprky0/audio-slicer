@@ -185,6 +185,8 @@ bool fg_pattern_validate(fg_pattern* p) {
 		m.subdivTo = (int8_t)clampi(m.subdivTo, 1, 8);
 		m.pitchStep = (int8_t)clampi(m.pitchStep, -12, 12);
 		m.lenSteps = (int8_t)clampi(m.lenSteps, 1, 16);
+		m.pitchAmt = (int8_t)clampi(m.pitchAmt, -12, 12);
+		m.flags &= FG_MODF_TAIL | FG_MODF_KEEP_PITCH;
 		taken[m.step] = true;
 		p->mods[nm++] = m;
 	}

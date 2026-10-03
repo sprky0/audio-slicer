@@ -67,6 +67,8 @@ bool fg_resolve_slot(const fg_pattern* p, const fg_sample* smp, const fg_tile* t
 	const double fill = naturalDur > 0.0 ? playDur / naturalDur : 1.0;
 	int eff = p->masterPitch + tile->offset;
 	eff = eff < -12 ? -12 : (eff > 12 ? 12 : eff);
+	eff += ov ? ov->pitch : 0;   /* a pitch modifier's pass */
+	eff = eff < -24 ? -24 : (eff > 24 ? 24 : eff);
 	const double P = pow(2.0, eff / 12.0);
 	const double rawFactor = fill * P;
 	if (fabs(rawFactor - 1.0) < 0.01 && eff == 0) {
@@ -104,8 +106,9 @@ static void flash(fg_seq* s, const fg_mod* m, int64_t at) {
 	}
 }
 
-/* Voice-level overrides for one slot: mute / rev / gain modifiers covering
- * the tile's span, each rolled. Two rev mods cancel; gain mods multiply. */
+/* Voice-level overrides for one slot: mute / rev / gain / pitch modifiers
+ * covering the tile's span, each rolled. Two rev mods cancel; gain mods
+ * multiply; pitch mods add. */
 static bool resolve_voice_mods(fg_seq* s, const fg_pattern* p, const fg_tile* tile, double posSteps, int64_t at, fg_override* ov) {
 	if (p->nMods == 0) {
 		return false;
@@ -121,9 +124,10 @@ static bool resolve_voice_mods(fg_seq* s, const fg_pattern* p, const fg_tile* ti
 	ov->rev = false;
 	ov->gain = 1.0;
 	ov->envDurSec = 0.0;
+	ov->pitch = 0;
 	for (int i = 0; i < n; i++) {
 		const fg_mod* m = hits[i];
-		if (m->action != FG_MOD_MUTE && m->action != FG_MOD_REV && m->action != FG_MOD_GAIN) {
+		if (m->action != FG_MOD_MUTE && m->action != FG_MOD_REV && m->action != FG_MOD_GAIN && m->action != FG_MOD_PITCH) {
 			continue;
 		}
 		if (!fg_mod_fires(m, loopIdx, &s->rng)) {
@@ -133,13 +137,15 @@ static bool resolve_voice_mods(fg_seq* s, const fg_pattern* p, const fg_tile* ti
 			ov->mute = true;
 		} else if (m->action == FG_MOD_REV) {
 			ov->rev = !ov->rev;
-		} else {
+		} else if (m->action == FG_MOD_GAIN) {
 			ov->gain *= clampd(m->gainAmt, 0.0, 200.0) / 100.0;
+		} else {
+			ov->pitch += m->pitchAmt;
 		}
 		any = true;
 		flash(s, m, at);
 	}
-	return any && (ov->mute || ov->rev || ov->gain != 1.0);
+	return any && (ov->mute || ov->rev || ov->gain != 1.0 || ov->pitch != 0);
 }
 
 /* The first firing ratchet covering the slot wins. Gaps and muted tiles
@@ -252,7 +258,11 @@ static void drain_ratchet(fg_seq* s, const fg_grid* grid, fg_voice* voices, int 
 			continue;   /* this hit's moment is already gone */
 		}
 		fg_voice_spec spec = r->spec;
-		spec.rate = r->spec.rate * fg_ratchet_hit_rate(&r->mod, k);
+		const double hr = fg_ratchet_hit_rate(&r->mod, k);
+		spec.rate = r->spec.rate * hr;
+		if (r->mod.flags & FG_MODF_KEEP_PITCH) {
+			spec.factor = r->spec.factor * hr;   /* the stretch stage gives the time back: pitch moves, speed stays */
+		}
 		spec.declick = true;
 		spec.env = r->spec.env ? &r->env : NULL;
 		const int64_t late = blockStart > h0 ? blockStart - h0 : 0;
@@ -261,12 +271,28 @@ static void drain_ratchet(fg_seq* s, const fg_grid* grid, fg_voice* voices, int 
 		spec.skipOut = late;
 		fg_voice_start(free_voice(voices, nVoices), &spec, sampleRate);
 	}
+	if (r->tailPending) {
+		/* the rest of the tile after the span, joined late at its own position */
+		const int64_t t0 = r->spanEnd;
+		if (t0 >= blockEnd) {
+			return;   /* later block */
+		}
+		const int64_t late = blockStart > t0 ? blockStart - t0 : 0;
+		fg_voice_spec spec = r->tailSpec;
+		spec.env = r->tailSpec.env ? &r->tailEnv : NULL;
+		spec.start = t0 + late;
+		spec.skipOut = (t0 - r->slotStart) + late;
+		if (spec.stop > spec.start) {
+			fg_voice_start(free_voice(voices, nVoices), &spec, sampleRate);
+		}
+		r->tailPending = false;
+	}
 	r->active = false;
 }
 
 static void schedule_ratchet(fg_seq* s, fg_pattern* p, const fg_sample* smp, const fg_grid* grid, const fg_mod* m,
                              int tileIdx, const fg_tile* tile, double w, double stepBeats, double posSteps,
-                             fg_voice* voices, int nVoices, int64_t blockStart, int n, double sampleRate) {
+                             const fg_override* voiceOv, fg_voice* voices, int nVoices, int64_t blockStart, int n, double sampleRate) {
 	double remaining = 0.0;
 	for (int k = tileIdx; k < p->nTiles; k++) {
 		remaining += p->tiles[k].w > 0.0 ? p->tiles[k].w : 1.0;
@@ -285,9 +311,23 @@ static void schedule_ratchet(fg_seq* s, fg_pattern* p, const fg_sample* smp, con
 	r->spanEnd = (int64_t)llround(spanEndT);
 	r->mod = *m;
 	const double stepSec = (tileStopT - startT) / w / sampleRate;
-	fg_override ov = {false, false, 1.0, (spanEndT - startT) / r->hits / sampleRate};
-	r->active = fg_resolve_slot(p, smp, tile, stepSec, &ov, sampleRate, &r->spec, &r->env);
+	/* mute / rev / gain / pitch modifiers under the tile apply to the hits too */
+	fg_override ov = voiceOv ? *voiceOv : (fg_override){false, false, 1.0, 0.0, 0};
+	ov.envDurSec = (spanEndT - startT) / r->hits / sampleRate;
+	r->active = !ov.mute && fg_resolve_slot(p, smp, tile, stepSec, &ov, sampleRate, &r->spec, &r->env);
 	r->spec.tileIndex = tileIdx;
+	/* tail-through: Len shorter than the tile, the remainder plays from where the tile would be */
+	r->tailPending = false;
+	if (r->active && (m->flags & FG_MODF_TAIL) && spanSteps < w - FG_EPS) {
+		fg_override full = ov;
+		full.envDurSec = 0.0;
+		if (fg_resolve_slot(p, smp, tile, stepSec, &full, sampleRate, &r->tailSpec, &r->tailEnv)) {
+			r->tailSpec.stop = (int64_t)llround(tileStopT);
+			r->tailSpec.tileIndex = tileIdx;
+			r->slotStart = (int64_t)llround(startT);
+			r->tailPending = true;
+		}
+	}
 
 	/* absorb the tiles that start inside the span */
 	double consumed = w;
@@ -331,7 +371,7 @@ void fg_seq_trigger_unit(fg_seq* s, const fg_pattern* p, const fg_sample* smp, i
 	/* natural rate: the slot is exactly one unit of source */
 	const double vspan = p->virtualEnd - p->virtualStart;
 	const double unitSec = ((p->end - p->start) * vspan * (double)smp->frames / sampleRate) / U;
-	fg_override ov = {false, false, velocity < 0.0 ? 0.0 : (velocity > 1.0 ? 1.0 : velocity), 0.0};
+	fg_override ov = {false, false, velocity < 0.0 ? 0.0 : (velocity > 1.0 ? 1.0 : velocity), 0.0, 0};
 	fg_voice_spec spec;
 	fg_env env;
 	if (!fg_resolve_slot(p, smp, &t, unitSec, &ov, sampleRate, &spec, &env)) {
@@ -405,17 +445,17 @@ void fg_seq_process(fg_seq* s, fg_pattern* p, const fg_sample* smp, const fg_gri
 			stopT = fg_grid_sample_at_beat(grid, s->anchorBeat + s->posBeats + tileBeats);
 		}
 
+		fg_override ov;
+		const bool haveOv = resolve_voice_mods(s, p, tile, posSteps, startS, &ov);
 		const fg_mod* rt = resolve_ratchet(s, p, tile, posSteps, startS);
 		if (rt) {
-			schedule_ratchet(s, p, smp, grid, rt, s->tileIndex, tile, w, stepBeats, posSteps, voices, nVoices, blockStart, n, sampleRate);
+			schedule_ratchet(s, p, smp, grid, rt, s->tileIndex, tile, w, stepBeats, posSteps, haveOv ? &ov : NULL, voices, nVoices, blockStart, n, sampleRate);
 			continue;
 		}
 
 		const int64_t stopS = (int64_t)llround(stopT);
 		const int64_t late = blockStart > startS ? blockStart - startS : 0;
 		const double stepSec = (stopT - startT) / w / sampleRate;
-		fg_override ov;
-		const bool haveOv = resolve_voice_mods(s, p, tile, posSteps, startS, &ov);
 		fg_voice_spec spec;
 		fg_env env;
 		const bool sounds = fg_resolve_slot(p, smp, tile, stepSec, haveOv ? &ov : NULL, sampleRate, &spec, &env);

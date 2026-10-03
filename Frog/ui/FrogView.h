@@ -541,7 +541,23 @@ private:
 		}), mToolbar2, 1.f));
 
 		// --- modifier settings (shown in place of the toolbars while a chip is selected) ---
-		mModAction = hk("mod.action", add(DragControl::Enum(z, "", {"Mute", "Rev", "Gain", "Rand", "Reset", "Ratchet"}, 0, [this](double v) { SetMod([&](fg_mod& m) { m.action = (uint8_t)v; }); }), mModRow1, 1.5f));
+		mModAction = hk("mod.action", add(DragControl::Enum(z, "", {"Mute", "Rev", "Gain", "Rand", "Reset", "Ratchet", "Pitch"}, 0, [this](double v) {
+			SetMod([&](fg_mod& m) {
+				m.action = (uint8_t)v;
+				// seeds for a mod that never held these (older sessions): the browser's defaults
+				if (m.action == FG_MOD_GAIN && m.gainAmt <= 0) {
+					m.gainAmt = 50;
+				}
+				if (m.action == FG_MOD_RATCHET && m.subdiv <= 0) {
+					m.subdiv = 2;
+					m.subdivTo = 4;
+					m.lenSteps = 1;
+				}
+				if (m.action == FG_MOD_PITCH && m.pitchAmt == 0) {
+					m.pitchAmt = 12;
+				}
+			});
+		}), mModRow1, 1.5f));
 		mModFire = hk("mod.fire", add(DragControl::Enum(z, "Fire", {"Prob", "Every"}, 0, [this](double v) {
 			SetMod([&](fg_mod& m) {
 				m.fireMode = (uint8_t)v;
@@ -561,7 +577,17 @@ private:
 		})->WithOnChange([this](double v) { SetMod([&](fg_mod& m) { m.fireValue = (int16_t)std::lround(v); }); });
 		mModLevel = hk("mod.level", add(new DragControl(z, "Level", DragControl::Mode::Value, 0, 200, 1, 100), mModRow1, 1.5f));
 		mModLevel->WithFormat(Pct)->WithOnChange([this](double v) { SetMod([&](fg_mod& m) { m.gainAmt = (int16_t)std::lround(v); }); });
-		mModMode = hk("mod.mode", add(DragControl::Enum(z, "", {"Even", "Ramp", "Pitch"}, 0, [this](double v) { SetMod([&](fg_mod& m) { m.mode = (uint8_t)v; }); }), mModRow1, 1.5f));
+		mModMode = hk("mod.mode", add(DragControl::Enum(z, "", {"Even", "Ramp", "Pitch"}, 0, [this](double v) {
+			SetMod([&](fg_mod& m) {
+				m.mode = (uint8_t)v;
+				if (m.mode == FG_RATCHET_PITCH && m.pitchStep == 0) {
+					m.pitchStep = 2;   /* the browser seeds a whole tone per hit */
+				}
+			});
+		}), mModRow1, 1.5f));
+		mModShift = hk("mod.shift", add(new DragControl(z, "Shift", DragControl::Mode::Value, -12, 12, 1, 0), mModRow1, 1.f));
+		mModShift->WithFormat([](double v) { char b[8]; snprintf(b, sizeof b, "%+d", (int)std::lround(v)); return std::string(b); })
+		    ->WithOnChange([this](double v) { SetMod([&](fg_mod& m) { m.pitchAmt = (int8_t)std::lround(v); }); });
 		mModHits = hk("mod.hits", add(new DragControl(z, "Hits", DragControl::Mode::Value, 1, 8, 1, 2), mModRow2, 1.f));
 		mModHits->WithOnChange([this](double v) { SetMod([&](fg_mod& m) { m.subdiv = (int8_t)std::lround(v); }); });
 		mModTo = hk("mod.to", add(new DragControl(z, "To", DragControl::Mode::Value, 1, 8, 1, 4), mModRow2, 1.f));
@@ -571,6 +597,12 @@ private:
 		    ->WithOnChange([this](double v) { SetMod([&](fg_mod& m) { m.pitchStep = (int8_t)std::lround(v); }); });
 		mModLen = hk("mod.len", add(new DragControl(z, "Len", DragControl::Mode::Value, 1, 16, 1, 1), mModRow2, 1.f));
 		mModLen->WithOnChange([this](double v) { SetMod([&](fg_mod& m) { m.lenSteps = (int8_t)std::lround(v); }); });
+		mModTail = hk("mod.tail", add(DragControl::Toggle(z, "Tail", false, Intent::Neutral, [this](double v) {
+			SetMod([&](fg_mod& m) { m.flags = (uint8_t)(v >= 0.5 ? (m.flags | FG_MODF_TAIL) : (m.flags & ~FG_MODF_TAIL)); });
+		}), mModRow2, 1.f));
+		mModKeep = hk("mod.keep", add(DragControl::Toggle(z, "Keep", false, Intent::Neutral, [this](double v) {
+			SetMod([&](fg_mod& m) { m.flags = (uint8_t)(v >= 0.5 ? (m.flags | FG_MODF_KEEP_PITCH) : (m.flags & ~FG_MODF_KEEP_PITCH)); });
+		}), mModRow2, 1.f));
 		hk("mod.remove", add(DragControl::Button(z, "Remove", Intent::Stop, [this](double) {
 			const int i = mModLane->Selected();
 			fg_pattern* p = Pat();
@@ -734,14 +766,20 @@ private:
 		mModTo->SetLocalValue(m->subdivTo);
 		mModPitch->SetLocalValue(m->pitchStep);
 		mModLen->SetLocalValue(m->lenSteps);
+		mModShift->SetLocalValue(m->pitchAmt);
+		mModTail->SetLocalValue((m->flags & FG_MODF_TAIL) ? 1. : 0.);
+		mModKeep->SetLocalValue((m->flags & FG_MODF_KEEP_PITCH) ? 1. : 0.);
 		const bool ratchet = m->action == FG_MOD_RATCHET;
 		mModLevel->WithEnabled(m->action == FG_MOD_GAIN);
+		mModShift->WithEnabled(m->action == FG_MOD_PITCH);
+		mModTail->WithEnabled(ratchet);
+		mModKeep->WithEnabled(ratchet && m->mode == FG_RATCHET_PITCH);
 		mModMode->WithEnabled(ratchet);
 		mModHits->WithEnabled(ratchet);
 		mModTo->WithEnabled(ratchet && m->mode == FG_RATCHET_RAMP);
 		mModPitch->WithEnabled(ratchet && m->mode == FG_RATCHET_PITCH);
 		mModLen->WithEnabled(ratchet);
-		DragControl* all[] = {mModAction, mModFire, mModValue, mModLevel, mModMode, mModHits, mModTo, mModPitch, mModLen};
+		DragControl* all[] = {mModAction, mModFire, mModValue, mModLevel, mModMode, mModHits, mModTo, mModPitch, mModLen, mModShift, mModTail, mModKeep};
 		for (auto* c : all) {
 			c->SetDirty(false);
 		}
@@ -907,6 +945,7 @@ private:
 	DragControl *mVol = nullptr, *mPan = nullptr, *mTrackMute = nullptr;
 	DragControl *mModAction = nullptr, *mModFire = nullptr, *mModValue = nullptr, *mModLevel = nullptr, *mModMode = nullptr;
 	DragControl *mModHits = nullptr, *mModTo = nullptr, *mModPitch = nullptr, *mModLen = nullptr;
+	DragControl *mModShift = nullptr, *mModTail = nullptr, *mModKeep = nullptr;
 	FrogVersionReadout* mVersion = nullptr;
 	DragControl* mLearnChip = nullptr;
 	std::string mLearnShown;

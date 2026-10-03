@@ -10,7 +10,7 @@
 /* --- names ---------------------------------------------------------------- */
 
 static const char* kCurveNames[FG_CURVE_COUNT] = {"linear", "exp", "log", "s"};
-static const char* kActionNames[FG_MOD_ACTION_COUNT] = {"mute", "rev", "gain", "rand", "reset", "ratchet"};
+static const char* kActionNames[FG_MOD_ACTION_COUNT] = {"mute", "rev", "gain", "rand", "reset", "ratchet", "pitch"};
 static const char* kRatchetModeNames[3] = {"even", "ramp", "pitch"};
 
 const char* fg_curve_name(int curve) {
@@ -131,6 +131,8 @@ static void parse_mod(const cJSON* o, fg_mod* m) {
 	m->subdivTo = (int8_t)lround(num(o, "subdivTo", 4.0));
 	m->pitchStep = (int8_t)lround(num(o, "pitchStep", 0.0));
 	m->lenSteps = (int8_t)lround(num(o, "lenSteps", 1.0));
+	m->pitchAmt = (int8_t)lround(num(o, "pitchAmt", 12.0));
+	m->flags = (uint8_t)((boolean(o, "tail", false) ? FG_MODF_TAIL : 0) | (boolean(o, "keepPitch", false) ? FG_MODF_KEEP_PITCH : 0));
 }
 
 static void parse_track(const cJSON* o, fg_track_state* t) {
@@ -276,6 +278,11 @@ static cJSON* write_mod(const fg_mod* m) {
 		cJSON_AddNumberToObject(o, "subdivTo", m->subdivTo);
 		cJSON_AddNumberToObject(o, "pitchStep", m->pitchStep);
 		cJSON_AddNumberToObject(o, "lenSteps", m->lenSteps);
+		cJSON_AddBoolToObject(o, "tail", (m->flags & FG_MODF_TAIL) != 0);
+		cJSON_AddBoolToObject(o, "keepPitch", (m->flags & FG_MODF_KEEP_PITCH) != 0);
+	}
+	if (m->action == FG_MOD_PITCH) {
+		cJSON_AddNumberToObject(o, "pitchAmt", m->pitchAmt);
 	}
 	return o;
 }
